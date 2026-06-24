@@ -22,3 +22,20 @@ CREATE TABLE IF NOT EXISTS alerts (
   average_value FLOAT,
   timestamp TIMESTAMP DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS alert_rules (
+  id SERIAL PRIMARY KEY,
+  metric_name VARCHAR(50) NOT NULL,
+  operator VARCHAR(5) NOT NULL,
+  threshold FLOAT NOT NULL,
+  duration INTEGER DEFAULT 1,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+INSERT INTO alert_rules (metric_name, operator, threshold, duration)
+VALUES
+  ('cpu_usage', '>', 80, 3),
+  ('memory_usage', '>', 85, 3),
+  ('disk_usage', '>', 90, 1)
+ON CONFLICT DO NOTHING;

@@ -101,12 +101,6 @@ export default function Landing() {
           >
             Login
           </button>
-          <button
-            onClick={() => navigate('/login')}
-            className="text-sm text-white transition-colors"
-          >
-            Sign Up
-          </button>
         </div>
       </nav>
 
@@ -275,7 +269,7 @@ export default function Landing() {
 
       {/* FOOTER */}
       <footer className="border-t border-[#1a1a1a] py-8 px-8 text-center text-gray-600 text-sm">
-        <span className="text-indigo-400 font-bold">PulseIQ</span> — Open source system monitoring.
+        <span className="text-emerald-400 font-bold">PulseIQ</span> — Open source system monitoring.
         Built with Node.js, PostgreSQL, WebSockets and React.
       </footer>
 

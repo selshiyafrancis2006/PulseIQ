@@ -49,7 +49,7 @@ export default function Login() {
           className="flex items-center gap-2 mb-10 cursor-pointer justify-center"
           onClick={() => navigate('/')}
         >
-          <span className="text-indigo-400 text-2xl">⚡</span>
+          <span className="text-indigo-400 text-2xl"></span>
           <span className="text-xl font-bold text-white">PulseIQ</span>
         </div>
 
@@ -66,7 +66,7 @@ export default function Login() {
           <button
             onClick={() => setIsLogin(true)}
             className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${
-              isLogin ? 'bg-indigo-600 text-white' : 'text-gray-400'
+              isLogin ? 'bg-emerald-400 text-black' : 'text-gray-400'
             }`}
           >
             Login
@@ -74,7 +74,7 @@ export default function Login() {
           <button
             onClick={() => setIsLogin(false)}
             className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-all ${
-              !isLogin ? 'bg-indigo-600 text-white' : 'text-emerald-400'
+              !isLogin ? 'bg-emerald-400 text-black' : 'text-gray-400'
             }`}
           >
             Sign Up
@@ -96,7 +96,7 @@ export default function Login() {
             value={email}
             onChange={e => setEmail(e.target.value)}
             placeholder="you@startup.com"
-            className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-indigo-600 transition-colors"
+            className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-emerald-400 transition-colors"
           />
         </div>
 
@@ -108,7 +108,7 @@ export default function Login() {
             value={password}
             onChange={e => setPassword(e.target.value)}
             placeholder="••••••••"
-            className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-indigo-600 transition-colors"
+            className="w-full bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-emerald-400 transition-colors"
             onKeyDown={e => e.key === 'Enter' && handleSubmit()}
           />
         </div>
@@ -117,7 +117,7 @@ export default function Login() {
         <button
           onClick={handleSubmit}
           disabled={loading}
-          className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-indigo-900 disabled:text-indigo-600 py-4 rounded-xl font-bold text-lg transition-all"
+          className="w-full bg-emerald-400 hover:scale-105 text-black disabled:opacity-40 py-4 rounded-xl font-bold text-lg transition-all"
         >
           {loading ? 'Please wait...' : isLogin ? 'Sign In →' : 'Create Account →'}
         </button>
