@@ -12,7 +12,7 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres123
+      POSTGRES_PASSWORD: postgres123d
       POSTGRES_DB: pulseiq
     ports:
       - "5432:5432"

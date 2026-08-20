@@ -39,3 +39,23 @@ VALUES
   ('memory_usage', '>', 85, 3),
   ('disk_usage', '>', 90, 1)
 ON CONFLICT DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS monitors (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  url VARCHAR(500) NOT NULL,
+  is_active BOOLEAN DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS monitor_results (
+  id SERIAL PRIMARY KEY,
+  monitor_id INTEGER REFERENCES monitors(id) ON DELETE CASCADE,
+  status VARCHAR(10) NOT NULL,
+  response_time_ms INTEGER,
+  status_code INTEGER,
+  checked_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_results_monitor_checked
+  ON monitor_results (monitor_id, checked_at DESC);
