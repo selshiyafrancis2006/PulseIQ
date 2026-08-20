@@ -15,6 +15,9 @@ const {
 } = require('./services/websocket.service');
 
 // Routes
+const monitorRoutes = 
+    require('./routes/monitor.routes');
+
 const metricsRoutes =
     require('./routes/metrics.routes');
 
@@ -23,6 +26,20 @@ const alertsRoutes =
 
 const authRoutes =
     require('./routes/auth.routes');
+
+const processesRoutes =
+    require('./routes/processes.routes');
+
+const serviceHealthRoutes =
+    require('./routes/serviceHealth.routes');
+
+const loggerMiddleware = 
+    require("./middleware/logger.middleware");
+
+const authenticate =
+    require("./middleware/auth.middleware");
+
+const logsRoutes = require("./routes/logs.routes");
 
 const app = express();
 
@@ -38,12 +55,24 @@ app.use(cors());
 
 app.use(express.json());
 
+app.use(loggerMiddleware);
+
 // Routes
-app.use('/api', metricsRoutes);
-
-app.use('/api', alertsRoutes);
-
+// Public — no auth required
 app.use('/api/auth', authRoutes);
+
+// Protected — requires a valid JWT
+app.use('/api/monitors', authenticate, monitorRoutes);
+
+app.use('/api', authenticate, metricsRoutes);
+
+app.use('/api', authenticate, alertsRoutes);
+
+app.use('/api', authenticate, processesRoutes);
+
+app.use('/api/service-health', authenticate, serviceHealthRoutes);
+
+app.use("/api/logs", authenticate, logsRoutes);
 
 // Health Route
 app.get('/', (req, res) => {
@@ -170,7 +199,10 @@ wss.on('connection', (ws) => {
 });
 
 // Start metrics job
-require('./jobs/metric.job');
+(async () => {
+    await import('./jobs/metric.job.js');
+    await import('./jobs/uptime.job.js');
+})();
 
 module.exports = {
     app,

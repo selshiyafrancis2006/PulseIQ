@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { apiFetch } from '../utils/apiFetch'
 import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -31,8 +32,10 @@ export default function App() {
   const [alerts, setAlerts] = useState([])
   const [connected, setConnected] = useState(false)
   const [lastUpdated, setLastUpdated] = useState('')
+  const [alertRules, setAlertRules] = useState([])
   const [timeRange, setTimeRange] = useState('1m')
   const [systemInfo, setSystemInfo] = useState(null)
+  const [monitors, setMonitors] = useState([]);
 
   const navigate = useNavigate()
   const wsRef = useRef(null)
@@ -111,7 +114,7 @@ export default function App() {
 
       try {
 
-        const res = await fetch(
+        const res = await apiFetch(
           'http://localhost:5000/api/alerts'
         )
         const data = await res.json()
@@ -174,6 +177,26 @@ export default function App() {
   }, [])
 
   /* =========================
+   ALERT RULES FETCH
+========================= */
+
+useEffect(() => {
+
+  const fetchRules = async () => {
+    try {
+      const res = await apiFetch('http://localhost:5000/api/alert-rules')
+      const data = await res.json()
+      setAlertRules(data)
+    } catch (err) {
+      console.error('Failed to fetch alert rules:', err)
+    }
+  }
+
+  fetchRules()
+
+}, [])
+
+  /* =========================
      HISTORICAL METRICS
   ========================= */
 
@@ -183,7 +206,7 @@ export default function App() {
 
       try {
 
-        const res = await fetch(
+        const res = await apiFetch(
           `http://localhost:5000/api/metrics?range=${timeRange}`
         )
 
@@ -288,6 +311,31 @@ export default function App() {
 
   }
 
+  useEffect(() => {
+
+  const fetchMonitors = async () => {
+
+    try {
+
+      const response = await apiFetch(
+        'http://localhost:5000/api/monitors/status'
+      );
+
+      const data = await response.json();
+
+      setMonitors(data);
+
+    } catch (error) {
+
+      console.error(error);
+
+    }
+
+  };
+
+  fetchMonitors();
+
+}, []);
   /* =========================
      HELPERS
   ========================= */
@@ -296,33 +344,6 @@ export default function App() {
     value,
     threshold
   ) => parseFloat(value) > threshold
-
-  const getAlertSeverity = (value) => {
-
-    if (value > 90) {
-
-      return {
-        label: 'CRITICAL',
-        color: 'text-red-400'
-      }
-
-    }
-
-    if (value > 70) {
-
-      return {
-        label: 'WARNING',
-        color: 'text-yellow-400'
-      }
-
-    }
-
-    return {
-      label: 'INFO',
-      color: 'text-blue-400'
-    }
-
-  }
 
   const getSystemHealth = (
     cpu,
@@ -406,7 +427,7 @@ export default function App() {
               px-3 py-1 rounded-full
               text-xs font-bold
               ${connected
-                ? 'bg-green-900 text-green-400'
+                ? 'text-white'
                 : 'bg-red-900 text-red-400'
               }
             `}
@@ -442,86 +463,121 @@ export default function App() {
 
       {/* ALERTS */}
 
-      {alerts.length > 0 && (
+      {/* RECENT ALERTS */}
 
-        <div className="
-          bg-red-900/40
-          border border-red-800
-          rounded-xl
-          p-4
-          mb-8
-        ">
+{alerts.length > 0 && (
 
-          <h2 className="
-            text-red-400
-            font-semibold
-            mb-3
-          ">
-            System Alerts
-          </h2>
+  <div className="mb-8">
 
-          {alerts.slice(0, 5).map(alert => {
+    <div className="flex items-center justify-between mb-4">
 
-            const severity =
-              getAlertSeverity(
-                parseFloat(
-                  alert.metric_value
-                )
-              )
+      <h2 className="
+        text-2xl
+        font-bold
+        text-emerald-400
+      ">
+        Recent Alerts
+      </h2>
 
-            return (
+    </div>
 
-              <div
-                key={alert.id}
-                className="
-                  flex items-center
-                  gap-3
-                  text-sm
-                  mb-3
-                "
-              >
+    <div className="
+      bg-[#1a1a1a]
+      border border-[#2a2a2a]
+      rounded-xl
+      overflow-hidden
+    ">
 
-                <span
-                  className={`
-                    px-2 py-1
-                    rounded-md
-                    text-xs
-                    font-bold
-                    bg-[#1a1a1a]
-                    ${severity.color}
-                  `}
-                >
-                  {severity.label}
-                </span>
+      {alerts.slice(0, 5).map((alert, index) => {
 
-                <span className="text-red-300">
+        const severity = {
+  label: alert.severity,
+  color:
+    alert.severity === "Critical"
+      ? "text-red-400"
+      : alert.severity === "Warning"
+      ? "text-yellow-400"
+      : alert.severity === "Normal"
+      ? "text-emerald-400"
+      : "text-gray-400"
+}
 
-                  ⚠ {alert.metric_name}
-                  {' '}spike detected
+        return (
 
-                  (
-                  {parseFloat(
-                    alert.metric_value
-                  ).toFixed(2)}
+          <div
+            key={alert.id}
+            className={`
+              flex items-center
+              justify-between
+              px-5 py-4
+              ${
+                index !== 4
+                  ? 'border-b border-[#2a2a2a]'
+                  : ''
+              }
+            `}
+          >
 
-                  {' '}vs avg{' '}
+            <div className="flex items-center gap-3">
 
-                  {parseFloat(
-                    alert.average_value
-                  ).toFixed(2)}
-                  )
+              <span className={severity.color}>
+                ●
+              </span>
 
-                </span>
+              <div>
+
+                <p className="text-white text-sm">
+
+                  {(alert.metric_name ?? 'Unknown Metric').replace(/_/g, ' ')}
+
+                  {' '}exceeded threshold
+
+                </p>
+
+                <p className="
+                  text-xs
+                  text-gray-500
+                  mt-1
+                ">
+
+                  Current:{' '}
+{parseFloat(
+  alert.current_value
+).toFixed(2)}
+                  {' '}|
+
+                  Threshold:
+{' '}
+{parseFloat(
+  alert.threshold_value
+).toFixed(2)}
+
+                </p>
 
               </div>
 
-            )
+            </div>
 
-          })}
+            <span className={`
+              text-xs
+              font-semibold
+              uppercase
+              ${severity.color}
+            `}>
+              {severity.label}
+            </span>
 
-        </div>
+          </div>
 
-      )}
+        )
+
+      })}
+
+    </div>
+
+  </div>
+
+)}
 
       {/* METRIC CARDS */}
 
@@ -613,6 +669,7 @@ export default function App() {
         ))}
 
       </div>
+
 
       {/* SYSTEM INFO */}
 

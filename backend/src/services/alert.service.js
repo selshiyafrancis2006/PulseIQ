@@ -44,21 +44,29 @@ async function evaluateAlerts(metric) {
 
                 if (count >= rule.duration) {
 
-                    await pool.query(`
-                        INSERT INTO alerts (
-                            metric_name,
-                            metric_value,
-                            average_value,
-                            timestamp
-                        )
-                        VALUES ($1, $2, $3, NOW())
-                    `, [
-                        rule.metric_name,
-                        value,
-                        rule.threshold
-                    ]);
+                   const severity =
+    value >= 90
+        ? "Critical"
+        : "Warning";
 
-                    console.log(`🚨 Alert triggered: ${rule.metric_name}`);
+
+await pool.query(`
+    INSERT INTO alerts (
+        metric_name,
+        metric_value,
+        average_value,
+        severity,
+        timestamp
+    )
+    VALUES ($1, $2, $3, $4, NOW())
+`, [
+    rule.metric_name,
+    value,
+    rule.threshold,
+    severity
+]);
+
+                    console.log(`Alert triggered: ${rule.metric_name}`);
 
                     breachState.set(key, 0);
                 }
@@ -72,10 +80,55 @@ async function evaluateAlerts(metric) {
         console.error("Alert engine error:", err);
     }
 }
+
 async function fetchAlerts() {
-  const result = await pool.query(
-    `SELECT * FROM alerts ORDER BY timestamp DESC LIMIT 20`
-  );
-  return result.rows;
+
+    const result = await pool.query(`
+        SELECT *
+        FROM alerts
+        ORDER BY timestamp DESC
+        LIMIT 20
+    `);
+
+    return result.rows.map(alert => ({
+
+        id: alert.id,
+
+        metric_name: alert.metric_name,
+
+        current_value: alert.metric_value,
+
+        threshold_value: alert.average_value,
+
+        severity:
+    alert.severity ||
+    (
+        alert.metric_value >= 90
+            ? "Critical"
+            : "Warning"
+    ),
+
+        timestamp: alert.timestamp
+
+    }));
+
 }
-module.exports = { evaluateAlerts, fetchAlerts };
+
+async function fetchRules() {
+    const result = await pool.query(
+        `SELECT * FROM alert_rules ORDER BY id ASC`
+    );
+    return result.rows;
+}
+
+async function updateRule(id, threshold, is_active) {
+    const result = await pool.query(
+        `UPDATE alert_rules
+         SET threshold = $1, is_active = $2
+         WHERE id = $3
+         RETURNING *`,
+        [threshold, is_active, id]
+    );
+    return result.rows[0];
+}
+module.exports = { evaluateAlerts, fetchAlerts, fetchRules, updateRule }; 

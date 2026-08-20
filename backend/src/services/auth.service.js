@@ -4,8 +4,7 @@ const jwt = require('jsonwebtoken');
 
 const pool = require('../config/db');
 
-const JWT_SECRET =
-    process.env.JWT_SECRET || 'pulseiq_secret_key';
+const JWT_SECRET = require('../config/jwt');
 
 const register = async (email, password) => {
 
