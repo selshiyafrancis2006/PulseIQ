@@ -57,33 +57,6 @@ app.use(express.json());
 
 app.use(loggerMiddleware);
 
-// Routes
-// Public — no auth required
-app.use('/api/auth', authRoutes);
-
-// Protected — requires a valid JWT
-app.use('/api/monitors', authenticate, monitorRoutes);
-
-app.use('/api', authenticate, metricsRoutes);
-
-app.use('/api', authenticate, alertsRoutes);
-
-app.use('/api', authenticate, processesRoutes);
-
-app.use('/api/service-health', authenticate, serviceHealthRoutes);
-
-app.use("/api/logs", authenticate, logsRoutes);
-
-// Health Route
-app.get('/', (req, res) => {
-
-    res.json({
-        message:
-            'PulseIQ backend is running!'
-    });
-
-});
-
 // System Info Route
 app.get(
     '/api/system-info',
@@ -148,6 +121,35 @@ app.get(
 
     }
 );
+// Routes
+// Public — no auth required
+
+app.use('/api/auth', authRoutes);
+
+// Protected — requires a valid JWT
+app.use('/api/monitors', authenticate, monitorRoutes);
+
+app.use('/api', authenticate, metricsRoutes);
+
+app.use('/api', authenticate, alertsRoutes);
+
+app.use('/api', authenticate, processesRoutes);
+
+app.use('/api/service-health', authenticate, serviceHealthRoutes);
+
+app.use("/api/logs", authenticate, logsRoutes);
+
+// Health Route
+app.get('/', (req, res) => {
+
+    res.json({
+        message:
+            'PulseIQ backend is running!'
+    });
+
+});
+
+
 
 // WebSocket Connection
 wss.on('connection', (ws) => {

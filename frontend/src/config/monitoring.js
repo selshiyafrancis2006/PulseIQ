@@ -1,0 +1,1 @@
+export const DEGRADED_THRESHOLD_MS = 500;

@@ -1,8 +1,18 @@
+import { DEGRADED_THRESHOLD_MS } from '../../config/monitoring';
+
 function UptimeSummary({ monitors }) {
   const totalMonitors = monitors.length;
 
   const healthyMonitors = monitors.filter(
-    (monitor) => monitor.status === 'UP'
+    (monitor) =>
+      monitor.status === 'UP' &&
+      (monitor.response_time_ms ?? 0) <= DEGRADED_THRESHOLD_MS
+  ).length;
+
+  const degradedMonitors = monitors.filter(
+    (monitor) =>
+      monitor.status === 'UP' &&
+      (monitor.response_time_ms ?? 0) > DEGRADED_THRESHOLD_MS
   ).length;
 
   const downMonitors = monitors.filter(
@@ -31,6 +41,11 @@ function UptimeSummary({ monitors }) {
       color: 'text-emerald-400',
     },
     {
+      title: 'Degraded',
+      value: degradedMonitors,
+      color: degradedMonitors > 0 ? 'text-yellow-400' : 'text-emerald-400',
+    },
+    {
       title: 'Down',
       value: downMonitors,
       color: downMonitors > 0 ? 'text-red-400' : 'text-emerald-400',
@@ -48,7 +63,7 @@ function UptimeSummary({ monitors }) {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-5 mb-8">
+    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-5 mb-8">
       {cards.map((card) => (
         <div
           key={card.title}
