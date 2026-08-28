@@ -1,4 +1,5 @@
 import MonitorCard from './MonitorCard';
+import { DEGRADED_THRESHOLD_MS } from '../../config/monitoring';
 
 function MonitorList({ monitors, loading }) {
   if (loading) {
@@ -22,11 +23,11 @@ function MonitorList({ monitors, loading }) {
   }
 
   const healthy = monitors.filter(
-    (m) => m.status === 'UP' && (m.response_time_ms ?? 0) <= 500
+    (m) => m.status === 'UP' && (m.response_time_ms ?? 0) <= DEGRADED_THRESHOLD_MS
   );
 
   const degraded = monitors.filter(
-    (m) => m.status === 'UP' && (m.response_time_ms ?? 0) > 500
+    (m) => m.status === 'UP' && (m.response_time_ms ?? 0) > DEGRADED_THRESHOLD_MS
   );
 
   const down = monitors.filter(

@@ -59,3 +59,30 @@ CREATE TABLE IF NOT EXISTS monitor_results (
 
 CREATE INDEX IF NOT EXISTS idx_monitor_results_monitor_checked
   ON monitor_results (monitor_id, checked_at DESC);
+
+CREATE TABLE IF NOT EXISTS logs (
+  id SERIAL PRIMARY KEY,
+  level VARCHAR(10) NOT NULL,
+  service VARCHAR(100),
+  source VARCHAR(100),
+  method VARCHAR(10),
+  endpoint VARCHAR(255),
+  status_code INTEGER,
+  response_time_ms INTEGER,
+  ip_address VARCHAR(50),
+  message TEXT,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs (created_at DESC);
+
+CREATE TABLE IF NOT EXISTS monitor_events (
+  id SERIAL PRIMARY KEY,
+  monitor_id INTEGER REFERENCES monitors(id) ON DELETE CASCADE,
+  type VARCHAR(10) NOT NULL,
+  message TEXT,
+  response_time_ms INTEGER,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created ON monitor_events (monitor_id, created_at DESC);
