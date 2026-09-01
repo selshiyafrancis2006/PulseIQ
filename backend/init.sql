@@ -86,3 +86,17 @@ CREATE TABLE IF NOT EXISTS monitor_events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created ON monitor_events (monitor_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS hosts (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  api_key VARCHAR(255) UNIQUE NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_seen_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_hosts_api_key ON hosts (api_key);
+
+ALTER TABLE metrics ADD COLUMN IF NOT EXISTS host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_metrics_host_timestamp ON metrics (host_id, timestamp DESC);

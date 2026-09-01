@@ -39,6 +39,8 @@ const loggerMiddleware =
 const authenticate =
     require("./middleware/auth.middleware");
 
+const agentRoutes = require('./routes/agent.routes');
+
 const logsRoutes = require("./routes/logs.routes");
 
 const app = express();
@@ -54,6 +56,8 @@ setWSS(wss);
 app.use(cors());
 
 app.use(express.json());
+
+app.use('/api/agent', agentRoutes);
 
 app.use(loggerMiddleware);
 
