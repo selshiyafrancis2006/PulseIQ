@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiFetch } from '../utils/apiFetch'
 import { Line } from 'react-chartjs-2'
+import useHosts from '../hooks/useHosts'
+import HostSelector from '../components/shared/hostSelector'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -22,6 +24,8 @@ ChartJS.register(
   Tooltip,
   Legend
 )
+import useHosts from '../hooks/useHosts'
+import HostSelector from '../components/shared/hostSelector'
 
 const MAX_POINTS = 100
 
@@ -36,6 +40,7 @@ export default function App() {
   const [timeRange, setTimeRange] = useState('1m')
   const [systemInfo, setSystemInfo] = useState(null)
   const [monitors, setMonitors] = useState([]);
+  const { hosts, selectedHostId, setSelectedHostId } = useHosts()
 
   const navigate = useNavigate()
   const wsRef = useRef(null)
@@ -419,6 +424,14 @@ useEffect(() => {
         </h1>
 
         <div className="flex items-center gap-3">
+
+        {/* HOST SELECTOR */}
+
+          <HostSelector
+            hosts={hosts}
+            selectedHostId={selectedHostId}
+            onChange={setSelectedHostId}
+          />
 
           {/* LIVE STATUS */}
 

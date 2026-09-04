@@ -43,6 +43,8 @@ const agentRoutes = require('./routes/agent.routes');
 
 const logsRoutes = require("./routes/logs.routes");
 
+const hostsRoutes = require('./routes/hosts.routes');
+
 const app = express();
 
 const server = http.createServer(app);
@@ -142,6 +144,8 @@ app.use('/api', authenticate, processesRoutes);
 app.use('/api/service-health', authenticate, serviceHealthRoutes);
 
 app.use("/api/logs", authenticate, logsRoutes);
+
+app.use('/api/hosts', authenticate, hostsRoutes);
 
 // Health Route
 app.get('/', (req, res) => {
