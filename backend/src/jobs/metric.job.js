@@ -2,7 +2,6 @@ const si = require('systeminformation');
 const pool = require('../config/db');
 const { evaluateAlerts } = require('../services/alert.service');
 const { broadcastMetrics } = require('../services/websocket.service');
-const { processMetricRollups } = require('../services/metricRollup.service');
 
 async function collectAndStoreMetrics() {
 
@@ -45,7 +44,6 @@ async function collectAndStoreMetrics() {
         const savedMetric = result.rows[0];
 
         await evaluateAlerts(savedMetric);
-        await processMetricRollups(savedMetric);
 
         // Broadcast to WebSocket clients
         broadcastMetrics(savedMetric);

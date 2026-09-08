@@ -100,3 +100,37 @@ CREATE INDEX IF NOT EXISTS idx_hosts_api_key ON hosts (api_key);
 ALTER TABLE metrics ADD COLUMN IF NOT EXISTS host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS idx_metrics_host_timestamp ON metrics (host_id, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS metric_rollups_5m (
+  id SERIAL PRIMARY KEY,
+  host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  bucket_start TIMESTAMP NOT NULL,
+  cpu_usage_avg FLOAT, cpu_usage_min FLOAT, cpu_usage_max FLOAT,
+  memory_usage_avg FLOAT, memory_usage_min FLOAT, memory_usage_max FLOAT,
+  disk_usage_avg FLOAT, disk_usage_min FLOAT, disk_usage_max FLOAT,
+  network_in_avg FLOAT, network_in_min FLOAT, network_in_max FLOAT,
+  network_out_avg FLOAT, network_out_min FLOAT, network_out_max FLOAT,
+  sample_count INTEGER,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (host_id, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rollup5m_host_bucket
+  ON metric_rollups_5m (host_id, bucket_start DESC);
+
+CREATE TABLE IF NOT EXISTS metric_rollups_1h (
+  id SERIAL PRIMARY KEY,
+  host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  bucket_start TIMESTAMP NOT NULL,
+  cpu_usage_avg FLOAT, cpu_usage_min FLOAT, cpu_usage_max FLOAT,
+  memory_usage_avg FLOAT, memory_usage_min FLOAT, memory_usage_max FLOAT,
+  disk_usage_avg FLOAT, disk_usage_min FLOAT, disk_usage_max FLOAT,
+  network_in_avg FLOAT, network_in_min FLOAT, network_in_max FLOAT,
+  network_out_avg FLOAT, network_out_min FLOAT, network_out_max FLOAT,
+  sample_count INTEGER,
+  created_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (host_id, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rollup1h_host_bucket
+  ON metric_rollups_1h (host_id, bucket_start DESC);
