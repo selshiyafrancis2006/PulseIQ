@@ -4,7 +4,6 @@ const pool = require('../config/db');
 const authenticateAgent = require('../middleware/agentAuth.middleware');
 const { evaluateAlerts } = require('../services/alert.service');
 const { broadcastMetrics } = require('../services/websocket.service');
-const { processMetricRollups } = require('../services/metricRollup.service');
 
 router.post('/metrics', authenticateAgent, async (req, res) => {
     try {
@@ -38,7 +37,6 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         const savedMetric = result.rows[0];
         await evaluateAlerts(savedMetric);
         broadcastMetrics(savedMetric);
-        await processMetricRollups(savedMetric);
         res.status(201).json(savedMetric);
     } catch (err) {
         console.error('Agent metrics ingestion error:', err);

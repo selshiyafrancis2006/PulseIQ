@@ -24,8 +24,6 @@ ChartJS.register(
   Tooltip,
   Legend
 )
-import useHosts from '../hooks/useHosts'
-import HostSelector from '../components/shared/hostSelector'
 
 const MAX_POINTS = 100
 
@@ -56,7 +54,12 @@ export default function App() {
     // FIX: Extracted into a function to allow auto-reconnect
     const connect = () => {
 
-      socket = new WebSocket('ws://localhost:5000');
+      const token = localStorage.getItem('token');
+if (!token) {
+  console.warn('No auth token found — skipping WebSocket connection');
+  return;
+}
+socket = new WebSocket(`ws://localhost:5000?token=${encodeURIComponent(token)}`);
       wsRef.current = socket;
 
       socket.onopen = () => {
