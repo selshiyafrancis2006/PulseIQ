@@ -4,6 +4,9 @@ const http = require('http');
 const { WebSocketServer } = require('ws');
 const pool = require('./config/db');
 const si = require('systeminformation');
+const { URL } = require('url');
+const jwt = require('jsonwebtoken');
+const JWT_SECRET = require('./config/jwt');
 
 const {
     setWSS
@@ -20,6 +23,7 @@ const loggerMiddleware = require("./middleware/logger.middleware");
 const authenticate = require("./middleware/auth.middleware");
 const agentRoutes = require('./routes/agent.routes');
 const logsRoutes = require("./routes/logs.routes");
+const hostsRoutes = require('./routes/hosts.routes');
 
 const app = express();
 const server = http.createServer(app);
@@ -66,6 +70,7 @@ app.use('/api', authenticate, alertsRoutes);
 app.use('/api', authenticate, processesRoutes);
 app.use('/api/service-health', authenticate, serviceHealthRoutes);
 app.use("/api/logs", authenticate, logsRoutes);
+app.use('/api/hosts', authenticate, hostsRoutes);
 
 // Health Route
 app.get('/', (req, res) => {
@@ -75,17 +80,60 @@ app.get('/', (req, res) => {
 // WebSocket Connection
 // Metrics are pushed to clients via broadcastMetrics() from metric.job.js
 // and agent.routes.js — no per-client polling here.
-wss.on('connection', (ws) => {
-    console.log('Client connected via WebSocket');
+wss.on('connection', async (ws, req) => {
+
+    const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
+    const token = searchParams.get('token');
+    const hostId = searchParams.get('host_id');
+
+    if (!token) {
+        ws.close(4401, 'Missing auth token');
+        return;
+    }
+
+    let decoded;
+
+    try {
+        decoded = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+        ws.close(4401, 'Invalid or expired token');
+        return;
+    }
+
+    if (!hostId || Number.isNaN(Number(hostId))) {
+        ws.close(4400, 'Missing or invalid host_id');
+        return;
+    }
+
+    try {
+
+        const ownership = await pool.query(
+            'SELECT id FROM hosts WHERE id = $1 AND user_id = $2',
+            [Number(hostId), decoded.id]
+        );
+
+        if (ownership.rows.length === 0) {
+            ws.close(4403, 'Host not found');
+            return;
+        }
+
+    } catch (err) {
+        console.error('WebSocket ownership check failed:', err);
+        ws.close(1011, 'Internal error');
+        return;
+    }
+
+    ws.hostId = Number(hostId);
+
+    console.log(`Client connected via WebSocket (host_id: ${ws.hostId})`);
 
     ws.on('close', () => {
-        console.log('Client disconnected');
+        console.log(`Client disconnected (host_id: ${ws.hostId})`);
     });
 });
 
 // Start metrics job
 (async () => {
-    await import('./jobs/metric.job.js');
     await import('./jobs/uptime.job.js');
     await import('./jobs/rollup.job.js');
 })();

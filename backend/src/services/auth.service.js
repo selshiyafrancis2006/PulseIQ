@@ -6,6 +6,14 @@ const pool = require('../config/db');
 
 const JWT_SECRET = require('../config/jwt');
 
+// Same defaults as the ones originally seeded globally in init.sql,
+// now created per-user at signup time instead.
+const DEFAULT_ALERT_RULES = [
+    { metric_name: 'cpu_usage', operator: '>', threshold: 80, duration: 3 },
+    { metric_name: 'memory_usage', operator: '>', threshold: 85, duration: 3 },
+    { metric_name: 'disk_usage', operator: '>', threshold: 90, duration: 1 }
+];
+
 const register = async (email, password) => {
 
     const existing = await pool.query(
@@ -30,6 +38,14 @@ const register = async (email, password) => {
     );
 
     const user = result.rows[0];
+
+    for (const rule of DEFAULT_ALERT_RULES) {
+        await pool.query(
+            `INSERT INTO alert_rules (metric_name, operator, threshold, duration, user_id)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [rule.metric_name, rule.operator, rule.threshold, rule.duration, user.id]
+        );
+    }
 
     const token = jwt.sign(
         {

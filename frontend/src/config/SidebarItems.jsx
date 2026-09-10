@@ -12,6 +12,12 @@ export const sidebarItems = [
   {
     title: 'MONITORING',
     items: [
+
+      {
+        label: 'Hosts',
+        path: '/hosts',
+      },
+      
       {
         label: 'Uptime Monitoring',
         path: '/uptime',
@@ -26,6 +32,8 @@ export const sidebarItems = [
       },
     ],
   },
+
+  
 
   {
     title: 'ALERTING',
@@ -65,3 +73,4 @@ export const sidebarItems = [
     ],
   },
 ]
+

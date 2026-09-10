@@ -31,7 +31,8 @@ router.get('/:id/events', getMonitorEvents);
 router.get('/test', async (req, res) => {
     try {
         const result = await db.query(
-            'SELECT * FROM monitors LIMIT 1'
+            'SELECT * FROM monitors WHERE user_id = $1 LIMIT 1',
+            [req.user.id]
         );
 
         const monitor = result.rows[0];

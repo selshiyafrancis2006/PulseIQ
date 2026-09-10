@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from '../utils/apiFetch'
 import { API_BASE_URL } from '../config/api'
+import useHosts from '../hooks/useHosts'
+import HostSelector from '../components/shared/hostSelector'
 
 import MetricSelector from '../components/metrics/MetricSelector'
 import StatsCards from '../components/metrics/StatsCards'
@@ -8,6 +10,8 @@ import MetricsChart from '../components/metrics/MetricsChart'
 import MetricsTable from '../components/metrics/MetricsTable'
 
 export default function Metrics() {
+
+  const { hosts, selectedHostId, setSelectedHostId } = useHosts()
 
   const [metrics, setMetrics] = useState([])
   const [selectedMetrics, setSelectedMetrics] = useState([
@@ -17,12 +21,16 @@ export default function Metrics() {
 
   useEffect(() => {
 
+    if (!selectedHostId) {
+      return
+    }
+
     const fetchMetrics = async () => {
 
       try {
 
         const res = await apiFetch(
-          `${API_BASE_URL}/api/metrics?range=${timeRange}`
+          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
         )
 
         const data = await res.json()
@@ -49,7 +57,7 @@ export default function Metrics() {
 
     return () => clearInterval(interval)
 
-  }, [timeRange])
+  }, [timeRange, selectedHostId])
 
   const exportCSV = () => {
 
@@ -113,19 +121,29 @@ export default function Metrics() {
 
         </div>
 
-        <button
-          onClick={exportCSV}
-          className="
-            bg-emerald-600
-            hover:bg-emerald-700
-            px-5
-            py-2
-            rounded-lg
-            font-medium
-          "
-        >
-          Export CSV
-        </button>
+        <div className="flex items-center gap-3">
+
+          <HostSelector
+            hosts={hosts}
+            selectedHostId={selectedHostId}
+            onChange={setSelectedHostId}
+          />
+
+          <button
+            onClick={exportCSV}
+            className="
+              bg-emerald-600
+              hover:bg-emerald-700
+              px-5
+              py-2
+              rounded-lg
+              font-medium
+            "
+          >
+            Export CSV
+          </button>
+
+        </div>
 
       </div>
 

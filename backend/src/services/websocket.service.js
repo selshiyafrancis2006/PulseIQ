@@ -20,7 +20,10 @@ function broadcastMetrics(data) {
 
     wss.clients.forEach((client) => {
 
-        if (client.readyState === 1) {
+        if (
+            client.readyState === 1 &&
+            client.hostId === data.host_id
+        ) {
 
             client.send(
                 JSON.stringify(data)

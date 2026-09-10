@@ -8,8 +8,16 @@ const getMetrics = async (req, res) => {
         const range =
             req.query.range || '1m';
 
+        const hostId = req.query.host_id;
+
+        if (!hostId) {
+            return res.status(400).json({
+                error: 'host_id is required'
+            });
+        }
+
         const metrics =
-            await metricsService.fetchMetrics(range);
+            await metricsService.fetchMetrics(range, hostId);
 
         res.json(metrics);
 

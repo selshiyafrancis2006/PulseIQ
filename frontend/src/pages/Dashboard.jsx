@@ -4,6 +4,7 @@ import { apiFetch } from '../utils/apiFetch'
 import { Line } from 'react-chartjs-2'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
+import { WS_URL } from '../config/api'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -48,6 +49,10 @@ export default function App() {
   ========================= */
   useEffect(() => {
 
+    if (!selectedHostId) {
+      return;
+    }
+
     let socket;
     let reconnectTimer;
 
@@ -55,11 +60,13 @@ export default function App() {
     const connect = () => {
 
       const token = localStorage.getItem('token');
-if (!token) {
-  console.warn('No auth token found — skipping WebSocket connection');
-  return;
-}
-socket = new WebSocket(`ws://localhost:5000?token=${encodeURIComponent(token)}`);
+      if (!token) {
+        console.warn('No auth token found — skipping WebSocket connection');
+        return;
+      }
+      socket = new WebSocket(
+        `${WS_URL}?token=${encodeURIComponent(token)}&host_id=${selectedHostId}`
+      );
       wsRef.current = socket;
 
       socket.onopen = () => {
@@ -91,17 +98,50 @@ socket = new WebSocket(`ws://localhost:5000?token=${encodeURIComponent(token)}`)
 
       // FIX: Log useful details instead of the raw Event object
       socket.onerror = () => {
-        console.error('WebSocket error — could not reach ws://localhost:5000');
+        console.error(`WebSocket error — could not reach ${WS_URL}`);
       };
 
-      // FIX: Auto-reconnect after 3 seconds on disconnect
+      // FIX: Auto-reconnect after 3 seconds on disconnect — but only for
+      // transient failures. Auth/ownership rejections won't fix themselves
+      // by retrying, so those are handled separately instead of looping.
       socket.onclose = (event) => {
         console.warn(`WebSocket closed (code: ${event.code})`);
         setConnected(false);
+
+        // Invalid/missing/expired token — same handling as a REST 401:
+        // clear it and send the user back to log in.
+        if (event.code === 4401) {
+          localStorage.removeItem('token');
+          if (window.location.pathname !== '/login') {
+            navigate('/login');
+          }
+          return;
+        }
+
+        // Token is valid, but this host isn't (or no longer is) owned by
+        // this account — retrying changes nothing, so stop.
+        if (event.code === 4403) {
+          console.error('WebSocket rejected: host not found or not owned by this account.');
+          return;
+        }
+
+        // Missing/invalid host_id — shouldn't happen given the
+        // selectedHostId guard above, but fail safe rather than loop.
+        if (event.code === 4400) {
+          console.error('WebSocket rejected: missing or invalid host_id.');
+          return;
+        }
+
+        // Anything else (server restart, network blip, etc.) — retry.
         reconnectTimer = setTimeout(connect, 3000);
       };
 
     };
+
+    // Reset stale data from a previous host before the new stream arrives
+    setMetrics([]);
+    setLatest(null);
+    setConnected(false);
 
     reconnectTimer = setTimeout(connect, 1000);
 
@@ -110,7 +150,7 @@ socket = new WebSocket(`ws://localhost:5000?token=${encodeURIComponent(token)}`)
       socket?.close();
     };
 
-  }, []);
+  }, [selectedHostId, navigate]);
 
   /* =========================
      ALERTS FETCH
@@ -210,12 +250,16 @@ useEffect(() => {
 
   useEffect(() => {
 
+    if (!selectedHostId) {
+      return
+    }
+
     const fetchMetrics = async () => {
 
       try {
 
         const res = await apiFetch(
-          `http://localhost:5000/api/metrics?range=${timeRange}`
+          `http://localhost:5000/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
         )
 
         const data = await res.json()
@@ -235,7 +279,7 @@ useEffect(() => {
 
     fetchMetrics()
 
-  }, [timeRange])
+  }, [timeRange, selectedHostId])
 
   /* =========================
      CHART DATA
