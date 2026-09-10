@@ -33,20 +33,16 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-INSERT INTO alert_rules (metric_name, operator, threshold, duration)
-VALUES
-  ('cpu_usage', '>', 80, 3),
-  ('memory_usage', '>', 85, 3),
-  ('disk_usage', '>', 90, 1)
-ON CONFLICT DO NOTHING;
-
 CREATE TABLE IF NOT EXISTS monitors (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   url VARCHAR(500) NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   is_active BOOLEAN DEFAULT true,
   created_at TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
 
 CREATE TABLE IF NOT EXISTS monitor_results (
   id SERIAL PRIMARY KEY,
@@ -91,9 +87,12 @@ CREATE TABLE IF NOT EXISTS hosts (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   api_key VARCHAR(255) UNIQUE NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMP DEFAULT NOW(),
   last_seen_at TIMESTAMP
 );
+
+CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
 
 CREATE INDEX IF NOT EXISTS idx_hosts_api_key ON hosts (api_key);
 
@@ -134,3 +133,17 @@ CREATE TABLE IF NOT EXISTS metric_rollups_1h (
 
 CREATE INDEX IF NOT EXISTS idx_rollup1h_host_bucket
   ON metric_rollups_1h (host_id, bucket_start DESC);
+
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_alerts_host_timestamp ON alerts (host_id, timestamp DESC);
+
+ALTER TABLE hosts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
+
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
+
+ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules (user_id);
+

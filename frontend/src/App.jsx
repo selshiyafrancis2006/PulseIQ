@@ -17,6 +17,7 @@ import AlertHistory from './pages/AlertHistory'
 import ServiceHealth from './pages/ServiceHealth'
 import Logs from './pages/Logs'
 import Settings from './pages/Settings'
+import Hosts from './pages/Hosts'
 
 const ProtectedRoute = ({ children }) => {
 
@@ -127,6 +128,16 @@ export default function App() {
     <ProtectedRoute>
       <DashboardLayout>
         <Settings />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
+<Route
+  path="/hosts"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <Hosts />
       </DashboardLayout>
     </ProtectedRoute>
   }

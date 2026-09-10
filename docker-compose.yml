@@ -20,5 +20,15 @@ services:
       - pgdata:/var/lib/postgresql/data
       - ./backend/init.sql:/docker-entrypoint-initdb.d/init.sql
 
+  agent:
+    build: ./agent
+    environment:
+      BACKEND_URL: http://backend:5000/api/agent/metrics
+      API_KEY: ${AGENT_API_KEY:-}
+      INTERVAL_MS: 5000
+    depends_on:
+      - backend
+    restart: unless-stopped
+
 volumes:
   pgdata:

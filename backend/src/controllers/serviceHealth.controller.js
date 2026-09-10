@@ -1,6 +1,6 @@
-import { getServiceHealth } from "../services/serviceHealth.service.js";
+const { getServiceHealth } = require("../services/serviceHealth.service.js");
 
-export async function getServiceHealthController(req, res) {
+async function getServiceHealthController(req, res) {
   try {
     const data = await getServiceHealth();
 
@@ -13,3 +13,7 @@ export async function getServiceHealthController(req, res) {
     });
   }
 }
+
+module.exports = {
+  getServiceHealthController,
+};

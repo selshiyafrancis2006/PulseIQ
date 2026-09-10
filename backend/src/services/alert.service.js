@@ -1,7 +1,12 @@
 const pool = require('../config/db');
 
-// store consecutive breaches in memory
+// store consecutive breaches in memory, keyed per host+metric so one
+// host's breach streak never affects another host's
 const breachState = new Map();
+
+function breachKey(hostId, metricName) {
+    return `${hostId ?? 'unknown'}:${metricName}`;
+}
 
 async function evaluateAlerts(metric) {
     try {
@@ -35,7 +40,7 @@ async function evaluateAlerts(metric) {
                     break;
             }
 
-            const key = rule.metric_name;
+            const key = breachKey(metric.host_id, rule.metric_name);
 
             if (conditionMet) {
 
@@ -56,17 +61,19 @@ await pool.query(`
         metric_value,
         average_value,
         severity,
+        host_id,
         timestamp
     )
-    VALUES ($1, $2, $3, $4, NOW())
+    VALUES ($1, $2, $3, $4, $5, NOW())
 `, [
     rule.metric_name,
     value,
     rule.threshold,
-    severity
+    severity,
+    metric.host_id ?? null
 ]);
 
-                    console.log(`Alert triggered: ${rule.metric_name}`);
+                    console.log(`Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id ?? 'unknown'})`);
 
                     breachState.set(key, 0);
                 }
@@ -100,6 +107,8 @@ async function fetchAlerts() {
 
         threshold_value: alert.average_value,
 
+        host_id: alert.host_id,
+
         severity:
     alert.severity ||
     (
@@ -131,4 +140,4 @@ async function updateRule(id, threshold, is_active) {
     );
     return result.rows[0];
 }
-module.exports = { evaluateAlerts, fetchAlerts, fetchRules, updateRule }; 
+module.exports = { evaluateAlerts, fetchAlerts, fetchRules, updateRule };

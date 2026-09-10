@@ -98,7 +98,7 @@ export default function MetricSelector({
           Time Range
         </p>
 
-        <select
+                <select
           value={timeRange}
           onChange={(e) => setTimeRange(e.target.value)}
           className="
@@ -117,8 +117,11 @@ export default function MetricSelector({
           <option value="5m">Last 5 Minutes</option>
           <option value="15m">Last 15 Minutes</option>
           <option value="1h">Last 1 Hour</option>
+          <option value="6h">Last 6 Hours</option>
+          <option value="24h">Last 24 Hours</option>
+          <option value="3d">Last 3 Days</option>
+          <option value="7d">Last 7 Days</option>
         </select>
-
       </div>
 
     </div>

@@ -5,10 +5,10 @@ const createMonitor = async (req, res) => {
         const { name, url } = req.body;
 
         const result = await db.query(
-            `INSERT INTO monitors (name, url)
-             VALUES ($1, $2)
+            `INSERT INTO monitors (name, url, user_id)
+             VALUES ($1, $2, $3)
              RETURNING *`,
-            [name, url]
+            [name, url, req.user.id]
         );
 
         res.status(201).json(result.rows[0]);
@@ -25,7 +25,8 @@ const getMonitors = async (req, res) => {
     try {
 
         const result = await db.query(
-            'SELECT * FROM monitors ORDER BY id DESC'
+            'SELECT * FROM monitors WHERE user_id = $1 ORDER BY id DESC',
+            [req.user.id]
         );
 
         res.json(result.rows);
@@ -56,8 +57,9 @@ const getMonitorStatus = async (req, res) => {
             FROM monitors m
             LEFT JOIN monitor_results mr
                 ON m.id = mr.monitor_id
+            WHERE m.user_id = $1
             ORDER BY m.id, mr.checked_at DESC
-        `);
+        `, [req.user.id]);
 
         res.json(result.rows);
 
@@ -78,15 +80,17 @@ const getMonitorHistory = async (req, res) => {
 
         const result = await db.query(
             `SELECT
-                status,
-                response_time_ms,
-                status_code,
-                checked_at
-             FROM monitor_results
-             WHERE monitor_id = $1
-             ORDER BY checked_at DESC
+                mr.status,
+                mr.response_time_ms,
+                mr.status_code,
+                mr.checked_at
+             FROM monitor_results mr
+             JOIN monitors m ON mr.monitor_id = m.id
+             WHERE mr.monitor_id = $1
+               AND m.user_id = $2
+             ORDER BY mr.checked_at DESC
              LIMIT 50`,
-            [id]
+            [id, req.user.id]
         );
 
         res.json(result.rows);
@@ -106,13 +110,15 @@ const getMonitorUptime = async (req, res) => {
 
     const result = await db.query(
       `
-      SELECT status
-      FROM monitor_results
-      WHERE monitor_id = $1
-      ORDER BY checked_at DESC
+      SELECT mr.status
+      FROM monitor_results mr
+      JOIN monitors m ON mr.monitor_id = m.id
+      WHERE mr.monitor_id = $1
+        AND m.user_id = $2
+      ORDER BY mr.checked_at DESC
       LIMIT 100
       `,
-      [id]
+      [id, req.user.id]
     );
 
     const rows = result.rows;
@@ -138,17 +144,19 @@ const getMonitorEvents = async (req, res) => {
     const result = await db.query(
       `
       SELECT
-        id,
-        type,
-        message,
-        response_time_ms,
-        created_at
-      FROM monitor_events
-      WHERE monitor_id = $1
-      ORDER BY created_at DESC
+        me.id,
+        me.type,
+        me.message,
+        me.response_time_ms,
+        me.created_at
+      FROM monitor_events me
+      JOIN monitors m ON me.monitor_id = m.id
+      WHERE me.monitor_id = $1
+        AND m.user_id = $2
+      ORDER BY me.created_at DESC
       LIMIT 100
       `,
-      [id]
+      [id, req.user.id]
     );
 
     res.json(result.rows);
