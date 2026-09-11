@@ -30,6 +30,10 @@ export const sidebarItems = [
         label: 'APM',
         path: '/apm',
       },
+            {
+        label: 'Anomalies',
+        path: '/anomalies',
+      },
       {
         label: 'Processes',
         path: '/processes',

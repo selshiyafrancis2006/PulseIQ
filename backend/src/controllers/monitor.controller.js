@@ -1,14 +1,34 @@
 const db = require('../config/db');
 
+// Same normalization used for host tags: trims, drops empties, de-dupes.
+function normalizeTags(rawTags) {
+
+    if (!rawTags) {
+        return [];
+    }
+
+    const list = Array.isArray(rawTags)
+        ? rawTags
+        : String(rawTags).split(',');
+
+    const cleaned = list
+        .map(tag => tag.trim())
+        .filter(tag => tag.length > 0);
+
+    return [...new Set(cleaned)];
+}
+
 const createMonitor = async (req, res) => {
     try {
-        const { name, url } = req.body;
+        const { name, url, tags } = req.body;
+
+        const normalizedTags = normalizeTags(tags);
 
         const result = await db.query(
-            `INSERT INTO monitors (name, url, user_id)
-             VALUES ($1, $2, $3)
+            `INSERT INTO monitors (name, url, user_id, tags)
+             VALUES ($1, $2, $3, $4)
              RETURNING *`,
-            [name, url, req.user.id]
+            [name, url, req.user.id, normalizedTags]
         );
 
         res.status(201).json(result.rows[0]);
@@ -45,11 +65,14 @@ const getMonitors = async (req, res) => {
 const getMonitorStatus = async (req, res) => {
     try {
 
+        const { tag } = req.query;
+
         const result = await db.query(`
             SELECT DISTINCT ON (m.id)
                 m.id,
                 m.name,
                 m.url,
+                m.tags,
                 mr.status,
                 mr.response_time_ms,
                 mr.status_code,
@@ -58,8 +81,9 @@ const getMonitorStatus = async (req, res) => {
             LEFT JOIN monitor_results mr
                 ON m.id = mr.monitor_id
             WHERE m.user_id = $1
+              AND ($2::text IS NULL OR m.tags @> ARRAY[$2::text])
             ORDER BY m.id, mr.checked_at DESC
-        `, [req.user.id]);
+        `, [req.user.id, tag || null]);
 
         res.json(result.rows);
 

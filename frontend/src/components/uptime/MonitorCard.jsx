@@ -69,13 +69,32 @@ function MonitorCard({ monitor }) {
       {/* ================= HEADER ================= */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#2a2a2a]">
         
-        <div className="flex flex-col">
+        <div className="flex flex-col gap-1.5">
           <h3 className="text-white font-semibold text-lg">
             {monitor.name}
           </h3>
           <p className="text-gray-500 text-sm">
             {monitor.url}
           </p>
+          {monitor.tags && monitor.tags.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mt-0.5">
+              {monitor.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="
+                    px-2 py-0.5
+                    rounded-full
+                    bg-[#0f0f0f]
+                    border border-[#2a2a2a]
+                    text-xs
+                    text-gray-400
+                  "
+                >
+                  {tag}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <MonitorStatusBadge
