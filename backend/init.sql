@@ -160,3 +160,29 @@ CREATE TABLE IF NOT EXISTS traces (
   timestamp TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_traces_host_timestamp ON traces (host_id, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS metric_baselines (
+  id SERIAL PRIMARY KEY,
+  host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  metric_name VARCHAR(50) NOT NULL,
+  mean FLOAT NOT NULL,
+  stddev FLOAT NOT NULL,
+  sample_count INTEGER NOT NULL,
+  updated_at TIMESTAMP DEFAULT NOW(),
+  UNIQUE (host_id, metric_name)
+);
+
+CREATE TABLE IF NOT EXISTS anomalies (
+  id SERIAL PRIMARY KEY,
+  host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  metric_name VARCHAR(50) NOT NULL,
+  value FLOAT NOT NULL,
+  baseline_mean FLOAT NOT NULL,
+  baseline_stddev FLOAT NOT NULL,
+  deviation_score FLOAT NOT NULL,
+  timestamp TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp ON anomalies (host_id, timestamp DESC);
+
+ALTER TABLE monitors ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_monitors_tags ON monitors USING GIN (tags);

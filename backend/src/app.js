@@ -25,6 +25,7 @@ const agentRoutes = require('./routes/agent.routes');
 const logsRoutes = require("./routes/logs.routes");
 const hostsRoutes = require('./routes/hosts.routes');
 const apmRoutes = require('./routes/apm.routes');
+const anomalyRoutes = require('./routes/anomaly.routes');
 
 const app = express();
 const server = http.createServer(app);
@@ -73,6 +74,7 @@ app.use('/api/service-health', authenticate, serviceHealthRoutes);
 app.use("/api/logs", authenticate, logsRoutes);
 app.use('/api/hosts', authenticate, hostsRoutes);
 app.use('/api/apm', authenticate, apmRoutes);
+app.use('/api/anomalies', authenticate, anomalyRoutes);
 
 // Health Route
 app.get('/', (req, res) => {
@@ -138,6 +140,7 @@ wss.on('connection', async (ws, req) => {
 (async () => {
     await import('./jobs/uptime.job.js');
     await import('./jobs/rollup.job.js');
+    await import('./jobs/baseline.job.js');
 })();
 
 

@@ -3,6 +3,8 @@ function MonitorToolbar({
   setSearch,
   statusFilter,
   setStatusFilter,
+  tagFilter,
+  setTagFilter,
 }) {
   return (
     <div className="flex flex-col md:flex-row gap-4 justify-between items-center mb-6">
@@ -13,6 +15,14 @@ function MonitorToolbar({
         value={search}
         onChange={(e) => setSearch(e.target.value)}
         className="w-full md:w-96 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3 text-white placeholder-gray-500 outline-none focus:border-emerald-500"
+      />
+
+      <input
+        type="text"
+        placeholder="Filter by tag, e.g. env:prod"
+        value={tagFilter}
+        onChange={(e) => setTagFilter(e.target.value)}
+        className="w-full md:w-64 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3 text-white placeholder-gray-500 outline-none focus:border-emerald-500"
       />
 
       <select

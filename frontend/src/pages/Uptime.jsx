@@ -12,6 +12,7 @@ function Uptime() {
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
+  const [tagFilter, setTagFilter] = useState('');
 
   useEffect(() => {
     const fetchMonitors = async () => {
@@ -49,7 +50,11 @@ function Uptime() {
       statusFilter === 'ALL' ||
       monitor.status === statusFilter;
 
-    return matchesSearch && matchesStatus;
+    const matchesTag =
+      !tagFilter ||
+      (monitor.tags || []).includes(tagFilter.trim());
+
+    return matchesSearch && matchesStatus && matchesTag;
   });
 
   return (
@@ -75,6 +80,8 @@ function Uptime() {
         setSearch={setSearch}
         statusFilter={statusFilter}
         setStatusFilter={setStatusFilter}
+        tagFilter={tagFilter}
+        setTagFilter={setTagFilter}
       />
 
       <UptimeSummary monitors={filteredMonitors} />
