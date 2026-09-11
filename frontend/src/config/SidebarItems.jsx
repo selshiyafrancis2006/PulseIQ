@@ -26,6 +26,10 @@ export const sidebarItems = [
         label: 'Metrics',
         path: '/metrics',
       },
+            {
+        label: 'APM',
+        path: '/apm',
+      },
       {
         label: 'Processes',
         path: '/processes',
