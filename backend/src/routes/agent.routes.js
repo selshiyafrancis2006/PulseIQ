@@ -45,4 +45,49 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         });
     }
 });
+
+router.post('/traces', authenticateAgent, async (req, res) => {
+    try {
+        const {
+            method,
+            route,
+            status_code,
+            duration_ms
+        } = req.body;
+
+        if (!method || !route) {
+            return res.status(400).json({
+                error: 'method and route are required'
+            });
+        }
+
+        const result = await pool.query(
+            `INSERT INTO traces (
+                host_id,
+                method,
+                route,
+                status_code,
+                duration_ms
+            )
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING *`,
+            [
+                req.agentHost.id,
+                method,
+                route,
+                status_code,
+                duration_ms
+            ]
+        );
+
+        res.status(201).json(result.rows[0]);
+
+    } catch (err) {
+        console.error('Agent trace ingestion error:', err);
+        res.status(500).json({
+            error: 'Failed to save trace'
+        });
+    }
+});
+
 module.exports = router;

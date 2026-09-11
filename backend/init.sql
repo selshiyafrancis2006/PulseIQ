@@ -147,3 +147,16 @@ CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
 ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules (user_id);
 
+ALTER TABLE hosts ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS idx_hosts_tags ON hosts USING GIN (tags);
+
+CREATE TABLE IF NOT EXISTS traces (
+  id SERIAL PRIMARY KEY,
+  host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
+  method VARCHAR(10) NOT NULL,
+  route VARCHAR(255) NOT NULL,
+  status_code INTEGER,
+  duration_ms INTEGER,
+  timestamp TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_traces_host_timestamp ON traces (host_id, timestamp DESC);

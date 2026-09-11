@@ -18,6 +18,7 @@ import ServiceHealth from './pages/ServiceHealth'
 import Logs from './pages/Logs'
 import Settings from './pages/Settings'
 import Hosts from './pages/Hosts'
+import Apm from './pages/Apm'
 
 const ProtectedRoute = ({ children }) => {
 
@@ -138,6 +139,17 @@ export default function App() {
     <ProtectedRoute>
       <DashboardLayout>
         <Hosts />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
+
+<Route
+  path="/apm"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <Apm />
       </DashboardLayout>
     </ProtectedRoute>
   }
