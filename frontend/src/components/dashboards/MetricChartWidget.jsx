@@ -21,14 +21,6 @@ ChartJS.register(
   Filler
 )
 
-const metricColors = {
-  cpu_usage: '#10b981',
-  memory_usage: '#3b82f6',
-  disk_usage: '#f59e0b',
-  network_in: '#8b5cf6',
-  network_out: '#ef4444'
-}
-
 const metricLabels = {
   cpu_usage: 'CPU Usage',
   memory_usage: 'Memory Usage',
@@ -37,7 +29,7 @@ const metricLabels = {
   network_out: 'Network Out'
 }
 
-export default function MetricChartWidget({ hostId, metric, hostName }) {
+export default function MetricChartWidget({ hostId, metric, hostName, timeRange }) {
 
   const [metrics, setMetrics] = useState([])
   const [loading, setLoading] = useState(true)
@@ -49,7 +41,7 @@ export default function MetricChartWidget({ hostId, metric, hostName }) {
     const fetchMetrics = async () => {
       try {
         const res = await apiFetch(
-          `${API_BASE_URL}/api/metrics?range=5m&host_id=${hostId}`
+          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${hostId}`
         )
         const data = await res.json()
         setMetrics(data)
@@ -65,9 +57,9 @@ export default function MetricChartWidget({ hostId, metric, hostName }) {
     const interval = setInterval(fetchMetrics, 5000)
     return () => clearInterval(interval)
 
-  }, [hostId, metric])
+  }, [hostId, metric, timeRange])
 
-  const color = metricColors[metric] || '#10b981'
+  const color = '#10b981' // emerald — one consistent color across every widget, matches app theme
 
   const data = {
     labels: metrics.map((m) => new Date(m.timestamp).toLocaleTimeString()),
@@ -97,12 +89,28 @@ export default function MetricChartWidget({ hostId, metric, hostName }) {
 
   return (
     <div className="h-full flex flex-col p-3">
-      <p className="text-xs text-gray-500 mb-2">
-        {metricLabels[metric] || metric} · {hostName}
-      </p>
+      <div className="flex items-center gap-2 mb-2">
+        <p className="text-sm text-white truncate">
+          {metricLabels[metric] || metric} · {hostName}
+        </p>
+        {!loading && metrics.length > 0 && (
+          <span className="relative flex h-2 w-2 shrink-0" title="Live">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+          </span>
+        )}
+      </div>
       <div className="flex-1 min-h-0">
         {loading ? (
-          <p className="text-xs text-gray-600">Loading...</p>
+          <div className="h-full w-full flex items-end gap-1 px-1 pb-1">
+            {[40, 65, 50, 80, 55, 70, 45, 60].map((h, i) => (
+              <div
+                key={i}
+                className="flex-1 bg-[#2a2a2a] rounded-t animate-pulse"
+                style={{ height: `${h}%`, animationDelay: `${i * 100}ms` }}
+              />
+            ))}
+          </div>
         ) : metrics.length === 0 ? (
           <p className="text-xs text-gray-600">No data yet</p>
         ) : (
