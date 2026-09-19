@@ -5,6 +5,7 @@ import api from '../services/api'
 import useHosts from '../hooks/useHosts'
 import AddWidgetModal from '../components/dashboards/AddWidgetModal'
 import MetricChartWidget from '../components/dashboards/MetricChartWidget'
+import MonitorStatusWidget from '../components/dashboards/MonitorStatusWidget'
 
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -21,6 +22,11 @@ export default function DashboardBuilder() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [showAddWidget, setShowAddWidget] = useState(false)
+  const [timeRange, setTimeRange] = useState('1h')
+  const [editMode, setEditMode] = useState(false)
+
+  const [renamingWidgetId, setRenamingWidgetId] = useState(null)
+  const [renameValue, setRenameValue] = useState('')
 
   const saveTimeout = useRef(null)
 
@@ -70,7 +76,7 @@ export default function DashboardBuilder() {
 
   const handleLayoutChange = (newLayout) => {
 
-    if (!dashboard) return
+    if (!dashboard || !editMode) return
 
     const updatedWidgets = dashboard.layout.map((widget) => {
       const gridItem = newLayout.find((item) => item.i === widget.id)
@@ -89,14 +95,18 @@ export default function DashboardBuilder() {
     scheduleSave(updatedWidgets)
   }
 
-  const handleAddWidget = ({ type, config }) => {
+  const handleAddWidget = ({ type, config, title }) => {
+
+    const columnWidth = type === 'monitor_status' ? 3 : 4
+    const columnsPerRow = Math.floor(12 / columnWidth)
 
     const newWidget = {
       id: `w-${Date.now()}`,
       type,
-      x: 0,
-      y: Infinity, // react-grid-layout places this at the bottom automatically
-      w: 4,
+      title,
+      x: (dashboard.layout.length % columnsPerRow) * columnWidth,
+      y: Infinity,
+      w: columnWidth,
       h: 3,
       config
     }
@@ -105,7 +115,7 @@ export default function DashboardBuilder() {
 
     setDashboard((prev) => ({ ...prev, layout: updatedWidgets }))
     setShowAddWidget(false)
-    persistLayout(updatedWidgets) // save immediately, no debounce needed for a discrete action
+    persistLayout(updatedWidgets)
   }
 
   const handleRemoveWidget = (widgetId) => {
@@ -113,6 +123,29 @@ export default function DashboardBuilder() {
     const updatedWidgets = dashboard.layout.filter((w) => w.id !== widgetId)
 
     setDashboard((prev) => ({ ...prev, layout: updatedWidgets }))
+    persistLayout(updatedWidgets)
+  }
+
+  const startRenameWidget = (widget) => {
+    setRenamingWidgetId(widget.id)
+    setRenameValue(widget.title || widget.type.replace('_', ' '))
+  }
+
+  const cancelRenameWidget = () => {
+    setRenamingWidgetId(null)
+    setRenameValue('')
+  }
+
+  const submitRenameWidget = (widgetId) => {
+
+    if (!renameValue.trim()) return
+
+    const updatedWidgets = dashboard.layout.map((w) =>
+      w.id === widgetId ? { ...w, title: renameValue.trim() } : w
+    )
+
+    setDashboard((prev) => ({ ...prev, layout: updatedWidgets }))
+    cancelRenameWidget()
     persistLayout(updatedWidgets)
   }
 
@@ -151,22 +184,66 @@ export default function DashboardBuilder() {
         </div>
 
         <div className="flex items-center gap-3">
+          <select
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value)}
+            className="
+              bg-[#1a1a1a]
+              border border-[#2a2a2a]
+              text-white
+              px-3 py-2
+              rounded-lg
+              text-sm
+              outline-none
+              focus:border-emerald-500
+            "
+          >
+            <option value="1m">Last 1 Minute</option>
+            <option value="5m">Last 5 Minutes</option>
+            <option value="15m">Last 15 Minutes</option>
+            <option value="1h">Last 1 Hour</option>
+            <option value="6h">Last 6 Hours</option>
+            <option value="24h">Last 24 Hours</option>
+            <option value="3d">Last 3 Days</option>
+            <option value="7d">Last 7 Days</option>
+          </select>
+
           {saving && (
             <span className="text-xs text-gray-500">Saving...</span>
           )}
+
+          {editMode && (
+            <button
+              onClick={() => setShowAddWidget(true)}
+              className="
+                px-4 py-2
+                rounded-lg
+                bg-emerald-600
+                hover:bg-emerald-500
+                text-sm
+                font-semibold
+                transition-colors
+              "
+            >
+              + Add Widget
+            </button>
+          )}
+
           <button
-            onClick={() => setShowAddWidget(true)}
-            className="
+            onClick={() => setEditMode((prev) => !prev)}
+            className={`
               px-4 py-2
               rounded-lg
-              bg-emerald-600
-              hover:bg-emerald-500
               text-sm
               font-semibold
               transition-colors
-            "
+              ${editMode
+                ? 'bg-emerald-600 hover:bg-emerald-500'
+                : 'bg-[#2a2a2a] hover:bg-[#333] text-gray-300'
+              }
+            `}
           >
-            + Add Widget
+            {editMode ? 'Done Editing' : 'Edit Dashboard'}
           </button>
         </div>
       </div>
@@ -181,7 +258,9 @@ export default function DashboardBuilder() {
           text-center
         ">
           <p className="text-gray-500 text-sm">
-            No widgets yet. Click "Add Widget" to start building this dashboard.
+            {editMode
+              ? 'No widgets yet. Click "Add Widget" to start building this dashboard.'
+              : 'This dashboard is empty. Click "Edit Dashboard" to add widgets.'}
           </p>
         </div>
       ) : (
@@ -193,23 +272,80 @@ export default function DashboardBuilder() {
           rowHeight={80}
           onLayoutChange={handleLayoutChange}
           draggableHandle=".widget-drag-handle"
+          isDraggable={editMode}
+          isResizable={editMode}
         >
           {dashboard.layout.map((widget) => (
             <div
               key={widget.id}
-              className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl overflow-hidden flex flex-col"
+                            className={`
+                bg-[#1a1a1a] border rounded-xl overflow-hidden flex flex-col
+                transition-colors duration-150
+                ${editMode ? 'border-[#2a2a2a] hover:border-emerald-500/50' : 'border-[#2a2a2a]'}
+              `}
             >
-              <div className="widget-drag-handle cursor-move px-4 py-2 border-b border-[#2a2a2a] flex items-center justify-between">
-                <span className="text-xs text-gray-500 uppercase tracking-widest">
-                  {widget.type.replace('_', ' ')}
-                </span>
-                <button
-                  onClick={() => handleRemoveWidget(widget.id)}
-                  className="text-gray-600 hover:text-red-400 text-sm leading-none"
-                  title="Remove widget"
-                >
-                  ×
-                </button>
+              <div className={`
+                px-4 py-2 border-b border-[#2a2a2a] flex items-center justify-between gap-2
+                ${editMode ? 'widget-drag-handle cursor-move' : ''}
+              `}>
+                {renamingWidgetId === widget.id ? (
+                  <input
+                    type="text"
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && submitRenameWidget(widget.id)}
+                    autoFocus
+                    className="
+                      flex-1 min-w-0
+                      bg-transparent
+                      border-b border-emerald-500
+                      text-xs text-white
+                      outline-none
+                    "
+                  />
+                ) : (
+                                    <span className="text-sm text-white uppercase tracking-widest truncate">
+                    {widget.title || widget.type.replace('_', ' ')}
+                  </span>
+                )}
+
+                {editMode && (
+                  <div className="flex items-center gap-2 shrink-0">
+                    {renamingWidgetId === widget.id ? (
+                      <>
+                        <button
+                          onClick={() => submitRenameWidget(widget.id)}
+                          className="text-emerald-400 hover:text-emerald-300 text-xs"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={cancelRenameWidget}
+                          className="text-gray-500 hover:text-white text-xs"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          onClick={() => startRenameWidget(widget)}
+                          className="text-gray-600 hover:text-emerald-400 text-xs"
+                          title="Rename widget"
+                        >
+                          ✎
+                        </button>
+                        <button
+                          onClick={() => handleRemoveWidget(widget.id)}
+                          className="text-gray-600 hover:text-red-400 text-sm leading-none"
+                          title="Remove widget"
+                        >
+                          ×
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
               </div>
               <div className="flex-1 min-h-0">
                 {widget.type === 'metric_chart' ? (
@@ -217,7 +353,10 @@ export default function DashboardBuilder() {
                     hostId={widget.config.host_id}
                     metric={widget.config.metric}
                     hostName={hostName(widget.config.host_id)}
+                    timeRange={timeRange}
                   />
+                ) : widget.type === 'monitor_status' ? (
+                  <MonitorStatusWidget monitorId={widget.config.monitor_id} />
                 ) : (
                   <div className="flex items-center justify-center h-full text-gray-600 text-sm">
                     Unknown widget type
