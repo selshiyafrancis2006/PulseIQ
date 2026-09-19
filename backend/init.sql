@@ -186,3 +186,13 @@ CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp ON anomalies (host_id, t
 
 ALTER TABLE monitors ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
 CREATE INDEX IF NOT EXISTS idx_monitors_tags ON monitors USING GIN (tags);
+
+CREATE TABLE IF NOT EXISTS dashboards (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name VARCHAR(255) NOT NULL,
+  layout JSONB NOT NULL DEFAULT '[]',
+  created_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_dashboards_user_id ON dashboards (user_id);

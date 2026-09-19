@@ -1,68 +1,56 @@
-const metricsService =
-    require('../services/metrics.service');
+const pool = require('../config/db');
 
-const getMetrics = async (req, res) => {
-
-    try {
-
-        const range =
-            req.query.range || '1m';
-
-        const hostId = req.query.host_id;
-
-        if (!hostId) {
-            return res.status(400).json({
-                error: 'host_id is required'
-            });
-        }
-
-        const owns = await metricsService.verifyHostOwnership(hostId, req.user.id);
-
-        if (!owns) {
-            return res.status(404).json({
-                error: 'Host not found'
-            });
-        }
-
-        const metrics =
-            await metricsService.fetchMetrics(range, hostId);
-
-        res.json(metrics);
-
-    } catch (err) {
-
-        console.error(err);
-
-        res.status(500).json({
-            error: 'Failed to fetch metrics'
-        });
-
-    }
-
+const intervalMap = {
+    '1m': '1 minute',
+    '5m': '5 minutes',
+    '15m': '15 minutes',
+    '1h': '1 hour',
+    '6h': '6 hours',
+    '24h': '24 hours',
+    '3d': '3 days',
+    '7d': '7 days'
 };
 
-const getLatestMetric = async (req, res) => {
+const verifyHostOwnership = async (hostId, userId) => {
 
-    try {
+    const result = await pool.query(
+        `SELECT id FROM hosts WHERE id = $1 AND user_id = $2`,
+        [hostId, userId]
+    );
 
-        const metric =
-            await metricsService.fetchLatestMetric();
+    return result.rows.length > 0;
+};
 
-        res.json(metric);
+const fetchMetrics = async (range, hostId) => {
 
-    } catch (err) {
+    const interval = intervalMap[range] || '1 minute';
 
-        console.error(err);
+    const result = await pool.query(
+        `SELECT *
+         FROM metrics
+         WHERE host_id = $1
+           AND timestamp >= NOW() - INTERVAL '${interval}'
+         ORDER BY timestamp ASC`,
+        [hostId]
+    );
 
-        res.status(500).json({
-            error: 'Failed to fetch latest metric'
-        });
+    return result.rows;
+};
 
-    }
+const fetchLatestMetric = async () => {
 
+    const result = await pool.query(`
+        SELECT *
+        FROM metrics
+        ORDER BY timestamp DESC
+        LIMIT 1
+    `);
+
+    return result.rows[0];
 };
 
 module.exports = {
-    getMetrics,
-    getLatestMetric
+    verifyHostOwnership,
+    fetchMetrics,
+    fetchLatestMetric
 };
