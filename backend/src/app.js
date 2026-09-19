@@ -26,6 +26,7 @@ const logsRoutes = require("./routes/logs.routes");
 const hostsRoutes = require('./routes/hosts.routes');
 const apmRoutes = require('./routes/apm.routes');
 const anomalyRoutes = require('./routes/anomaly.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
 
 const app = express();
 const server = http.createServer(app);
@@ -75,6 +76,7 @@ app.use("/api/logs", authenticate, logsRoutes);
 app.use('/api/hosts', authenticate, hostsRoutes);
 app.use('/api/apm', authenticate, apmRoutes);
 app.use('/api/anomalies', authenticate, anomalyRoutes);
+app.use('/api/dashboards', authenticate, dashboardRoutes);
 
 // Health Route
 app.get('/', (req, res) => {
