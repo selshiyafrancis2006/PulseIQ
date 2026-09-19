@@ -1,13 +1,17 @@
 export const sidebarItems = [
-  {
-    title: 'OVERVIEW',
-    items: [
-      {
-        label: 'Dashboard',
-        path: '/dashboard',
-      },
-    ],
-  },
+{
+  title: 'OVERVIEW',
+  items: [
+    {
+      label: 'Overview',
+      path: '/dashboard',
+    },
+    {
+      label: 'Dashboards',
+      path: '/dashboards',
+    },
+  ],
+},
 
   {
     title: 'MONITORING',
