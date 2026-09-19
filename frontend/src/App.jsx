@@ -20,6 +20,8 @@ import Settings from './pages/Settings'
 import Hosts from './pages/Hosts'
 import Apm from './pages/Apm'
 import Anomalies from './pages/Anomalies'
+import Dashboards from './pages/Dashboards'
+import DashboardBuilder from './pages/DashboardBuilder'
 
 const ProtectedRoute = ({ children }) => {
 
@@ -162,6 +164,28 @@ export default function App() {
     <ProtectedRoute>
       <DashboardLayout>
         <Anomalies />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
+
+<Route
+  path="/dashboards"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <Dashboards />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
+
+<Route
+  path="/dashboards/:id"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <DashboardBuilder />
       </DashboardLayout>
     </ProtectedRoute>
   }
