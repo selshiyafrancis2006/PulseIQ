@@ -24,9 +24,10 @@ async function loggerMiddleware(req, res, next) {
           status_code,
           response_time_ms,
           ip_address,
-          message
+          message,
+          user_id
         )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
         `,
         [
           res.statusCode >= 500
@@ -50,6 +51,8 @@ async function loggerMiddleware(req, res, next) {
           req.ip,
 
           `${req.method} ${req.originalUrl} responded with ${res.statusCode}`,
+
+          req.user?.id ?? null, // null for pre-auth requests (login, register, agent ingestion)
         ]
       );
 

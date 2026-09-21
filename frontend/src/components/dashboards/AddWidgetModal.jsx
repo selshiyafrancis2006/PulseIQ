@@ -20,6 +20,7 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
   const [monitors, setMonitors] = useState([])
   const [monitorId, setMonitorId] = useState('')
 
+  const [severity, setSeverity] = useState('ALL')
   useEffect(() => {
 
     const fetchMonitors = async () => {
@@ -58,11 +59,19 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
         title: selectedMonitor?.name || 'Monitor'
       })
     }
+    else if (widgetType === 'log_count') {
+      onAdd({
+        type: 'log_count',
+        config: { severity },
+        title: severity === 'ALL' ? 'All Logs' : `${severity} Logs`
+      })
+    }
   }
 
-  const canSubmit =
-    widgetType === 'metric_chart' ? !!hostId : !!monitorId
-
+   const canSubmit =
+    widgetType === 'metric_chart' ? !!hostId :
+    widgetType === 'monitor_status' ? !!monitorId :
+    true // log_count has no required selection beyond severity, which always has a default
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-6 w-full max-w-md">
@@ -89,6 +98,7 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
             >
               <option value="metric_chart">Metric Chart</option>
               <option value="monitor_status">Monitor Status</option>
+              <option value="log_count">Log Count</option>
             </select>
           </div>
 
@@ -173,6 +183,30 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
                   ))}
                 </select>
               )}
+            </div>
+          )}
+                    {widgetType === 'log_count' && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Severity</label>
+              <select
+                value={severity}
+                onChange={(e) => setSeverity(e.target.value)}
+                className="
+                  w-full
+                  bg-[#0f0f0f]
+                  border border-[#2a2a2a]
+                  rounded-lg
+                  px-3 py-2
+                  text-sm
+                  outline-none
+                  focus:border-emerald-500
+                "
+              >
+                <option value="ALL">All Levels</option>
+                <option value="ERROR">Error</option>
+                <option value="WARN">Warning</option>
+                <option value="INFO">Info</option>
+              </select>
             </div>
           )}
 

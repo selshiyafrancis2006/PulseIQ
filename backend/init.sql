@@ -196,3 +196,6 @@ CREATE TABLE IF NOT EXISTS dashboards (
   updated_at TIMESTAMP DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_dashboards_user_id ON dashboards (user_id);
+
+ALTER TABLE logs ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs (user_id);
