@@ -7,6 +7,7 @@ import AddWidgetModal from '../components/dashboards/AddWidgetModal'
 import MetricChartWidget from '../components/dashboards/MetricChartWidget'
 import MonitorStatusWidget from '../components/dashboards/MonitorStatusWidget'
 import LogCountWidget from '../components/dashboards/LogCountWidget'
+import ApmSummaryWidget from '../components/dashboards/ApmSummaryWidget'
 
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -96,19 +97,38 @@ export default function DashboardBuilder() {
     scheduleSave(updatedWidgets)
   }
 
-  const handleAddWidget = ({ type, config, title }) => {
+      const handleAddWidget = ({ type, config, title }) => {
 
-    const columnWidth = (type === 'monitor_status' || type === 'log_count') ? 3 : 4
-    const columnsPerRow = Math.floor(12 / columnWidth)
+    const columnWidth = 4
+    const rowHeight = 3 // every widget currently uses h: 3
+
+    // Try to fit the new widget into the last row first (left-to-right).
+    // Only start a new row underneath if there's genuinely no horizontal room left.
+    let x = 0
+    let y = 0
+
+    if (dashboard.layout.length > 0) {
+      const maxY = Math.max(...dashboard.layout.map((w) => w.y))
+      const widgetsInLastRow = dashboard.layout.filter((w) => w.y === maxY)
+      const usedWidth = widgetsInLastRow.reduce((sum, w) => sum + w.w, 0)
+
+      if (usedWidth + columnWidth <= 12) {
+        x = usedWidth
+        y = maxY
+      } else {
+        x = 0
+        y = maxY + rowHeight
+      }
+    }
 
     const newWidget = {
       id: `w-${Date.now()}`,
       type,
       title,
-      x: (dashboard.layout.length % columnsPerRow) * columnWidth,
-      y: Infinity,
+      x,
+      y,
       w: columnWidth,
-      h: 3,
+      h: rowHeight,
       config
     }
 
@@ -360,6 +380,8 @@ export default function DashboardBuilder() {
                   <MonitorStatusWidget monitorId={widget.config.monitor_id} />
                 ) : widget.type === 'log_count' ? (
                   <LogCountWidget severity={widget.config.severity} timeRange={timeRange} />
+                ) : widget.type === 'apm_summary' ? (
+                  <ApmSummaryWidget hostId={widget.config.host_id} />
                 ) : (
                   <div className="flex items-center justify-center h-full text-gray-600 text-sm">
                     Unknown widget type
