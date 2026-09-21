@@ -3,13 +3,9 @@ import { sidebarItems } from '../config/SidebarItems'
 
 export default function Sidebar() {
   return (
-    <div
-  className="w-64 h-screen bg-[#0a0a0a] border-r border-[#2a2a2a] p-5 fixed"
-  onWheel={(e) => {
-    e.preventDefault();
-    e.stopPropagation();
-  }}
->
+        <div
+      className="w-64 h-screen bg-[#0a0a0a] border-r border-[#2a2a2a] p-5 fixed overflow-y-auto"
+    >
 
       <h1 className="text-2xl font-bold text-emerald-400 mb-8">
         PulseIQ

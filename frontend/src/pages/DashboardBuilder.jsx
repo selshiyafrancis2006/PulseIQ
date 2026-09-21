@@ -6,6 +6,7 @@ import useHosts from '../hooks/useHosts'
 import AddWidgetModal from '../components/dashboards/AddWidgetModal'
 import MetricChartWidget from '../components/dashboards/MetricChartWidget'
 import MonitorStatusWidget from '../components/dashboards/MonitorStatusWidget'
+import LogCountWidget from '../components/dashboards/LogCountWidget'
 
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
@@ -97,7 +98,7 @@ export default function DashboardBuilder() {
 
   const handleAddWidget = ({ type, config, title }) => {
 
-    const columnWidth = type === 'monitor_status' ? 3 : 4
+    const columnWidth = (type === 'monitor_status' || type === 'log_count') ? 3 : 4
     const columnsPerRow = Math.floor(12 / columnWidth)
 
     const newWidget = {
@@ -357,6 +358,8 @@ export default function DashboardBuilder() {
                   />
                 ) : widget.type === 'monitor_status' ? (
                   <MonitorStatusWidget monitorId={widget.config.monitor_id} />
+                ) : widget.type === 'log_count' ? (
+                  <LogCountWidget severity={widget.config.severity} timeRange={timeRange} />
                 ) : (
                   <div className="flex items-center justify-center h-full text-gray-600 text-sm">
                     Unknown widget type
