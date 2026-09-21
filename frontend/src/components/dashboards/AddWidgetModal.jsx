@@ -21,6 +21,7 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
   const [monitorId, setMonitorId] = useState('')
 
   const [severity, setSeverity] = useState('ALL')
+
   useEffect(() => {
 
     const fetchMonitors = async () => {
@@ -58,20 +59,29 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
         config: { monitor_id: Number(monitorId) },
         title: selectedMonitor?.name || 'Monitor'
       })
-    }
-    else if (widgetType === 'log_count') {
+    } else if (widgetType === 'log_count') {
       onAdd({
         type: 'log_count',
         config: { severity },
         title: severity === 'ALL' ? 'All Logs' : `${severity} Logs`
       })
+    } else if (widgetType === 'apm_summary') {
+      if (!hostId) return
+      const selectedHost = hosts.find((h) => h.id === Number(hostId))
+      onAdd({
+        type: 'apm_summary',
+        config: { host_id: Number(hostId) },
+        title: `APM · ${selectedHost?.name || 'Host'}`
+      })
     }
   }
 
-   const canSubmit =
+  const canSubmit =
     widgetType === 'metric_chart' ? !!hostId :
     widgetType === 'monitor_status' ? !!monitorId :
+    widgetType === 'apm_summary' ? !!hostId :
     true // log_count has no required selection beyond severity, which always has a default
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-6 w-full max-w-md">
@@ -99,59 +109,60 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
               <option value="metric_chart">Metric Chart</option>
               <option value="monitor_status">Monitor Status</option>
               <option value="log_count">Log Count</option>
+              <option value="apm_summary">APM Summary</option>
             </select>
           </div>
 
-          {widgetType === 'metric_chart' && (
-            <>
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Host</label>
-                <select
-                  value={hostId}
-                  onChange={(e) => setHostId(e.target.value)}
-                  className="
-                    w-full
-                    bg-[#0f0f0f]
-                    border border-[#2a2a2a]
-                    rounded-lg
-                    px-3 py-2
-                    text-sm
-                    outline-none
-                    focus:border-emerald-500
-                  "
-                >
-                  {hosts.map((host) => (
-                    <option key={host.id} value={host.id}>
-                      {host.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+          {(widgetType === 'metric_chart' || widgetType === 'apm_summary') && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Host</label>
+              <select
+                value={hostId}
+                onChange={(e) => setHostId(e.target.value)}
+                className="
+                  w-full
+                  bg-[#0f0f0f]
+                  border border-[#2a2a2a]
+                  rounded-lg
+                  px-3 py-2
+                  text-sm
+                  outline-none
+                  focus:border-emerald-500
+                "
+              >
+                {hosts.map((host) => (
+                  <option key={host.id} value={host.id}>
+                    {host.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Metric</label>
-                <select
-                  value={metric}
-                  onChange={(e) => setMetric(e.target.value)}
-                  className="
-                    w-full
-                    bg-[#0f0f0f]
-                    border border-[#2a2a2a]
-                    rounded-lg
-                    px-3 py-2
-                    text-sm
-                    outline-none
-                    focus:border-emerald-500
-                  "
-                >
-                  {metricOptions.map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </>
+          {widgetType === 'metric_chart' && (
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">Metric</label>
+              <select
+                value={metric}
+                onChange={(e) => setMetric(e.target.value)}
+                className="
+                  w-full
+                  bg-[#0f0f0f]
+                  border border-[#2a2a2a]
+                  rounded-lg
+                  px-3 py-2
+                  text-sm
+                  outline-none
+                  focus:border-emerald-500
+                "
+              >
+                {metricOptions.map((m) => (
+                  <option key={m.value} value={m.value}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
           )}
 
           {widgetType === 'monitor_status' && (
@@ -185,7 +196,8 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
               )}
             </div>
           )}
-                    {widgetType === 'log_count' && (
+
+          {widgetType === 'log_count' && (
             <div>
               <label className="block text-sm text-gray-400 mb-1">Severity</label>
               <select
