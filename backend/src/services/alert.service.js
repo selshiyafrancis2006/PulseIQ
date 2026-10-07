@@ -123,21 +123,23 @@ async function fetchAlerts() {
 
 }
 
-async function fetchRules() {
+async function fetchRules(userId) {
     const result = await pool.query(
-        `SELECT * FROM alert_rules ORDER BY id ASC`
+        `SELECT * FROM alert_rules WHERE user_id = $1 ORDER BY id ASC`,
+        [userId]
     );
     return result.rows;
 }
 
-async function updateRule(id, threshold, is_active) {
+async function updateRule(id, userId, threshold, is_active) {
     const result = await pool.query(
         `UPDATE alert_rules
          SET threshold = $1, is_active = $2
-         WHERE id = $3
+         WHERE id = $3 AND user_id = $4
          RETURNING *`,
-        [threshold, is_active, id]
+        [threshold, is_active, id, userId]
     );
-    return result.rows[0];
+    return result.rows[0] || null;
 }
+
 module.exports = { evaluateAlerts, fetchAlerts, fetchRules, updateRule };

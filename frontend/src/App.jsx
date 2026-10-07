@@ -18,6 +18,7 @@ import ServiceHealth from './pages/ServiceHealth'
 import Logs from './pages/Logs'
 import Settings from './pages/Settings'
 import Hosts from './pages/Hosts'
+import HostDetails from './pages/HostDetails'
 import Apm from './pages/Apm'
 import Anomalies from './pages/Anomalies'
 import Dashboards from './pages/Dashboards'
@@ -147,6 +148,16 @@ export default function App() {
   }
 />
 
+<Route
+  path="/hosts/:id"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <HostDetails />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
 <Route
   path="/apm"
   element={
