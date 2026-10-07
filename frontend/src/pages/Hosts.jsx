@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import useHosts from '../hooks/useHosts'
+import { Link } from 'react-router-dom';
 
 function timeAgo(dateString) {
   if (!dateString) return 'Never'
@@ -97,28 +98,61 @@ export default function Hosts() {
     <div className="space-y-8 text-white">
 
       {/* HEADER */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Hosts</h1>
-          <p className="mt-2 text-gray-400">
-            Machines reporting metrics to PulseIQ via the agent.
-          </p>
+            {/* HEADER */}
+      <div>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold">Hosts</h1>
+            <p className="mt-2 text-gray-400">
+              Machines reporting metrics to PulseIQ via the agent.
+            </p>
+          </div>
+
+          <button
+            onClick={openModal}
+            className="
+              px-4 py-2
+              rounded-lg
+              bg-emerald-600
+              hover:bg-emerald-500
+              text-sm
+              font-semibold
+              transition-colors
+            "
+          >
+            + Add Host
+          </button>
         </div>
 
-        <button
-          onClick={openModal}
-          className="
-            px-4 py-2
-            rounded-lg
-            bg-emerald-600
-            hover:bg-emerald-500
-            text-sm
-            font-semibold
-            transition-colors
-          "
-        >
-          + Add Host
-        </button>
+        {/* HOST SUMMARY */}
+        <div className="grid grid-cols-3 gap-4 mt-6">
+          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-4">
+            <p className="text-xs uppercase tracking-widest text-gray-500">
+              Total Hosts
+            </p>
+            <p className="mt-2 text-2xl font-semibold">
+              {hosts.length}
+            </p>
+          </div>
+
+          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-4">
+            <p className="text-xs uppercase tracking-widest text-gray-500">
+              Online
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-emerald-400">
+              {hosts.filter((host) => isOnline(host.last_seen_at)).length}
+            </p>
+          </div>
+
+          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-4">
+            <p className="text-xs uppercase tracking-widest text-gray-500">
+              Offline
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-gray-400">
+              {hosts.filter((host) => !isOnline(host.last_seen_at)).length}
+            </p>
+          </div>
+        </div>
       </div>
 
       {/* TAG FILTER */}
@@ -186,6 +220,9 @@ export default function Hosts() {
               <tr className="border-b border-[#2a2a2a] text-left text-gray-500 uppercase text-xs tracking-widest">
                 <th className="px-5 py-3">Name</th>
                 <th className="px-5 py-3">Status</th>
+                <th className="px-5 py-3">CPU</th>
+                <th className="px-5 py-3">Memory</th>
+                <th className="px-5 py-3">Disk</th>
                 <th className="px-5 py-3">Tags</th>
                 <th className="px-5 py-3">Last Seen</th>
                 <th className="px-5 py-3">Registered</th>
@@ -196,13 +233,29 @@ export default function Hosts() {
                 const online = isOnline(host.last_seen_at)
                 return (
                   <tr key={host.id} className="border-b border-[#2a2a2a] last:border-0">
-                    <td className="px-5 py-4 font-medium">{host.name}</td>
+                    <td className="px-5 py-4 font-medium">
+  <Link
+    to={`/hosts/${host.id}`}
+    className="text-white hover:text-emerald-400 transition-colors"
+  >
+    {host.name}
+  </Link>
+</td>
                     <td className="px-5 py-4">
                       <span className={`inline-flex items-center gap-2 text-xs font-semibold uppercase ${online ? 'text-emerald-400' : 'text-gray-500'}`}>
                         <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-400' : 'bg-gray-600'}`} />
                         {online ? 'Online' : 'Offline'}
                       </span>
                     </td>
+                    <td className="px-5 py-4 text-gray-300">
+  {host.cpu_usage != null ? `${Number(host.cpu_usage).toFixed(1)}%` : '—'}
+</td>
+<td className="px-5 py-4 text-gray-300">
+  {host.memory_usage != null ? `${Number(host.memory_usage).toFixed(1)}%` : '—'}
+</td>
+<td className="px-5 py-4 text-gray-300">
+  {host.disk_usage != null ? `${Number(host.disk_usage).toFixed(1)}%` : '—'}
+</td>
                     <td className="px-5 py-4">
                       {host.tags && host.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1.5">

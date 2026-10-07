@@ -12,7 +12,7 @@ const getAlerts = async (req, res) => {
 
 const getRules = async (req, res) => {
     try {
-        const rules = await fetchRules();
+        const rules = await fetchRules(req.user.id);
         res.json(rules);
     } catch (err) {
         console.error(err);
@@ -24,7 +24,12 @@ const putRule = async (req, res) => {
     try {
         const { id } = req.params;
         const { threshold, is_active } = req.body;
-        const updated = await updateRule(id, threshold, is_active);
+        const updated = await updateRule(id, req.user.id, threshold, is_active);
+
+        if (!updated) {
+            return res.status(404).json({ error: 'Alert rule not found' });
+        }
+
         res.json(updated);
     } catch (err) {
         console.error(err);

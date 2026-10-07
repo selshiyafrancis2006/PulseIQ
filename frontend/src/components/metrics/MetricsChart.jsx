@@ -22,10 +22,10 @@ ChartJS.register(
 
 const metricColors = {
   cpu_usage: '#10b981',
-  memory_usage: '#3b82f6',
-  disk_usage: '#f59e0b',
-  network_in: '#8b5cf6',
-  network_out: '#ef4444'
+  memory_usage: '#10b981',
+  disk_usage: '#10b981',
+  network_in: '#10b981',
+  network_out: '#10b981'
 }
 
 export default function MetricsChart({
@@ -57,11 +57,9 @@ export default function MetricsChart({
 
     fill: false,
 
-    pointRadius: 2,
-
-    pointHoverRadius: 5,
-
-    tension: 0.35
+pointRadius: 0,
+pointHoverRadius: 4,
+tension: 0.35
 
   }))
 
@@ -126,11 +124,18 @@ export default function MetricsChart({
 
   return (
 
-    <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-6 mb-8">
+    <div className="bg-[#0d0d0d] border border-emerald-500/20 rounded-xl p-6 mb-8 shadow-[0_0_20px_rgba(16,185,129,0.04)]">
 
       <h2 className="text-lg font-semibold mb-6">
-        Metrics Comparison
-      </h2>
+  {selectedMetrics.length === 1
+    ? selectedMetrics[0]
+        .replace('_', ' ')
+        .replace(/\b\w/g, char => char.toUpperCase())
+    : 'Metrics Comparison'}
+</h2>
+<p className="text-xs text-gray-500 -mt-4 mb-5">
+  Last 1 hour
+</p>
 
       <div className="h-[420px]">
 
