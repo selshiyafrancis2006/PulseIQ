@@ -1,18 +1,15 @@
+
 import { severityConfig } from "../../config/alertSeverity";
 
-
 export default function AlertCard({ alert }) {
-
-
   const severity =
     severityConfig[
       (alert.severity || "info").toLowerCase()
     ] || severityConfig.info;
 
-
+  const isHostOffline = alert.metric_name === "host_offline";
 
   return (
-
     <div
       className="
       border border-[#2a2a2a]
@@ -23,14 +20,8 @@ export default function AlertCard({ alert }) {
       transition
       "
     >
-
-
       <div className="flex justify-between">
-
-
         <div className="flex gap-3 items-center">
-
-
           <span
             className={`
             px-3 py-1
@@ -43,91 +34,53 @@ export default function AlertCard({ alert }) {
             {severity.label}
           </span>
 
-
-
           <h3 className="font-semibold text-lg">
-
-            {alert.metric_name
-              ?.replace("_"," ")
-              .toUpperCase()
-            }
-
+            {isHostOffline
+              ? "HOST OFFLINE"
+              : alert.metric_name?.replace("_", " ").toUpperCase()}
           </h3>
-
-
         </div>
-
-
 
         <span className="text-gray-500 text-xs">
-
-          {new Date(alert.timestamp)
-            .toLocaleString()
-          }
-
+          {new Date(alert.timestamp).toLocaleString()}
         </span>
-
-
       </div>
 
-
-
-
-      <div className="mt-4 grid grid-cols-3 gap-4">
-
-
-        <div className="bg-[#151515] p-3 rounded-lg">
-
-          <p className="text-gray-500 text-xs">
-            Current Value
+      {isHostOffline ? (
+        <div className="mt-4 bg-[#151515] p-4 rounded-lg">
+          <p className="text-red-400 font-semibold">
+            Host went offline
           </p>
-
-          <p className="text-xl font-bold">
-            {alert.current_value}
+          <p className="text-gray-400 text-sm mt-1">
+            No heartbeat received for more than 30 seconds.
           </p>
-
         </div>
+      ) : (
+        <div className="mt-4 grid grid-cols-3 gap-4">
+          <div className="bg-[#151515] p-3 rounded-lg">
+            <p className="text-gray-500 text-xs">Current Value</p>
+            <p className="text-xl font-bold">
+              {alert.current_value}
+            </p>
+          </div>
 
+          <div className="bg-[#151515] p-3 rounded-lg">
+            <p className="text-gray-500 text-xs">Threshold</p>
+            <p className="text-xl font-bold">
+              {alert.threshold_value}
+            </p>
+          </div>
 
-
-        <div className="bg-[#151515] p-3 rounded-lg">
-
-          <p className="text-gray-500 text-xs">
-            Threshold
-          </p>
-
-          <p className="text-xl font-bold">
-            {alert.threshold_value}
-          </p>
-
+          <div className="bg-[#151515] p-3 rounded-lg">
+            <p className="text-gray-500 text-xs">Status</p>
+            <p className="text-emerald-400 font-semibold">
+              {alert.current_value > alert.threshold_value
+                ? "Triggered"
+                : "Resolved"}
+            </p>
+          </div>
         </div>
-
-
-
-        <div className="bg-[#151515] p-3 rounded-lg">
-
-          <p className="text-gray-500 text-xs">
-            Status
-          </p>
-
-          <p className="text-emerald-400 font-semibold">
-
-            {
-              alert.current_value > alert.threshold_value
-              ? "Triggered"
-              : "Resolved"
-            }
-
-          </p>
-
-        </div>
-
-
-      </div>
-
-
+      )}
     </div>
-
   );
-
 }

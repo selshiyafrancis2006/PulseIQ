@@ -1,6 +1,14 @@
 const metricsService =
     require('../services/metrics.service');
 
+function parseHostId(value) {
+
+    const id = Number(value);
+
+    return Number.isInteger(id) && id > 0 ? id : null;
+
+}
+
 const getMetrics = async (req, res) => {
 
     try {
@@ -8,11 +16,22 @@ const getMetrics = async (req, res) => {
         const range =
             req.query.range || '1m';
 
-        const hostId = req.query.host_id;
+        const hostId = parseHostId(req.query.host_id);
 
         if (!hostId) {
             return res.status(400).json({
-                error: 'host_id is required'
+                error: 'A valid host_id is required'
+            });
+        }
+
+        const owns = await metricsService.verifyHostOwnership(
+            hostId,
+            req.user.id
+        );
+
+        if (!owns) {
+            return res.status(404).json({
+                error: 'Host not found'
             });
         }
 
@@ -37,10 +56,29 @@ const getLatestMetric = async (req, res) => {
 
     try {
 
-        const metric =
-            await metricsService.fetchLatestMetric();
+        const hostId = parseHostId(req.query.host_id);
 
-        res.json(metric);
+        if (!hostId) {
+            return res.status(400).json({
+                error: 'A valid host_id is required'
+            });
+        }
+
+        const owns = await metricsService.verifyHostOwnership(
+            hostId,
+            req.user.id
+        );
+
+        if (!owns) {
+            return res.status(404).json({
+                error: 'Host not found'
+            });
+        }
+
+        const metric =
+            await metricsService.fetchLatestMetric(hostId);
+
+        res.json(metric || null);
 
     } catch (err) {
 

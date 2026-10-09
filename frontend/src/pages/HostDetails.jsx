@@ -82,7 +82,7 @@ export default function HostDetails() {
         const hostData = await hostResponse.json();
 
         const metricsResponse = await apiFetch(
-          `${API_BASE_URL}/api/metrics?range=1h&host_id=${id}`
+          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${id}`
         );
 
         const metricsData = metricsResponse.ok
@@ -119,7 +119,7 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
       active = false;
       clearInterval(interval);
     };
-  }, [id]);
+  }, [id, timeRange]);
 
   if (loading) {
     return (
@@ -278,17 +278,26 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
         key={alert.id}
         className="flex items-center justify-between gap-4 rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] px-5 py-4"
       >
-        <div>
-          <p className="text-sm font-medium text-white">
-            {alert.metric_name}
-          </p>
+        
+<div>
+  <p className="text-sm font-medium text-white">
+    {alert.metric_name === "host_offline"
+      ? "HOST OFFLINE"
+      : alert.metric_name}
+  </p>
 
-          <p className="mt-1 text-xs text-gray-500">
-            Current: {Number(alert.current_value).toFixed(1)}%
-            {' · '}
-            Threshold: {Number(alert.threshold_value).toFixed(1)}%
-          </p>
-        </div>
+  {alert.metric_name === "host_offline" ? (
+    <p className="mt-1 text-xs text-red-400">
+      No heartbeat received for more than 30 seconds.
+    </p>
+  ) : (
+    <p className="mt-1 text-xs text-gray-500">
+      Current: {Number(alert.current_value).toFixed(1)}%
+      {" · "}
+      Threshold: {Number(alert.threshold_value).toFixed(1)}%
+    </p>
+  )}
+</div>
 
         <span
           className={`rounded-full px-3 py-1 text-xs font-medium ${

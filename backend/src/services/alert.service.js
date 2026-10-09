@@ -11,9 +11,16 @@ function breachKey(hostId, metricName) {
 async function evaluateAlerts(metric) {
     try {
 
-        const rulesResult = await pool.query(`
-            SELECT * FROM alert_rules WHERE is_active = true
-        `);
+       const rulesResult = await pool.query(`
+    SELECT *
+    FROM alert_rules
+    WHERE is_active = true
+      AND user_id = (
+          SELECT user_id
+          FROM hosts
+          WHERE id = $1
+      )
+`, [metric.host_id]);
 
         const rules = rulesResult.rows;
 
