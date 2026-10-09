@@ -4,7 +4,7 @@ import { apiFetch } from '../utils/apiFetch'
 import { Line } from 'react-chartjs-2'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
-import { WS_URL } from '../config/api'
+import { API_BASE_URL, WS_URL } from '../config/api'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -163,7 +163,7 @@ export default function App() {
       try {
 
         const res = await apiFetch(
-          'http://localhost:5000/api/alerts'
+          `${API_BASE_URL}/api/alerts`
         )
         const data = await res.json()
 
@@ -202,7 +202,7 @@ export default function App() {
       try {
 
         const res = await fetch(
-          'http://localhost:5000/api/system-info'
+          `${API_BASE_URL}/api/system-info`
         )
 
         const data = await res.json()
@@ -232,7 +232,7 @@ useEffect(() => {
 
   const fetchRules = async () => {
     try {
-      const res = await apiFetch('http://localhost:5000/api/alert-rules')
+      const res = await apiFetch(`${API_BASE_URL}/api/alert-rules`)
       const data = await res.json()
       setAlertRules(data)
     } catch (err) {
@@ -259,7 +259,7 @@ useEffect(() => {
       try {
 
         const res = await apiFetch(
-          `http://localhost:5000/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
+          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
         )
 
         const data = await res.json()
@@ -370,7 +370,7 @@ useEffect(() => {
     try {
 
       const response = await apiFetch(
-        'http://localhost:5000/api/monitors/status'
+        `${API_BASE_URL}/api/monitors/status`
       );
 
       const data = await response.json();

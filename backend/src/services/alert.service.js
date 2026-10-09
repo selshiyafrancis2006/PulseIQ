@@ -88,14 +88,17 @@ await pool.query(`
     }
 }
 
-async function fetchAlerts() {
+async function fetchAlerts(hostId, userId) {
 
     const result = await pool.query(`
-        SELECT *
-        FROM alerts
-        ORDER BY timestamp DESC
+        SELECT a.*
+        FROM alerts a
+        JOIN hosts h ON h.id = a.host_id
+        WHERE h.id = $1
+          AND h.user_id = $2
+        ORDER BY a.timestamp DESC
         LIMIT 20
-    `);
+    `, [hostId, userId]);
 
     return result.rows.map(alert => ({
 

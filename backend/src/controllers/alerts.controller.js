@@ -2,10 +2,15 @@ const { fetchAlerts, fetchRules, updateRule } = require('../services/alert.servi
 
 const getAlerts = async (req, res) => {
     try {
-        const alerts = await fetchAlerts();
+        const { host_id } = req.query;
+
+        if (!host_id) {
+            return res.status(400).json({ error: 'host_id is required' });
+        }
+
+        const alerts = await fetchAlerts(host_id, req.user.id);
         res.json(alerts);
     } catch (err) {
-        console.error(err);
         res.status(500).json({ error: 'Failed to fetch alerts' });
     }
 };

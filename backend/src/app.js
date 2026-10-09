@@ -7,6 +7,7 @@ const si = require('systeminformation');
 const { URL } = require('url');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = require('./config/jwt');
+const corsOptions = require('./config/cors');
 
 const {
     setWSS
@@ -29,6 +30,12 @@ const anomalyRoutes = require('./routes/anomaly.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 
 const app = express();
+// Behind a TLS-terminating reverse proxy, set TRUST_PROXY=1 so req.ip and
+// protocol detection reflect the real client instead of the proxy.
+if (process.env.TRUST_PROXY) {
+    const trustProxy = process.env.TRUST_PROXY;
+    app.set('trust proxy', /^\d+$/.test(trustProxy) ? Number(trustProxy) : trustProxy);
+}
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -36,7 +43,7 @@ const wss = new WebSocketServer({ server });
 setWSS(wss);
 
 // Middleware
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use('/api/agent', agentRoutes);
 app.use(loggerMiddleware);

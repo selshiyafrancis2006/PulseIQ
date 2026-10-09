@@ -1,6 +1,7 @@
 import { apiFetch } from '../utils/apiFetch';
+import { API_BASE_URL } from '../config/api';
 
-const API = 'http://localhost:5000/api/alert-rules';
+const API = `${API_BASE_URL}/api/alert-rules`;
 
 export async function getAlertRules() {
   const res = await apiFetch(API);
