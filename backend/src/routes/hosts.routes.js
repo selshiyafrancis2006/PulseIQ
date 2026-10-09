@@ -74,11 +74,21 @@ router.get('/:id', async (req, res) => {
                 h.tags,
                 h.last_seen_at,
                 h.created_at,
+                h.hostname,
+                h.os,
+                h.platform,
+                h.arch,
+                h.cpu_model,
+                h.cpu_cores,
+                h.total_memory_mb,
+                h.ip_address,
+                h.agent_version,
+                h.boot_time,
                 m.cpu_usage,
-m.memory_usage,
-m.disk_usage,
-m.network_in,
-m.network_out
+                m.memory_usage,
+                m.disk_usage,
+                m.network_in,
+                m.network_out
              FROM hosts h
              LEFT JOIN LATERAL (
                 SELECT cpu_usage, memory_usage, disk_usage, network_in, network_out
@@ -150,6 +160,37 @@ router.post('/register', async (req, res) => {
 
     }
 
+});
+
+router.delete('/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        const result = await pool.query(
+            `DELETE FROM hosts
+             WHERE id = $1
+               AND user_id = $2
+             RETURNING id, name`,
+            [id, req.user.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                error: 'Host not found'
+            });
+        }
+
+        res.json({
+            message: 'Host deleted successfully',
+            host: result.rows[0]
+        });
+    } catch (err) {
+        console.error('Failed to delete host:', err);
+
+        res.status(500).json({
+            error: 'Failed to delete host'
+        });
+    }
 });
 
 module.exports = router;

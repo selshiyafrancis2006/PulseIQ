@@ -1,22 +1,10 @@
 import { useState } from 'react'
 import useHosts from '../hooks/useHosts'
 import { Link } from 'react-router-dom';
-
-function timeAgo(dateString) {
-  if (!dateString) return 'Never'
-
-  const diffSec = Math.floor((Date.now() - new Date(dateString).getTime()) / 1000)
-
-  if (diffSec < 60) return `${diffSec}s ago`
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`
-  return `${Math.floor(diffSec / 86400)}d ago`
-}
-
-function isOnline(lastSeenAt) {
-  if (!lastSeenAt) return false
-  return Date.now() - new Date(lastSeenAt).getTime() < 30000
-}
+import { isOnline, timeAgo } from '../utils/hostStatus'
+import InstallInstructions from '../components/hosts/InstallInstructions'
+import { apiFetch } from '../utils/apiFetch'
+import { API_BASE_URL } from '../config/api'
 
 function parseTagsInput(input) {
   return input
@@ -38,6 +26,28 @@ export default function Hosts() {
   const [copied, setCopied] = useState(false)
 
   const [filterInput, setFilterInput] = useState('')
+  const [hostToDelete, setHostToDelete] = useState(null);
+
+  const handleDeleteHost = async () => {
+  if (!hostToDelete) return;
+
+  try {
+    const response = await apiFetch(
+      `${API_BASE_URL}/api/hosts/${hostToDelete.id}`,
+      { method: 'DELETE' }
+    );
+
+    if (!response.ok) {
+      throw new Error('Failed to delete host');
+    }
+
+    window.location.reload();
+
+    setHostToDelete(null);
+  } catch (error) {
+    console.error('Failed to delete host:', error);
+  }
+};
 
   const openModal = () => {
     setShowAddModal(true)
@@ -226,6 +236,7 @@ export default function Hosts() {
                 <th className="px-5 py-3">Tags</th>
                 <th className="px-5 py-3">Last Seen</th>
                 <th className="px-5 py-3">Registered</th>
+                <th className="px-5 py-3">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -281,8 +292,16 @@ export default function Hosts() {
                     </td>
                     <td className="px-5 py-4 text-gray-400">{timeAgo(host.last_seen_at)}</td>
                     <td className="px-5 py-4 text-gray-400">
-                      {new Date(host.created_at).toLocaleDateString()}
-                    </td>
+  {new Date(host.created_at).toLocaleDateString()}
+</td>
+<td className="px-5 py-4">
+  <button
+    onClick={() => setHostToDelete(host)}
+    className="text-red-400 hover:text-red-300 transition-colors"
+  >
+    Delete
+  </button>
+</td>
                   </tr>
                 )
               })}
@@ -291,6 +310,39 @@ export default function Hosts() {
         )}
 
       </div>
+
+      {/* DELETE HOST CONFIRMATION */}
+{hostToDelete && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+    <div className="w-full max-w-md rounded-xl border border-[#2a2a2a] bg-[#1a1a1a] p-6">
+      <h2 className="text-lg font-semibold text-white">Delete host?</h2>
+
+      <p className="mt-3 text-sm text-gray-400">
+        Are you sure you want to delete{' '}
+        <span className="font-medium text-white">{hostToDelete.name}</span>?
+        This action cannot be undone.
+      </p>
+
+      <div className="mt-6 flex justify-end gap-3">
+        <button
+          type="button"
+          onClick={() => setHostToDelete(null)}
+          className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-white"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          onClick={handleDeleteHost}
+          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
+        >
+          Delete Host
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* ADD HOST MODAL */}
       {showAddModal && (
@@ -416,12 +468,9 @@ export default function Hosts() {
                   </button>
                 </div>
 
-                <p className="text-xs text-gray-500 mb-6">
-                  Run the agent against this host with:{' '}
-                  <code className="text-gray-400">
-                    API_KEY=&lt;key above&gt; node agent/collector.js
-                  </code>
-                </p>
+                                 <div className="mb-6">
+                  <InstallInstructions apiKey={newHost.api_key} />
+                </div>
 
                 <div className="flex justify-end">
                   <button

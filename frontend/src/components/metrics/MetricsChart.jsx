@@ -30,12 +30,24 @@ const metricColors = {
 
 export default function MetricsChart({
   metrics,
-  selectedMetrics
+  selectedMetrics,
+  timeRange
 }) {
 
   if (!metrics.length) return null
+  const rangeMinutes = {
+  '1h': 60,
+  '6h': 360,
+  '24h': 1440
+}
 
-  const labels = metrics.map(metric =>
+const cutoff = Date.now() - rangeMinutes[timeRange] * 60 * 1000
+
+const filteredMetrics = metrics.filter(metric =>
+  new Date(metric.timestamp).getTime() >= cutoff
+)
+
+  const labels = filteredMetrics.map(metric =>
     new Date(metric.timestamp).toLocaleTimeString()
   )
 
@@ -45,9 +57,9 @@ export default function MetricsChart({
       .replace('_', ' ')
       .toUpperCase(),
 
-    data: metrics.map(item =>
-      parseFloat(item[metric])
-    ),
+    data: filteredMetrics.map(item =>
+  parseFloat(item[metric])
+),
 
     borderColor: metricColors[metric],
 
@@ -134,7 +146,7 @@ tension: 0.35
     : 'Metrics Comparison'}
 </h2>
 <p className="text-xs text-gray-500 -mt-4 mb-5">
-  Last 1 hour
+  Last {timeRange === '1h' ? '1 hour' : timeRange === '6h' ? '6 hours' : '24 hours'}
 </p>
 
       <div className="h-[420px]">
