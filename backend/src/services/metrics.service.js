@@ -37,14 +37,16 @@ const fetchMetrics = async (range, hostId) => {
     return result.rows;
 };
 
-const fetchLatestMetric = async () => {
+const fetchLatestMetric = async (hostId) => {
 
-    const result = await pool.query(`
-        SELECT *
-        FROM metrics
-        ORDER BY timestamp DESC
-        LIMIT 1
-    `);
+    const result = await pool.query(
+        `SELECT *
+         FROM metrics
+         WHERE host_id = $1
+         ORDER BY timestamp DESC
+         LIMIT 1`,
+        [hostId]
+    );
 
     return result.rows[0];
 };
