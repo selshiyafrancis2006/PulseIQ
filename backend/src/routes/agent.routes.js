@@ -79,6 +79,28 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             network_in,
             network_out
         } = req.body;
+
+                const metricValues = {
+            cpu_usage,
+            memory_usage,
+            disk_usage,
+            network_in,
+            network_out
+        };
+
+        for (const [key, value] of Object.entries(metricValues)) {
+            if (
+                typeof value !== 'number' ||
+                !Number.isFinite(value) ||
+                value < 0 ||
+                (['cpu_usage', 'memory_usage', 'disk_usage'].includes(key) && value > 100)
+            ) {
+                return res.status(400).json({
+                    error: `Invalid metric value: ${key}`
+                });
+            }
+        }
+        
         const result = await pool.query(
             `INSERT INTO metrics (
                 cpu_usage,

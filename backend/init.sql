@@ -15,13 +15,32 @@ CREATE TABLE IF NOT EXISTS metrics (
   timestamp TIMESTAMP DEFAULT NOW()
 );
 
+-- Hosts must exist before tables that reference hosts(id).
+CREATE TABLE IF NOT EXISTS hosts (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  api_key VARCHAR(255) UNIQUE NOT NULL,
+  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMP DEFAULT NOW(),
+  last_seen_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
+CREATE INDEX IF NOT EXISTS idx_hosts_api_key ON hosts (api_key);
+
+-- Alerts associated with individual hosts.
 CREATE TABLE IF NOT EXISTS alerts (
   id SERIAL PRIMARY KEY,
   metric_name VARCHAR(50),
   metric_value FLOAT,
   average_value FLOAT,
+  severity VARCHAR(20) NOT NULL DEFAULT 'Warning',
+  host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
   timestamp TIMESTAMP DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_alerts_host_timestamp
+  ON alerts (host_id, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS alert_rules (
   id SERIAL PRIMARY KEY,
@@ -70,7 +89,8 @@ CREATE TABLE IF NOT EXISTS logs (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_logs_created_at
+  ON logs (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS monitor_events (
   id SERIAL PRIMARY KEY,
@@ -81,34 +101,35 @@ CREATE TABLE IF NOT EXISTS monitor_events (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created ON monitor_events (monitor_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created
+  ON monitor_events (monitor_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS hosts (
-  id SERIAL PRIMARY KEY,
-  name VARCHAR(255) NOT NULL,
-  api_key VARCHAR(255) UNIQUE NOT NULL,
-  user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP DEFAULT NOW(),
-  last_seen_at TIMESTAMP
-);
+ALTER TABLE metrics
+  ADD COLUMN IF NOT EXISTS host_id INTEGER
+  REFERENCES hosts(id) ON DELETE CASCADE;
 
-CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
-
-CREATE INDEX IF NOT EXISTS idx_hosts_api_key ON hosts (api_key);
-
-ALTER TABLE metrics ADD COLUMN IF NOT EXISTS host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE;
-
-CREATE INDEX IF NOT EXISTS idx_metrics_host_timestamp ON metrics (host_id, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_metrics_host_timestamp
+  ON metrics (host_id, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS metric_rollups_5m (
   id SERIAL PRIMARY KEY,
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
   bucket_start TIMESTAMP NOT NULL,
-  cpu_usage_avg FLOAT, cpu_usage_min FLOAT, cpu_usage_max FLOAT,
-  memory_usage_avg FLOAT, memory_usage_min FLOAT, memory_usage_max FLOAT,
-  disk_usage_avg FLOAT, disk_usage_min FLOAT, disk_usage_max FLOAT,
-  network_in_avg FLOAT, network_in_min FLOAT, network_in_max FLOAT,
-  network_out_avg FLOAT, network_out_min FLOAT, network_out_max FLOAT,
+  cpu_usage_avg FLOAT,
+  cpu_usage_min FLOAT,
+  cpu_usage_max FLOAT,
+  memory_usage_avg FLOAT,
+  memory_usage_min FLOAT,
+  memory_usage_max FLOAT,
+  disk_usage_avg FLOAT,
+  disk_usage_min FLOAT,
+  disk_usage_max FLOAT,
+  network_in_avg FLOAT,
+  network_in_min FLOAT,
+  network_in_max FLOAT,
+  network_out_avg FLOAT,
+  network_out_min FLOAT,
+  network_out_max FLOAT,
   sample_count INTEGER,
   created_at TIMESTAMP DEFAULT NOW(),
   UNIQUE (host_id, bucket_start)
@@ -121,11 +142,21 @@ CREATE TABLE IF NOT EXISTS metric_rollups_1h (
   id SERIAL PRIMARY KEY,
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
   bucket_start TIMESTAMP NOT NULL,
-  cpu_usage_avg FLOAT, cpu_usage_min FLOAT, cpu_usage_max FLOAT,
-  memory_usage_avg FLOAT, memory_usage_min FLOAT, memory_usage_max FLOAT,
-  disk_usage_avg FLOAT, disk_usage_min FLOAT, disk_usage_max FLOAT,
-  network_in_avg FLOAT, network_in_min FLOAT, network_in_max FLOAT,
-  network_out_avg FLOAT, network_out_min FLOAT, network_out_max FLOAT,
+  cpu_usage_avg FLOAT,
+  cpu_usage_min FLOAT,
+  cpu_usage_max FLOAT,
+  memory_usage_avg FLOAT,
+  memory_usage_min FLOAT,
+  memory_usage_max FLOAT,
+  disk_usage_avg FLOAT,
+  disk_usage_min FLOAT,
+  disk_usage_max FLOAT,
+  network_in_avg FLOAT,
+  network_in_min FLOAT,
+  network_in_max FLOAT,
+  network_out_avg FLOAT,
+  network_out_min FLOAT,
+  network_out_max FLOAT,
   sample_count INTEGER,
   created_at TIMESTAMP DEFAULT NOW(),
   UNIQUE (host_id, bucket_start)
@@ -134,21 +165,39 @@ CREATE TABLE IF NOT EXISTS metric_rollups_1h (
 CREATE INDEX IF NOT EXISTS idx_rollup1h_host_bucket
   ON metric_rollups_1h (host_id, bucket_start DESC);
 
-ALTER TABLE alerts ADD COLUMN IF NOT EXISTS host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE;
+ALTER TABLE hosts
+  ADD COLUMN IF NOT EXISTS user_id INTEGER
+  REFERENCES users(id) ON DELETE CASCADE;
 
-CREATE INDEX IF NOT EXISTS idx_alerts_host_timestamp ON alerts (host_id, timestamp DESC);
-
-ALTER TABLE hosts ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
 CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
 
-ALTER TABLE monitors ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE alerts
+  ADD COLUMN IF NOT EXISTS host_id INTEGER
+  REFERENCES hosts(id) ON DELETE CASCADE;
+
+ALTER TABLE alerts
+  ADD COLUMN IF NOT EXISTS severity VARCHAR(20) NOT NULL DEFAULT 'Warning';
+
+CREATE INDEX IF NOT EXISTS idx_alerts_host_timestamp
+  ON alerts (host_id, timestamp DESC);
+
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS user_id INTEGER
+  REFERENCES users(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
 
-ALTER TABLE alert_rules ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+ALTER TABLE alert_rules
+  ADD COLUMN IF NOT EXISTS user_id INTEGER
+  REFERENCES users(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules (user_id);
 
-ALTER TABLE hosts ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
-CREATE INDEX IF NOT EXISTS idx_hosts_tags ON hosts USING GIN (tags);
+ALTER TABLE hosts
+  ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS idx_hosts_tags
+  ON hosts USING GIN (tags);
 
 CREATE TABLE IF NOT EXISTS traces (
   id SERIAL PRIMARY KEY,
@@ -159,7 +208,9 @@ CREATE TABLE IF NOT EXISTS traces (
   duration_ms INTEGER,
   timestamp TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_traces_host_timestamp ON traces (host_id, timestamp DESC);
+
+CREATE INDEX IF NOT EXISTS idx_traces_host_timestamp
+  ON traces (host_id, timestamp DESC);
 
 CREATE TABLE IF NOT EXISTS metric_baselines (
   id SERIAL PRIMARY KEY,
@@ -182,10 +233,15 @@ CREATE TABLE IF NOT EXISTS anomalies (
   deviation_score FLOAT NOT NULL,
   timestamp TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp ON anomalies (host_id, timestamp DESC);
 
-ALTER TABLE monitors ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
-CREATE INDEX IF NOT EXISTS idx_monitors_tags ON monitors USING GIN (tags);
+CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp
+  ON anomalies (host_id, timestamp DESC);
+
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+
+CREATE INDEX IF NOT EXISTS idx_monitors_tags
+  ON monitors USING GIN (tags);
 
 CREATE TABLE IF NOT EXISTS dashboards (
   id SERIAL PRIMARY KEY,
@@ -195,12 +251,17 @@ CREATE TABLE IF NOT EXISTS dashboards (
   created_at TIMESTAMP DEFAULT NOW(),
   updated_at TIMESTAMP DEFAULT NOW()
 );
-CREATE INDEX IF NOT EXISTS idx_dashboards_user_id ON dashboards (user_id);
 
-ALTER TABLE logs ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS idx_dashboards_user_id
+  ON dashboards (user_id);
+
+ALTER TABLE logs
+  ADD COLUMN IF NOT EXISTS user_id INTEGER
+  REFERENCES users(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs (user_id);
 
--- Host metadata reported by the agent
+-- Host metadata reported by the agent.
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS hostname VARCHAR(255);
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS os VARCHAR(255);
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS platform VARCHAR(50);

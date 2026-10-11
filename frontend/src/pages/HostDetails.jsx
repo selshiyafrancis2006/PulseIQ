@@ -282,15 +282,25 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
 <div>
   <p className="text-sm font-medium text-white">
     {alert.metric_name === "host_offline"
-      ? "HOST OFFLINE"
-      : alert.metric_name}
+  ? new Date(alert.timestamp) < new Date(host.last_seen_at)
+    ? "HOST RECOVERED"
+    : "HOST OFFLINE"
+  : alert.metric_name}
   </p>
 
-  {alert.metric_name === "host_offline" ? (
-    <p className="mt-1 text-xs text-red-400">
-      No heartbeat received for more than 30 seconds.
-    </p>
-  ) : (
+ {alert.metric_name === "host_offline" ? (
+  <p
+    className={`mt-1 text-xs ${
+      new Date(alert.timestamp) < new Date(host.last_seen_at)
+        ? "text-emerald-400"
+        : "text-red-400"
+    }`}
+  >
+    {new Date(alert.timestamp) < new Date(host.last_seen_at)
+      ? "The host has resumed sending heartbeats."
+      : "No heartbeat received for more than 30 seconds."}
+  </p>
+) : (
     <p className="mt-1 text-xs text-gray-500">
       Current: {Number(alert.current_value).toFixed(1)}%
       {" · "}
@@ -300,14 +310,20 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
 </div>
 
         <span
-          className={`rounded-full px-3 py-1 text-xs font-medium ${
-            alert.severity === 'Critical'
-              ? 'bg-red-500/10 text-red-400'
-              : 'bg-yellow-500/10 text-yellow-400'
-          }`}
-        >
-          {alert.severity}
-        </span>
+  className={`rounded-full px-3 py-1 text-xs font-medium ${
+    alert.metric_name === "host_offline" &&
+    new Date(alert.timestamp) < new Date(host.last_seen_at)
+      ? "bg-emerald-500/10 text-emerald-400"
+      : alert.severity === "Critical"
+        ? "bg-red-500/10 text-red-400"
+        : "bg-yellow-500/10 text-yellow-400"
+  }`}
+>
+  {alert.metric_name === "host_offline" &&
+  new Date(alert.timestamp) < new Date(host.last_seen_at)
+    ? "Recovered"
+    : alert.severity}
+</span>
       </div>
     ))}
   </div>

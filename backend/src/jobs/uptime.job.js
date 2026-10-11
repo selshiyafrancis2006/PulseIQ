@@ -2,6 +2,8 @@ const cron = require('node-cron');
 
 const db = require('../config/db');
 
+const recoveredHosts = new Set();
+
 const {
     checkMonitor
 } = require('../services/uptime.service');
@@ -19,6 +21,10 @@ async function checkHostStatus() {
         const isOffline =
             Date.now() - new Date(host.last_seen_at).getTime() > 30000;
 
+            if (isOffline) {
+    recoveredHosts.delete(host.id);
+}
+
         const existing = await db.query(`
             SELECT id, timestamp
             FROM alerts
@@ -30,17 +36,24 @@ async function checkHostStatus() {
 
         const lastAlert = existing.rows[0];
 
-        if (!isOffline) {
-            if (
-                lastAlert &&
-                new Date(host.last_seen_at).getTime() >
-                    new Date(lastAlert.timestamp).getTime()
-            ) {
-                console.log(`Host recovered (host_id: ${host.id}, name: ${host.name})`);
-            }
+        
+if (!isOffline) {
+    if (
+        lastAlert &&
+        new Date(host.last_seen_at).getTime() >
+            new Date(lastAlert.timestamp).getTime()
+    ) {
+        if (!recoveredHosts.has(host.id)) {
+            console.log(
+                `Host recovered (host_id: ${host.id}, name: ${host.name})`
+            );
 
-            continue;
+            recoveredHosts.add(host.id);
         }
+    }
+
+    continue;
+}
 
         const alreadyOffline =
             lastAlert &&
@@ -90,41 +103,35 @@ async function checkHostStatus() {
     }
 }
 
+
 cron.schedule('*/30 * * * * *', async () => {
-
     try {
-
-        console.log(
-            'Running uptime checks...'
-        );
-
+        console.log('Checking offline hosts...');
         await checkHostStatus();
-
-        const result =
-            await db.query(`
-                SELECT *
-                FROM monitors
-                WHERE is_active = true
-            `);
-
-        const monitors =
-            result.rows;
-
-        for (const monitor of monitors) {
-
-            await checkMonitor(
-                monitor
-            );
-
-        }
-
     } catch (error) {
-
-        console.error(
-            'Uptime job error:',
-            error
-        );
-
+        console.error('Host status check error:', error);
     }
 
+    try {
+        console.log('Running uptime checks...');
+
+        const result = await db.query(`
+            SELECT *
+            FROM monitors
+            WHERE is_active = true
+        `);
+
+        for (const monitor of result.rows) {
+            try {
+                await checkMonitor(monitor);
+            } catch (error) {
+                console.error(
+                    `Monitor check failed (monitor_id: ${monitor.id}):`,
+                    error
+                );
+            }
+        }
+    } catch (error) {
+        console.error('Uptime job error:', error);
+    }
 });

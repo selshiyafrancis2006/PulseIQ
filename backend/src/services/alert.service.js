@@ -3,6 +3,7 @@ const pool = require('../config/db');
 // store consecutive breaches in memory, keyed per host+metric so one
 // host's breach streak never affects another host's
 const breachState = new Map();
+const activeBreaches = new Set();
 
 function breachKey(hostId, metricName) {
     return `${hostId ?? 'unknown'}:${metricName}`;
@@ -49,45 +50,47 @@ async function evaluateAlerts(metric) {
 
             const key = breachKey(metric.host_id, rule.metric_name);
 
-            if (conditionMet) {
+if (conditionMet) {
+    if (activeBreaches.has(key)) {
+        continue;
+    }
 
-                const count = (breachState.get(key) || 0) + 1;
-                breachState.set(key, count);
+    const count = (breachState.get(key) || 0) + 1;
+    breachState.set(key, count);
 
-                if (count >= rule.duration) {
+    if (count >= rule.duration) {
+        const severity =
+            value >= 90 ? "Critical" : "Warning";
 
-                   const severity =
-    value >= 90
-        ? "Critical"
-        : "Warning";
+        await pool.query(`
+            INSERT INTO alerts (
+                metric_name,
+                metric_value,
+                average_value,
+                severity,
+                host_id,
+                timestamp
+            )
+            VALUES ($1, $2, $3, $4, $5, NOW())
+        `, [
+            rule.metric_name,
+            value,
+            rule.threshold,
+            severity,
+            metric.host_id ?? null
+        ]);
 
+        activeBreaches.add(key);
+        breachState.set(key, 0);
 
-await pool.query(`
-    INSERT INTO alerts (
-        metric_name,
-        metric_value,
-        average_value,
-        severity,
-        host_id,
-        timestamp
-    )
-    VALUES ($1, $2, $3, $4, $5, NOW())
-`, [
-    rule.metric_name,
-    value,
-    rule.threshold,
-    severity,
-    metric.host_id ?? null
-]);
-
-                    console.log(`Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id ?? 'unknown'})`);
-
-                    breachState.set(key, 0);
-                }
-
-            } else {
-                breachState.set(key, 0);
-            }
+        console.log(
+            `Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id ?? 'unknown'})`
+        );
+    }
+} else {
+    breachState.set(key, 0);
+    activeBreaches.delete(key);
+}
         }
 
     } catch (err) {

@@ -150,7 +150,13 @@ router.post('/register', async (req, res) => {
 
         res.status(201).json(result.rows[0]);
 
-    } catch (err) {
+        } catch (err) {
+
+        if (err.code === '23505') {
+            return res.status(409).json({
+                error: 'A host with this name already exists'
+            });
+        }
 
         console.error('Failed to register host:', err);
 
