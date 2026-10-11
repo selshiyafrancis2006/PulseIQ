@@ -147,9 +147,18 @@ wss.on('connection', async (ws, req) => {
 
 // Start metrics job
 (async () => {
-    await import('./jobs/uptime.job.js');
-    await import('./jobs/rollup.job.js');
-    await import('./jobs/baseline.job.js');
+    try {
+        await import('./jobs/uptime.job.js');
+        console.log('Uptime job registered');
+
+        await import('./jobs/rollup.job.js');
+        console.log('Rollup job registered');
+
+        await import('./jobs/baseline.job.js');
+        console.log('Baseline job registered');
+    } catch (err) {
+        console.error('Failed to register background jobs:', err);
+    }
 })();
 
 

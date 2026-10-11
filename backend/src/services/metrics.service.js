@@ -21,9 +21,49 @@ const verifyHostOwnership = async (hostId, userId) => {
     return result.rows.length > 0;
 };
 
-const fetchMetrics = async (range, hostId) => {
 
+const fetchMetrics = async (range, hostId) => {
     const interval = intervalMap[range] || '1 minute';
+
+    if (['6h', '24h'].includes(range)) {
+        const result = await pool.query(
+            `SELECT
+                host_id,
+                bucket_start AS timestamp,
+                cpu_usage_avg AS cpu_usage,
+                memory_usage_avg AS memory_usage,
+                disk_usage_avg AS disk_usage,
+                network_in_avg AS network_in,
+                network_out_avg AS network_out
+             FROM metric_rollups_5m
+             WHERE host_id = $1
+               AND bucket_start >= NOW() - INTERVAL '${interval}'
+             ORDER BY bucket_start ASC`,
+            [hostId]
+        );
+
+        return result.rows;
+    }
+
+    if (['3d', '7d'].includes(range)) {
+        const result = await pool.query(
+            `SELECT
+                host_id,
+                bucket_start AS timestamp,
+                cpu_usage_avg AS cpu_usage,
+                memory_usage_avg AS memory_usage,
+                disk_usage_avg AS disk_usage,
+                network_in_avg AS network_in,
+                network_out_avg AS network_out
+             FROM metric_rollups_1h
+             WHERE host_id = $1
+               AND bucket_start >= NOW() - INTERVAL '${interval}'
+             ORDER BY bucket_start ASC`,
+            [hostId]
+        );
+
+        return result.rows;
+    }
 
     const result = await pool.query(
         `SELECT *
@@ -36,6 +76,7 @@ const fetchMetrics = async (range, hostId) => {
 
     return result.rows;
 };
+
 
 const fetchLatestMetric = async (hostId) => {
 

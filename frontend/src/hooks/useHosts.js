@@ -1,3 +1,4 @@
+
 import { useCallback, useEffect, useState } from "react";
 import api from "../services/api";
 
@@ -30,10 +31,18 @@ export default function useHosts() {
     fetchHosts(tagFilter);
   }, [fetchHosts, tagFilter]);
 
+  // Refresh the host list every 5 seconds.
+  useEffect(() => {
+    const intervalId = setInterval(() => {
+      fetchHosts(tagFilter);
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [fetchHosts, tagFilter]);
+
   const registerHost = async (name, tags = []) => {
     const { data } = await api.post("/hosts/register", { name, tags });
 
-    // non-secret fields only, matching what GET /hosts returns
     setHosts((prev) => [
       ...prev,
       {
@@ -47,7 +56,7 @@ export default function useHosts() {
 
     setSelectedHostId((current) => current ?? data.id);
 
-    return data; // caller needs the one-time api_key
+    return data;
   };
 
   return {

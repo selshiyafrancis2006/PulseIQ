@@ -76,7 +76,7 @@ async function rollup1Hour() {
             MIN(network_out_min), MAX(network_out_max),
             SUM(sample_count)
         FROM metric_rollups_5m
-        WHERE bucket_start >= NOW() - INTERVAL '3 hours'
+        WHERE bucket_start >= NOW() - INTERVAL '7 days'
         GROUP BY host_id, date_trunc('hour', bucket_start)
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
             cpu_usage_avg = EXCLUDED.cpu_usage_avg,
