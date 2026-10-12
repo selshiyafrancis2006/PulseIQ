@@ -5,6 +5,20 @@ const pool = require('../config/db');
 const breachState = new Map();
 const activeBreaches = new Set();
 
+function getAlertSeverity(metricName, value) {
+    const percentageMetrics = new Set([
+        'cpu_usage',
+        'memory_usage',
+        'disk_usage'
+    ]);
+
+    if (percentageMetrics.has(metricName) && value >= 90) {
+        return 'Critical';
+    }
+
+    return 'Warning';
+}
+
 function breachKey(hostId, metricName) {
     return `${hostId ?? 'unknown'}:${metricName}`;
 }
@@ -59,8 +73,7 @@ if (conditionMet) {
     breachState.set(key, count);
 
     if (count >= rule.duration) {
-        const severity =
-            value >= 90 ? "Critical" : "Warning";
+        const severity = getAlertSeverity(rule.metric_name, value);
 
         await pool.query(`
             INSERT INTO alerts (
@@ -123,12 +136,10 @@ async function fetchAlerts(hostId, userId) {
         host_id: alert.host_id,
 
         severity:
-    alert.severity ||
-    (
-        alert.metric_value >= 90
-            ? "Critical"
-            : "Warning"
-    ),
+    alert.severity || getAlertSeverity(
+    alert.metric_name,
+    alert.metric_value
+),
 
         timestamp: alert.timestamp
 
