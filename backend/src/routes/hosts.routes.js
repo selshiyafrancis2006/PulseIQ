@@ -1,5 +1,5 @@
 const express = require('express');
-const crypto = require('crypto');
+const { generateApiKey, hashApiKey } = require('../utils/apiKey');
 const router = express.Router();
 const pool = require('../config/db');
 function normalizeTags(rawTags) {
@@ -119,7 +119,7 @@ router.post('/register', async (req, res) => {
 
         const { name, tags } = req.body;
 
-        if (!name || !name.trim()) {
+        if (typeof name !== 'string' || !name.trim()) {
             return res.status(400).json({
                 error: 'Host name is required'
             });
@@ -139,18 +139,22 @@ router.post('/register', async (req, res) => {
             });
         }
 
-        const apiKey = crypto.randomUUID();
+        // The plaintext key is returned once and never stored: only its hash is.
+        const apiKey = generateApiKey();
 
         const result = await pool.query(
-            `INSERT INTO hosts (name, api_key, user_id, tags)
+            `INSERT INTO hosts (name, api_key_hash, user_id, tags)
              VALUES ($1, $2, $3, $4)
-             RETURNING id, name, api_key, tags, created_at`,
-            [trimmedName, apiKey, req.user.id, normalizedTags]
+             RETURNING id, name, tags, created_at`,
+            [trimmedName, hashApiKey(apiKey), req.user.id, normalizedTags]
         );
 
-        res.status(201).json(result.rows[0]);
+        res.status(201).json({
+            ...result.rows[0],
+            api_key: apiKey
+        });
 
-        } catch (err) {
+    } catch (err) {
 
         if (err.code === '23505') {
             return res.status(409).json({
@@ -163,6 +167,107 @@ router.post('/register', async (req, res) => {
         res.status(500).json({
             error: 'Failed to register host'
         });
+
+    }
+
+});
+
+// ---- ADDITION: edit host name / tags ----
+router.patch('/:id', async (req, res) => {
+
+    try {
+
+        const hostId = Number(req.params.id);
+
+        if (!Number.isInteger(hostId) || hostId <= 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        const { name, tags } = req.body;
+
+        const trimmedName = typeof name === 'string' ? name.trim() : '';
+
+        if (!trimmedName) {
+            return res.status(400).json({ error: 'Host name is required' });
+        }
+
+        // tags omitted -> leave unchanged; tags sent -> replace
+        const normalizedTags = tags === undefined ? null : normalizeTags(tags);
+
+        const duplicate = await pool.query(
+            'SELECT id FROM hosts WHERE user_id = $1 AND name = $2 AND id <> $3',
+            [req.user.id, trimmedName, hostId]
+        );
+
+        if (duplicate.rows.length > 0) {
+            return res.status(409).json({
+                error: 'A host with this name already exists'
+            });
+        }
+
+        const result = await pool.query(
+            `UPDATE hosts
+             SET name = $1,
+                 tags = COALESCE($2::text[], tags)
+             WHERE id = $3
+               AND user_id = $4
+             RETURNING id, name, tags`,
+            [trimmedName, normalizedTags, hostId, req.user.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        res.json(result.rows[0]);
+
+    } catch (err) {
+
+        console.error('Failed to update host:', err);
+
+        res.status(500).json({ error: 'Failed to update host' });
+
+    }
+
+});
+
+// ---- ADDITION: regenerate API key ----
+router.post('/:id/regenerate-key', async (req, res) => {
+
+    try {
+
+        const hostId = Number(req.params.id);
+
+        if (!Number.isInteger(hostId) || hostId <= 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        const apiKey = generateApiKey();
+
+        const result = await pool.query(
+            `UPDATE hosts
+             SET api_key_hash = $1
+             WHERE id = $2
+               AND user_id = $3
+             RETURNING id, name`,
+            [hashApiKey(apiKey), hostId, req.user.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        // Shown once, never stored
+        res.json({
+            ...result.rows[0],
+            api_key: apiKey
+        });
+
+    } catch (err) {
+
+        console.error('Failed to regenerate API key:', err);
+
+        res.status(500).json({ error: 'Failed to regenerate API key' });
 
     }
 

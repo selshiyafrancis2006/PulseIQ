@@ -3,7 +3,6 @@ const cors = require('cors');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const pool = require('./config/db');
-const si = require('systeminformation');
 const { URL } = require('url');
 const jwt = require('jsonwebtoken');
 const JWT_SECRET = require('./config/jwt');
@@ -47,27 +46,6 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use('/api/agent', agentRoutes);
 app.use(loggerMiddleware);
-
-// System Info Route
-app.get('/api/system-info', async (req, res) => {
-    try {
-        const os = await si.osInfo();
-        const cpu = await si.cpu();
-        const mem = await si.mem();
-        const time = await si.time();
-
-        res.json({
-            hostname: os.hostname,
-            os: `${os.distro} ${os.release}`,
-            cpu: cpu.brand,
-            ram: `${(mem.total / 1024 / 1024 / 1024).toFixed(1)} GB`,
-            uptime: `${Math.floor(time.uptime / 3600)}h ${Math.floor((time.uptime % 3600) / 60)}m`
-        });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: err.message });
-    }
-});
 
 // Routes
 // Public — no auth required

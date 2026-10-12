@@ -158,16 +158,28 @@ export default function App() {
 
   useEffect(() => {
 
+    if (!selectedHostId) {
+      setAlerts([])
+      return
+    }
+
+    let active = true
+
     const fetchAlerts = async () => {
 
       try {
 
         const res = await apiFetch(
-          `${API_BASE_URL}/api/alerts`
+          `${API_BASE_URL}/api/alerts?host_id=${selectedHostId}`
         )
+
+        if (!res.ok) {
+          throw new Error(`Request failed (${res.status})`)
+        }
+
         const data = await res.json()
 
-        setAlerts(data)
+        if (active) setAlerts(Array.isArray(data) ? data : [])
 
       } catch (err) {
 
@@ -187,9 +199,12 @@ export default function App() {
       10000
     )
 
-    return () => clearInterval(interval)
+    return () => {
+      active = false
+      clearInterval(interval)
+    }
 
-  }, [])
+  }, [selectedHostId])
 
   /* =========================
      SYSTEM INFO
@@ -197,17 +212,28 @@ export default function App() {
 
   useEffect(() => {
 
+    if (!selectedHostId) {
+      setSystemInfo(null)
+      return
+    }
+
+    let active = true
+
     const fetchSystemInfo = async () => {
 
       try {
 
-        const res = await fetch(
-          `${API_BASE_URL}/api/system-info`
+        const res = await apiFetch(
+          `${API_BASE_URL}/api/hosts/${selectedHostId}`
         )
+
+        if (!res.ok) {
+          throw new Error(`Request failed (${res.status})`)
+        }
 
         const data = await res.json()
 
-        setSystemInfo(data)
+        if (active) setSystemInfo(data)
 
       } catch (err) {
 
@@ -216,13 +242,19 @@ export default function App() {
           err
         )
 
+        if (active) setSystemInfo(null)
+
       }
 
     }
 
     fetchSystemInfo()
 
-  }, [])
+    return () => {
+      active = false
+    }
+
+  }, [selectedHostId])
 
   /* =========================
    ALERT RULES FETCH
@@ -733,87 +765,29 @@ useEffect(() => {
 
       {/* SYSTEM INFO */}
 
-      {systemInfo && (
+      {systemInfo && (systemInfo.hostname || systemInfo.os) && (
+        <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-5 mb-8">
 
-        <div className="
-          bg-[#1a1a1a]
-          border border-[#2a2a2a]
-          rounded-xl
-          p-5
-          mb-8
-        ">
-
-          <h2 className="
-            text-lg
-            font-semibold
-            mb-4
-            text-white
-          ">
+          <h2 className="text-lg font-semibold mb-4 text-white">
             System Information
           </h2>
 
-          <div className="
-            grid
-            grid-cols-1
-            md:grid-cols-2
-            gap-4
-            text-sm
-          ">
-
-            <div>
-              <span className="text-gray-500">
-                Hostname:
-              </span>
-
-              <span className="ml-2 text-white">
-                {systemInfo.hostname}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-gray-500">
-                OS:
-              </span>
-
-              <span className="ml-2 text-white">
-                {systemInfo.os}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-gray-500">
-                CPU:
-              </span>
-
-              <span className="ml-2 text-white">
-                {systemInfo.cpu}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-gray-500">
-                RAM:
-              </span>
-
-              <span className="ml-2 text-white">
-                {systemInfo.ram}
-              </span>
-            </div>
-
-            <div>
-              <span className="text-gray-500">
-                Uptime:
-              </span>
-
-              <span className="ml-2 text-white">
-                {systemInfo.uptime}
-              </span>
-            </div>
-
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+            {[
+              ['Hostname', systemInfo.hostname],
+              ['OS', systemInfo.os],
+              ['CPU', systemInfo.cpu_model],
+              ['RAM', formatMemory(systemInfo.total_memory_mb)],
+              ['Uptime', formatUptime(systemInfo.boot_time)],
+            ].map(([label, value]) => (
+              <div key={label}>
+                <span className="text-gray-500">{label}:</span>
+                <span className="ml-2 text-white">{value || '—'}</span>
+              </div>
+            ))}
           </div>
 
         </div>
-
       )}
 
       {/* TIME RANGE */}

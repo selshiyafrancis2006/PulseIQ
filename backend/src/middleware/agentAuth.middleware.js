@@ -1,4 +1,5 @@
 const pool = require('../config/db');
+const { hashApiKey } = require('../utils/apiKey');
 
 const authenticateAgent = async (req, res, next) => {
 
@@ -6,15 +7,19 @@ const authenticateAgent = async (req, res, next) => {
 
         const apiKey = req.headers['x-api-key'];
 
-        if (!apiKey) {
+        if (!apiKey || typeof apiKey !== 'string') {
             return res.status(401).json({
                 error: 'Missing API key'
             });
         }
 
+        // Find the host by the key's hash and mark it active in one query
         const result = await pool.query(
-            'SELECT id, name FROM hosts WHERE api_key = $1',
-            [apiKey]
+            `UPDATE hosts
+             SET last_seen_at = NOW()
+             WHERE api_key_hash = $1
+             RETURNING id, name`,
+            [hashApiKey(apiKey)]
         );
 
         if (result.rows.length === 0) {
@@ -23,15 +28,7 @@ const authenticateAgent = async (req, res, next) => {
             });
         }
 
-        const host = result.rows[0];
-
-        // Update last_seen_at so we know this host is active
-        await pool.query(
-            'UPDATE hosts SET last_seen_at = NOW() WHERE id = $1',
-            [host.id]
-        );
-
-        req.agentHost = host;
+        req.agentHost = result.rows[0];
 
         next();
 

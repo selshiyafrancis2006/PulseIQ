@@ -19,14 +19,13 @@ CREATE TABLE IF NOT EXISTS metrics (
 CREATE TABLE IF NOT EXISTS hosts (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
-  api_key VARCHAR(255) UNIQUE NOT NULL,
+  api_key_hash VARCHAR(64) NOT NULL,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMP DEFAULT NOW(),
   last_seen_at TIMESTAMP
 );
 
 CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
-CREATE INDEX IF NOT EXISTS idx_hosts_api_key ON hosts (api_key);
 
 -- Alerts associated with individual hosts.
 CREATE TABLE IF NOT EXISTS alerts (
@@ -272,3 +271,28 @@ ALTER TABLE hosts ADD COLUMN IF NOT EXISTS total_memory_mb INTEGER;
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS ip_address VARCHAR(64);
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS agent_version VARCHAR(50);
 ALTER TABLE hosts ADD COLUMN IF NOT EXISTS boot_time TIMESTAMPTZ;
+
+-- API keys are stored only as SHA-256 hashes. On an existing database the
+-- plaintext keys are hashed in place, then the plaintext column is dropped.
+ALTER TABLE hosts ADD COLUMN IF NOT EXISTS api_key_hash VARCHAR(64);
+
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'hosts'
+      AND column_name = 'api_key'
+  ) THEN
+    UPDATE hosts
+    SET api_key_hash = encode(sha256(convert_to(api_key, 'UTF8')), 'hex')
+    WHERE api_key_hash IS NULL;
+
+    ALTER TABLE hosts DROP COLUMN api_key;
+  END IF;
+END $$;
+
+ALTER TABLE hosts ALTER COLUMN api_key_hash SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_api_key_hash ON hosts (api_key_hash);

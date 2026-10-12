@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useState } from "react";
 import api from "../services/api";
 
@@ -31,18 +30,10 @@ export default function useHosts() {
     fetchHosts(tagFilter);
   }, [fetchHosts, tagFilter]);
 
-  // Refresh the host list every 5 seconds.
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      fetchHosts(tagFilter);
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, [fetchHosts, tagFilter]);
-
   const registerHost = async (name, tags = []) => {
     const { data } = await api.post("/hosts/register", { name, tags });
 
+    // non-secret fields only, matching what GET /hosts returns
     setHosts((prev) => [
       ...prev,
       {
@@ -56,7 +47,27 @@ export default function useHosts() {
 
     setSelectedHostId((current) => current ?? data.id);
 
+    return data; // caller needs the one-time api_key
+  };
+
+  // Rename and/or re-tag. Refetches so sorting and the active tag filter
+  // are applied by the server, not guessed locally.
+  const updateHost = async (id, { name, tags }) => {
+    const { data } = await api.patch(`/hosts/${id}`, { name, tags });
+    await fetchHosts(tagFilter);
     return data;
+  };
+
+  // Returns { id, name, api_key }; the old key stops working immediately.
+  const regenerateKey = async (id) => {
+    const { data } = await api.post(`/hosts/${id}/regenerate-key`);
+    return data;
+  };
+
+  // Refetching also moves the selection if the deleted host was selected.
+  const deleteHost = async (id) => {
+    await api.delete(`/hosts/${id}`);
+    await fetchHosts(tagFilter);
   };
 
   return {
@@ -67,6 +78,9 @@ export default function useHosts() {
     setTagFilter,
     loading,
     registerHost,
+    updateHost,
+    regenerateKey,
+    deleteHost,
     refetch: fetchHosts,
   };
 }

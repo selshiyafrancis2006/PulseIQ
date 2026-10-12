@@ -1,10 +1,8 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import useHosts from '../hooks/useHosts'
-import { Link } from 'react-router-dom';
 import { isOnline, timeAgo } from '../utils/hostStatus'
 import InstallInstructions from '../components/hosts/InstallInstructions'
-import { apiFetch } from '../utils/apiFetch'
-import { API_BASE_URL } from '../config/api'
 
 function parseTagsInput(input) {
   return input
@@ -13,41 +11,144 @@ function parseTagsInput(input) {
     .filter(tag => tag.length > 0)
 }
 
+function Modal({ children }) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <div className="w-full max-w-md max-h-[90vh] overflow-y-auto rounded-xl border border-[#2a2a2a] bg-[#1a1a1a] p-6">
+        {children}
+      </div>
+    </div>
+  )
+}
+
+// One-time API key display, used after registering and after regenerating
+function KeyReveal({ heading, apiKey, onDone }) {
+  const [copied, setCopied] = useState(false)
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(apiKey)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch (err) {
+      console.error('Clipboard copy failed:', err)
+    }
+  }
+
+  return (
+    <>
+      <h2 className="text-xl font-bold mb-2 text-emerald-400">
+        {heading}
+      </h2>
+
+      <p className="text-sm text-gray-400 mb-4">
+        Copy this API key now — for security, PulseIQ won't show it to you again.
+      </p>
+
+      <div className="
+        bg-[#0f0f0f]
+        border border-[#2a2a2a]
+        rounded-lg
+        p-3
+        flex items-center justify-between
+        gap-3
+        mb-2
+      ">
+        <code className="text-xs text-emerald-400 break-all">
+          {apiKey}
+        </code>
+        <button
+          onClick={handleCopy}
+          className="
+            shrink-0
+            px-3 py-1.5
+            rounded-md
+            bg-[#1a1a1a]
+            border border-[#2a2a2a]
+            text-xs
+            hover:border-emerald-500
+            transition-colors
+          "
+        >
+          {copied ? 'Copied!' : 'Copy'}
+        </button>
+      </div>
+
+      <div className="mb-6">
+        <InstallInstructions apiKey={apiKey} />
+      </div>
+
+      <div className="flex justify-end">
+        <button
+          onClick={onDone}
+          className="
+            px-4 py-2
+            rounded-lg
+            bg-emerald-600
+            hover:bg-emerald-500
+            text-sm
+            font-semibold
+          "
+        >
+          Done
+        </button>
+      </div>
+    </>
+  )
+}
+
+const inputClass = `
+  w-full
+  bg-[#0f0f0f]
+  border border-[#2a2a2a]
+  rounded-lg
+  px-3 py-2
+  text-sm
+  outline-none
+  focus:border-emerald-500
+`
+
 export default function Hosts() {
 
-  const { hosts, loading, registerHost, tagFilter, setTagFilter } = useHosts()
+  const {
+    hosts,
+    loading,
+    registerHost,
+    updateHost,
+    regenerateKey,
+    deleteHost,
+    tagFilter,
+    setTagFilter
+  } = useHosts()
 
+  // Add host
   const [showAddModal, setShowAddModal] = useState(false)
   const [name, setName] = useState('')
   const [tagsInput, setTagsInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [newHost, setNewHost] = useState(null) // holds registration result (incl. one-time api_key)
-  const [copied, setCopied] = useState(false)
+  const [newHost, setNewHost] = useState(null) // registration result (incl. one-time api_key)
 
+  // Tag filter
   const [filterInput, setFilterInput] = useState('')
-  const [hostToDelete, setHostToDelete] = useState(null);
 
-  const handleDeleteHost = async () => {
-  if (!hostToDelete) return;
+  // Edit host
+  const [hostToEdit, setHostToEdit] = useState(null)
+  const [editName, setEditName] = useState('')
+  const [editTags, setEditTags] = useState('')
+  const [editSaving, setEditSaving] = useState(false)
+  const [editError, setEditError] = useState('')
 
-  try {
-    const response = await apiFetch(
-      `${API_BASE_URL}/api/hosts/${hostToDelete.id}`,
-      { method: 'DELETE' }
-    );
+  // Regenerate key
+  const [hostToRotate, setHostToRotate] = useState(null)
+  const [rotating, setRotating] = useState(false)
+  const [rotateError, setRotateError] = useState('')
+  const [rotatedKey, setRotatedKey] = useState(null) // { name, apiKey }
 
-    if (!response.ok) {
-      throw new Error('Failed to delete host');
-    }
-
-    window.location.reload();
-
-    setHostToDelete(null);
-  } catch (error) {
-    console.error('Failed to delete host:', error);
-  }
-};
+  // Delete host
+  const [hostToDelete, setHostToDelete] = useState(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
 
   const openModal = () => {
     setShowAddModal(true)
@@ -55,7 +156,6 @@ export default function Hosts() {
     setTagsInput('')
     setError('')
     setNewHost(null)
-    setCopied(false)
   }
 
   const closeModal = () => setShowAddModal(false)
@@ -82,18 +182,6 @@ export default function Hosts() {
     }
   }
 
-  const handleCopy = async () => {
-    if (!newHost?.api_key) return
-
-    try {
-      await navigator.clipboard.writeText(newHost.api_key)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
-      console.error('Clipboard copy failed:', err)
-    }
-  }
-
   const applyFilter = (e) => {
     e.preventDefault()
     setTagFilter(filterInput.trim() || null)
@@ -104,11 +192,87 @@ export default function Hosts() {
     setTagFilter(null)
   }
 
+  const openEdit = (host) => {
+    setHostToEdit(host)
+    setEditName(host.name)
+    setEditTags((host.tags || []).join(', '))
+    setEditError('')
+  }
+
+  const handleEditSubmit = async (e) => {
+    e.preventDefault()
+
+    if (!editName.trim()) {
+      setEditError('Host name is required')
+      return
+    }
+
+    setEditSaving(true)
+    setEditError('')
+
+    try {
+      await updateHost(hostToEdit.id, {
+        name: editName.trim(),
+        tags: parseTagsInput(editTags)
+      })
+      setHostToEdit(null)
+    } catch (err) {
+      console.error('Failed to update host:', err)
+      setEditError(err.response?.data?.error || 'Failed to update host')
+    } finally {
+      setEditSaving(false)
+    }
+  }
+
+  const openRotate = (host) => {
+    setHostToRotate(host)
+    setRotateError('')
+  }
+
+  const handleRotate = async () => {
+    if (!hostToRotate) return
+
+    setRotating(true)
+    setRotateError('')
+
+    try {
+      const result = await regenerateKey(hostToRotate.id)
+      setRotatedKey({ name: result.name, apiKey: result.api_key })
+      setHostToRotate(null)
+    } catch (err) {
+      console.error('Failed to regenerate API key:', err)
+      setRotateError(err.response?.data?.error || 'Failed to regenerate API key')
+    } finally {
+      setRotating(false)
+    }
+  }
+
+  const openDelete = (host) => {
+    setHostToDelete(host)
+    setDeleteError('')
+  }
+
+  const handleDeleteHost = async () => {
+    if (!hostToDelete) return
+
+    setDeleting(true)
+    setDeleteError('')
+
+    try {
+      await deleteHost(hostToDelete.id)
+      setHostToDelete(null)
+    } catch (err) {
+      console.error('Failed to delete host:', err)
+      setDeleteError(err.response?.data?.error || 'Failed to delete host')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div className="space-y-8 text-white">
 
       {/* HEADER */}
-            {/* HEADER */}
       <div>
         <div className="flex items-center justify-between">
           <div>
@@ -245,13 +409,13 @@ export default function Hosts() {
                 return (
                   <tr key={host.id} className="border-b border-[#2a2a2a] last:border-0">
                     <td className="px-5 py-4 font-medium">
-  <Link
-    to={`/hosts/${host.id}`}
-    className="text-white hover:text-emerald-400 transition-colors"
-  >
-    {host.name}
-  </Link>
-</td>
+                      <Link
+                        to={`/hosts/${host.id}`}
+                        className="text-white hover:text-emerald-400 transition-colors"
+                      >
+                        {host.name}
+                      </Link>
+                    </td>
                     <td className="px-5 py-4">
                       <span className={`inline-flex items-center gap-2 text-xs font-semibold uppercase ${online ? 'text-emerald-400' : 'text-gray-500'}`}>
                         <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-400' : 'bg-gray-600'}`} />
@@ -259,14 +423,14 @@ export default function Hosts() {
                       </span>
                     </td>
                     <td className="px-5 py-4 text-gray-300">
-  {host.cpu_usage != null ? `${Number(host.cpu_usage).toFixed(1)}%` : '—'}
-</td>
-<td className="px-5 py-4 text-gray-300">
-  {host.memory_usage != null ? `${Number(host.memory_usage).toFixed(1)}%` : '—'}
-</td>
-<td className="px-5 py-4 text-gray-300">
-  {host.disk_usage != null ? `${Number(host.disk_usage).toFixed(1)}%` : '—'}
-</td>
+                      {host.cpu_usage != null ? `${Number(host.cpu_usage).toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="px-5 py-4 text-gray-300">
+                      {host.memory_usage != null ? `${Number(host.memory_usage).toFixed(1)}%` : '—'}
+                    </td>
+                    <td className="px-5 py-4 text-gray-300">
+                      {host.disk_usage != null ? `${Number(host.disk_usage).toFixed(1)}%` : '—'}
+                    </td>
                     <td className="px-5 py-4">
                       {host.tags && host.tags.length > 0 ? (
                         <div className="flex flex-wrap gap-1.5">
@@ -292,16 +456,31 @@ export default function Hosts() {
                     </td>
                     <td className="px-5 py-4 text-gray-400">{timeAgo(host.last_seen_at)}</td>
                     <td className="px-5 py-4 text-gray-400">
-  {new Date(host.created_at).toLocaleDateString()}
-</td>
-<td className="px-5 py-4">
-  <button
-    onClick={() => setHostToDelete(host)}
-    className="text-red-400 hover:text-red-300 transition-colors"
-  >
-    Delete
-  </button>
-</td>
+                      {new Date(host.created_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-5 py-4">
+                      <div className="flex items-center gap-4 text-sm">
+                        <button
+                          onClick={() => openEdit(host)}
+                          className="text-gray-300 hover:text-white transition-colors"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => openRotate(host)}
+                          title="Regenerate API key"
+                          className="text-gray-300 hover:text-white transition-colors"
+                        >
+                          New key
+                        </button>
+                        <button
+                          onClick={() => openDelete(host)}
+                          className="text-red-400 hover:text-red-300 transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 )
               })}
@@ -311,187 +490,237 @@ export default function Hosts() {
 
       </div>
 
-      {/* DELETE HOST CONFIRMATION */}
-{hostToDelete && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-    <div className="w-full max-w-md rounded-xl border border-[#2a2a2a] bg-[#1a1a1a] p-6">
-      <h2 className="text-lg font-semibold text-white">Delete host?</h2>
+      {/* EDIT HOST */}
+      {hostToEdit && (
+        <Modal>
+          <h2 className="text-xl font-bold mb-4">Edit Host</h2>
 
-      <p className="mt-3 text-sm text-gray-400">
-        Are you sure you want to delete{' '}
-        <span className="font-medium text-white">{hostToDelete.name}</span>?
-        This action cannot be undone.
-      </p>
+          <form onSubmit={handleEditSubmit} className="space-y-4">
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">
+                Host name
+              </label>
+              <input
+                type="text"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                autoFocus
+                className={inputClass}
+              />
+            </div>
 
-      <div className="mt-6 flex justify-end gap-3">
-        <button
-          type="button"
-          onClick={() => setHostToDelete(null)}
-          className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-white"
-        >
-          Cancel
-        </button>
+            <div>
+              <label className="block text-sm text-gray-400 mb-1">
+                Tags <span className="text-gray-600">(comma-separated)</span>
+              </label>
+              <input
+                type="text"
+                value={editTags}
+                onChange={(e) => setEditTags(e.target.value)}
+                placeholder="env:prod, region:us-east"
+                className={inputClass}
+              />
+            </div>
 
-        <button
-          type="button"
-          onClick={handleDeleteHost}
-          className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500"
-        >
-          Delete Host
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+            {editError && (
+              <p className="text-sm text-red-400">{editError}</p>
+            )}
 
-      {/* ADD HOST MODAL */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-6 w-full max-w-md">
-
-            {!newHost ? (
-              <>
-                <h2 className="text-xl font-bold mb-4">Add Host</h2>
-
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">
-                      Host name
-                    </label>
-                    <input
-                      type="text"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="e.g. prod-api-1"
-                      autoFocus
-                      className="
-                        w-full
-                        bg-[#0f0f0f]
-                        border border-[#2a2a2a]
-                        rounded-lg
-                        px-3 py-2
-                        text-sm
-                        outline-none
-                        focus:border-emerald-500
-                      "
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm text-gray-400 mb-1">
-                      Tags <span className="text-gray-600">(optional, comma-separated)</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={tagsInput}
-                      onChange={(e) => setTagsInput(e.target.value)}
-                      placeholder="env:prod, region:us-east"
-                      className="
-                        w-full
-                        bg-[#0f0f0f]
-                        border border-[#2a2a2a]
-                        rounded-lg
-                        px-3 py-2
-                        text-sm
-                        outline-none
-                        focus:border-emerald-500
-                      "
-                    />
-                  </div>
-
-                  {error && (
-                    <p className="text-sm text-red-400">{error}</p>
-                  )}
-
-                  <div className="flex justify-end gap-3 pt-2">
-                    <button
-                      type="button"
-                      onClick={closeModal}
-                      className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={submitting}
-                      className="
-                        px-4 py-2
-                        rounded-lg
-                        bg-emerald-600
-                        hover:bg-emerald-500
-                        disabled:opacity-50
-                        text-sm
-                        font-semibold
-                      "
-                    >
-                      {submitting ? 'Registering...' : 'Register'}
-                    </button>
-                  </div>
-                </form>
-              </>
-            ) : (
-              <>
-                <h2 className="text-xl font-bold mb-2 text-emerald-400">
-                  {newHost.name} registered
-                </h2>
-
-                <p className="text-sm text-gray-400 mb-4">
-                  Copy this API key now — for security, PulseIQ won't show it to you again.
-                </p>
-
-                <div className="
-                  bg-[#0f0f0f]
-                  border border-[#2a2a2a]
+            <div className="flex justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setHostToEdit(null)}
+                className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={editSaving}
+                className="
+                  px-4 py-2
                   rounded-lg
-                  p-3
-                  flex items-center justify-between
-                  gap-3
-                  mb-2
-                ">
-                  <code className="text-xs text-emerald-400 break-all">
-                    {newHost.api_key}
-                  </code>
-                  <button
-                    onClick={handleCopy}
-                    className="
-                      shrink-0
-                      px-3 py-1.5
-                      rounded-md
-                      bg-[#1a1a1a]
-                      border border-[#2a2a2a]
-                      text-xs
-                      hover:border-emerald-500
-                      transition-colors
-                    "
-                  >
-                    {copied ? 'Copied!' : 'Copy'}
-                  </button>
+                  bg-emerald-600
+                  hover:bg-emerald-500
+                  disabled:opacity-50
+                  text-sm
+                  font-semibold
+                "
+              >
+                {editSaving ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+
+      {/* REGENERATE KEY: CONFIRM */}
+      {hostToRotate && (
+        <Modal>
+          <h2 className="text-lg font-semibold text-white">
+            Regenerate API key?
+          </h2>
+
+          <p className="mt-3 text-sm text-gray-400">
+            The current key for{' '}
+            <span className="font-medium text-white">{hostToRotate.name}</span>{' '}
+            stops working immediately. Its agent will be rejected until you
+            restart it with the new key. History is kept.
+          </p>
+
+          {rotateError && (
+            <p className="mt-3 text-sm text-red-400">{rotateError}</p>
+          )}
+
+          <div className="mt-6 flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => setHostToRotate(null)}
+              className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleRotate}
+              disabled={rotating}
+              className="
+                rounded-lg
+                bg-emerald-600
+                hover:bg-emerald-500
+                disabled:opacity-50
+                px-4 py-2
+                text-sm
+                font-semibold
+              "
+            >
+              {rotating ? 'Regenerating...' : 'Regenerate'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* REGENERATE KEY: RESULT */}
+      {rotatedKey && (
+        <Modal>
+          <KeyReveal
+            heading={`New key for ${rotatedKey.name}`}
+            apiKey={rotatedKey.apiKey}
+            onDone={() => setRotatedKey(null)}
+          />
+        </Modal>
+      )}
+
+      {/* DELETE HOST */}
+      {hostToDelete && (
+        <Modal>
+          <h2 className="text-lg font-semibold text-white">Delete host?</h2>
+
+          <p className="mt-3 text-sm text-gray-400">
+            Are you sure you want to delete{' '}
+            <span className="font-medium text-white">{hostToDelete.name}</span>?
+            This permanently removes all of its metrics, alerts, anomalies and
+            history. This cannot be undone.
+          </p>
+
+          {deleteError && (
+            <p className="mt-3 text-sm text-red-400">{deleteError}</p>
+          )}
+
+          <div className="mt-6 flex justify-end gap-3">
+            <button
+              type="button"
+              onClick={() => setHostToDelete(null)}
+              className="rounded-lg px-4 py-2 text-sm text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+
+            <button
+              type="button"
+              onClick={handleDeleteHost}
+              disabled={deleting}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-500 disabled:opacity-50"
+            >
+              {deleting ? 'Deleting...' : 'Delete Host'}
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ADD HOST */}
+      {showAddModal && (
+        <Modal>
+          {!newHost ? (
+            <>
+              <h2 className="text-xl font-bold mb-4">Add Host</h2>
+
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Host name
+                  </label>
+                  <input
+                    type="text"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="e.g. prod-api-1"
+                    autoFocus
+                    className={inputClass}
+                  />
                 </div>
 
-                                 <div className="mb-6">
-                  <InstallInstructions apiKey={newHost.api_key} />
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Tags <span className="text-gray-600">(optional, comma-separated)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={tagsInput}
+                    onChange={(e) => setTagsInput(e.target.value)}
+                    placeholder="env:prod, region:us-east"
+                    className={inputClass}
+                  />
                 </div>
 
-                <div className="flex justify-end">
+                {error && (
+                  <p className="text-sm text-red-400">{error}</p>
+                )}
+
+                <div className="flex justify-end gap-3 pt-2">
                   <button
+                    type="button"
                     onClick={closeModal}
+                    className="px-4 py-2 rounded-lg text-sm text-gray-400 hover:text-white"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={submitting}
                     className="
                       px-4 py-2
                       rounded-lg
                       bg-emerald-600
                       hover:bg-emerald-500
+                      disabled:opacity-50
                       text-sm
                       font-semibold
                     "
                   >
-                    Done
+                    {submitting ? 'Registering...' : 'Register'}
                   </button>
                 </div>
-              </>
-            )}
-
-          </div>
-        </div>
+              </form>
+            </>
+          ) : (
+            <KeyReveal
+              heading={`${newHost.name} registered`}
+              apiKey={newHost.api_key}
+              onDone={closeModal}
+            />
+          )}
+        </Modal>
       )}
 
     </div>

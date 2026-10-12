@@ -28,6 +28,18 @@ const metricColors = {
   network_out: '#10b981'
 }
 
+// Window and label for every range the UI offers
+const RANGES = {
+  '1m': { minutes: 1, label: '1 minute' },
+  '5m': { minutes: 5, label: '5 minutes' },
+  '15m': { minutes: 15, label: '15 minutes' },
+  '1h': { minutes: 60, label: '1 hour' },
+  '6h': { minutes: 360, label: '6 hours' },
+  '24h': { minutes: 1440, label: '24 hours' },
+  '3d': { minutes: 4320, label: '3 days' },
+  '7d': { minutes: 10080, label: '7 days' }
+}
+
 export default function MetricsChart({
   metrics,
   selectedMetrics,
@@ -35,20 +47,33 @@ export default function MetricsChart({
 }) {
 
   if (!metrics.length) return null
-  const rangeMinutes = {
-  '1h': 60,
-  '6h': 360,
-  '24h': 1440
-}
 
-const cutoff = Date.now() - rangeMinutes[timeRange] * 60 * 1000
+  const range = RANGES[timeRange]
 
-const filteredMetrics = metrics.filter(metric =>
-  new Date(metric.timestamp).getTime() >= cutoff
-)
+  // Unknown range: show everything the API returned rather than nothing
+  const filteredMetrics = range
+    ? metrics.filter(metric =>
+        new Date(metric.timestamp).getTime() >=
+        Date.now() - range.minutes * 60 * 1000
+      )
+    : metrics
+
+  // Day-or-longer ranges need the date too, or labels repeat ambiguously
+  const formatLabel = (timestamp) => {
+    const date = new Date(timestamp)
+
+    return range && range.minutes >= 1440
+      ? date.toLocaleString([], {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+      : date.toLocaleTimeString()
+  }
 
   const labels = filteredMetrics.map(metric =>
-    new Date(metric.timestamp).toLocaleTimeString()
+    formatLabel(metric.timestamp)
   )
 
   const datasets = selectedMetrics.map(metric => ({
@@ -58,8 +83,8 @@ const filteredMetrics = metrics.filter(metric =>
       .toUpperCase(),
 
     data: filteredMetrics.map(item =>
-  parseFloat(item[metric])
-),
+      parseFloat(item[metric])
+    ),
 
     borderColor: metricColors[metric],
 
@@ -69,9 +94,9 @@ const filteredMetrics = metrics.filter(metric =>
 
     fill: false,
 
-pointRadius: 0,
-pointHoverRadius: 4,
-tension: 0.35
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    tension: 0.35
 
   }))
 
@@ -139,15 +164,16 @@ tension: 0.35
     <div className="bg-[#0d0d0d] border border-emerald-500/20 rounded-xl p-6 mb-8 shadow-[0_0_20px_rgba(16,185,129,0.04)]">
 
       <h2 className="text-lg font-semibold mb-6">
-  {selectedMetrics.length === 1
-    ? selectedMetrics[0]
-        .replace('_', ' ')
-        .replace(/\b\w/g, char => char.toUpperCase())
-    : 'Metrics Comparison'}
-</h2>
-<p className="text-xs text-gray-500 -mt-4 mb-5">
-  Last {timeRange === '1h' ? '1 hour' : timeRange === '6h' ? '6 hours' : '24 hours'}
-</p>
+        {selectedMetrics.length === 1
+          ? selectedMetrics[0]
+              .replace('_', ' ')
+              .replace(/\b\w/g, char => char.toUpperCase())
+          : 'Metrics Comparison'}
+      </h2>
+
+      <p className="text-xs text-gray-500 -mt-4 mb-5">
+        Last {range ? range.label : timeRange}
+      </p>
 
       <div className="h-[420px]">
 
