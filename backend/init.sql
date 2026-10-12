@@ -27,6 +27,13 @@ CREATE TABLE IF NOT EXISTS hosts (
 
 CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
 
+-- Each user can register a host name only once.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_user_name
+  ON hosts (user_id, name);
+
+-- Remove the obsolete duplicate index.
+DROP INDEX IF EXISTS idx_hosts_user_name_unique;
+
 -- Alerts associated with individual hosts.
 CREATE TABLE IF NOT EXISTS alerts (
   id SERIAL PRIMARY KEY,
