@@ -2,6 +2,11 @@ const cron = require('node-cron');
 
 const db = require('../config/db');
 
+const OFFLINE_THRESHOLD_SECONDS = Math.max(
+    30,
+    Number.parseInt(process.env.OFFLINE_THRESHOLD_SECONDS, 10) || 30
+);
+
 const recoveredHosts = new Set();
 
 const {
@@ -18,12 +23,13 @@ async function checkHostStatus() {
     `);
 
     for (const host of result.rows) {
-        const isOffline =
-            Date.now() - new Date(host.last_seen_at).getTime() > 30000;
+                             const isOffline =
+            Date.now() - new Date(host.last_seen_at).getTime() >
+            OFFLINE_THRESHOLD_SECONDS * 1000;
 
-            if (isOffline) {
-    recoveredHosts.delete(host.id);
-}
+        if (isOffline) {
+            recoveredHosts.delete(host.id);
+        }
 
         const existing = await db.query(`
             SELECT id, timestamp
@@ -37,23 +43,23 @@ async function checkHostStatus() {
         const lastAlert = existing.rows[0];
 
         
-if (!isOffline) {
-    if (
-        lastAlert &&
-        new Date(host.last_seen_at).getTime() >
-            new Date(lastAlert.timestamp).getTime()
-    ) {
-        if (!recoveredHosts.has(host.id)) {
-            console.log(
-                `Host recovered (host_id: ${host.id}, name: ${host.name})`
-            );
+        if (!isOffline) {
+            if (
+                lastAlert &&
+                new Date(host.last_seen_at).getTime() >
+                    new Date(lastAlert.timestamp).getTime()
+            ) {
+                if (!recoveredHosts.has(host.id)) {
+                    console.log(
+                        `Host recovered (host_id: ${host.id}, name: ${host.name})`
+                    );
 
-            recoveredHosts.add(host.id);
+                    recoveredHosts.add(host.id);
+                }
+            }
+
+            continue;
         }
-    }
-
-    continue;
-}
 
         const alreadyOffline =
             lastAlert &&
@@ -79,7 +85,7 @@ if (!isOffline) {
                     NOW()
                 FROM hosts
                 WHERE id = $1
-                  AND last_seen_at < NOW() - INTERVAL '30 seconds'
+                  AND last_seen_at < NOW() - ($2 * INTERVAL '1 second')
                   AND NOT EXISTS (
                       SELECT 1
                       FROM alerts
@@ -92,7 +98,7 @@ if (!isOffline) {
                         )
                   )
                 RETURNING id
-            `, [host.id]);
+            `, [host.id, OFFLINE_THRESHOLD_SECONDS]);
 
             if (inserted.rowCount > 0) {
                 console.log(

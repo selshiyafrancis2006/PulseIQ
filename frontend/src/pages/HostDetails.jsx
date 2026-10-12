@@ -298,7 +298,7 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
   >
     {new Date(alert.timestamp) < new Date(host.last_seen_at)
       ? "The host has resumed sending heartbeats."
-      : "No heartbeat received for more than 30 seconds."}
+      : "No recent heartbeat received; the host is considered offline."}
   </p>
 ) : (
     <p className="mt-1 text-xs text-gray-500">
