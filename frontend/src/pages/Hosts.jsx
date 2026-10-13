@@ -24,16 +24,20 @@ function Modal({ children }) {
 // One-time API key display, used after registering and after regenerating
 function KeyReveal({ heading, apiKey, onDone }) {
   const [copied, setCopied] = useState(false)
+const [copyError, setCopyError] = useState('')
 
-  const handleCopy = async () => {
-    try {
-      await navigator.clipboard.writeText(apiKey)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch (err) {
-      console.error('Clipboard copy failed:', err)
-    }
+const handleCopy = async () => {
+  setCopyError('')
+
+  try {
+    await navigator.clipboard.writeText(apiKey)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  } catch (err) {
+    console.error('Clipboard copy failed:', err)
+    setCopyError('Could not copy automatically. Please select and copy the key manually.')
   }
+}
 
   return (
     <>
@@ -74,6 +78,12 @@ function KeyReveal({ heading, apiKey, onDone }) {
         </button>
       </div>
 
+      {copyError && (
+        <p className="mb-3 text-sm text-red-400">
+          {copyError}
+        </p>
+      )}
+
       <div className="mb-6">
         <InstallInstructions apiKey={apiKey} />
       </div>
@@ -110,16 +120,21 @@ const inputClass = `
 
 export default function Hosts() {
 
-  const {
-    hosts,
-    loading,
-    registerHost,
-    updateHost,
-    regenerateKey,
-    deleteHost,
-    tagFilter,
-    setTagFilter
-  } = useHosts()
+
+const {
+  hosts,
+  loading,
+  refreshing,
+  error: hostsError,
+  refetch,
+  registerHost,
+  updateHost,
+  regenerateKey,
+  deleteHost,
+  tagFilter,
+  setTagFilter
+} = useHosts()
+
 
   // Add host
   const [showAddModal, setShowAddModal] = useState(false)
@@ -158,7 +173,15 @@ export default function Hosts() {
     setNewHost(null)
   }
 
-  const closeModal = () => setShowAddModal(false)
+  
+const closeModal = () => {
+  setShowAddModal(false)
+  setName('')
+  setTagsInput('')
+  setError('')
+  setNewHost(null)
+}
+
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -372,123 +395,174 @@ export default function Hosts() {
         )}
       </form>
 
-      {/* HOSTS LIST */}
-      <div className="
-        bg-[#1a1a1a]
-        border border-[#2a2a2a]
-        rounded-xl
-        overflow-hidden
-      ">
+      
+{/* HOSTS LIST */}
+<div className="w-full min-w-0 rounded-xl border border-[#2a2a2a] bg-[#1a1a1a]">
 
-        {loading ? (
-          <p className="p-5 text-sm text-gray-500">Loading hosts...</p>
-        ) : hosts.length === 0 ? (
-          <p className="p-5 text-sm text-gray-500">
-            {tagFilter
-              ? `No hosts match tag "${tagFilter}".`
-              : 'No hosts registered yet. Click "Add Host" to register your first one.'}
-          </p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-[#2a2a2a] text-left text-gray-500 uppercase text-xs tracking-widest">
-                <th className="px-5 py-3">Name</th>
-                <th className="px-5 py-3">Status</th>
-                <th className="px-5 py-3">CPU</th>
-                <th className="px-5 py-3">Memory</th>
-                <th className="px-5 py-3">Disk</th>
-                <th className="px-5 py-3">Tags</th>
-                <th className="px-5 py-3">Last Seen</th>
-                <th className="px-5 py-3">Registered</th>
-                <th className="px-5 py-3">Actions</th>
+  {error && (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2a2a2a] bg-red-950/20 px-5 py-4">
+      <p className="text-sm text-red-300">{error}</p>
+      <button
+        type="button"
+        onClick={() => refetch(tagFilter)}
+        disabled={loading || refreshing}
+        className="text-sm font-medium text-emerald-400 hover:text-emerald-300 disabled:opacity-50"
+      >
+        {loading || refreshing ? "Retrying..." : "Retry"}
+      </button>
+    </div>
+  )}
+
+  {refreshing && !loading && !error && (
+    <div className="border-b border-[#2a2a2a] px-5 py-2 text-xs text-gray-500">
+      Refreshing host data...
+    </div>
+  )}
+
+  {loading ? (
+    <p className="p-5 text-sm text-gray-500">Loading hosts...</p>
+  ) : error && hosts.length === 0 ? (
+    <div className="p-5 text-sm text-gray-400">
+      Unable to display hosts until the connection is restored.
+    </div>
+  ) : hosts.length === 0 ? (
+    <p className="p-5 text-sm text-gray-500">
+      {tagFilter
+        ? `No hosts match tag "${tagFilter}".`
+        : 'No hosts registered yet. Click "Add Host" to register your first one.'}
+    </p>
+  ) : (
+    <div className="w-full min-w-0 overflow-x-auto">
+      <table className="w-full min-w-[1100px] table-fixed text-sm">
+        <thead>
+          <tr className="border-b border-[#2a2a2a] text-left text-xs uppercase tracking-widest text-gray-500">
+            <th className="w-[180px] px-5 py-3">Name</th>
+            <th className="w-[120px] px-5 py-3">Status</th>
+            <th className="w-[90px] px-5 py-3">CPU</th>
+            <th className="w-[100px] px-5 py-3">Memory</th>
+            <th className="w-[90px] px-5 py-3">Disk</th>
+            <th className="w-[200px] px-5 py-3">Tags</th>
+            <th className="w-[130px] px-5 py-3">Last Seen</th>
+            <th className="w-[130px] px-5 py-3">Registered</th>
+            <th className="w-[220px] px-5 py-3">Actions</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          {hosts.map((host) => {
+            const online = isOnline(host.last_seen_at);
+
+            return (
+              <tr
+                key={host.id}
+                className="border-b border-[#2a2a2a] last:border-0 hover:bg-white/[0.02]"
+              >
+                <td className="overflow-hidden px-5 py-4 font-medium">
+                  <Link
+                    to={`/hosts/${host.id}`}
+                    title={host.name}
+                    className="block truncate text-white transition-colors hover:text-emerald-400"
+                  >
+                    {host.name}
+                  </Link>
+                </td>
+
+                <td className="px-5 py-4">
+                  <span
+                    className={`inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold uppercase ${
+                      online ? "text-emerald-400" : "text-gray-500"
+                    }`}
+                  >
+                    <span
+                      className={`h-2 w-2 rounded-full ${
+                        online ? "bg-emerald-400" : "bg-gray-600"
+                      }`}
+                    />
+                    {online ? "Online" : "Offline"}
+                  </span>
+                </td>
+
+                <td className="whitespace-nowrap px-5 py-4 text-gray-300">
+                  {host.cpu_usage != null
+                    ? `${Number(host.cpu_usage).toFixed(1)}%`
+                    : "—"}
+                </td>
+
+                <td className="whitespace-nowrap px-5 py-4 text-gray-300">
+                  {host.memory_usage != null
+                    ? `${Number(host.memory_usage).toFixed(1)}%`
+                    : "—"}
+                </td>
+
+                <td className="whitespace-nowrap px-5 py-4 text-gray-300">
+                  {host.disk_usage != null
+                    ? `${Number(host.disk_usage).toFixed(1)}%`
+                    : "—"}
+                </td>
+
+                <td className="overflow-hidden px-5 py-4">
+                  {host.tags && host.tags.length > 0 ? (
+                    <div className="flex max-w-full flex-wrap gap-1.5 overflow-hidden">
+                      {host.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          title={tag}
+                          className="inline-block max-w-full truncate overflow-hidden whitespace-nowrap rounded-full border border-[#2a2a2a] bg-[#0f0f0f] px-2 py-0.5 text-xs text-gray-300"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <span className="text-xs text-gray-600">—</span>
+                  )}
+                </td>
+
+                <td className="whitespace-nowrap px-5 py-4 text-gray-400">
+                  {timeAgo(host.last_seen_at)}
+                </td>
+
+                <td className="whitespace-nowrap px-5 py-4 text-gray-400">
+                  {new Date(host.created_at).toLocaleDateString()}
+                </td>
+
+                <td className="px-5 py-4">
+                  <div className="flex items-center gap-4 whitespace-nowrap text-sm">
+                    <button
+                      type="button"
+                      onClick={() => openEdit(host)}
+                      className="font-medium text-gray-300 transition-colors hover:text-emerald-400"
+                    >
+                      Edit
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openRotate(host)}
+                      title="Regenerate API key"
+                      className="font-medium text-gray-300 transition-colors hover:text-emerald-400"
+                    >
+                      New key
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => openDelete(host)}
+                      className="font-medium text-red-400 transition-colors hover:text-red-300"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {hosts.map((host) => {
-                const online = isOnline(host.last_seen_at)
-                return (
-                  <tr key={host.id} className="border-b border-[#2a2a2a] last:border-0">
-                    <td className="px-5 py-4 font-medium">
-                      <Link
-                        to={`/hosts/${host.id}`}
-                        className="text-white hover:text-emerald-400 transition-colors"
-                      >
-                        {host.name}
-                      </Link>
-                    </td>
-                    <td className="px-5 py-4">
-                      <span className={`inline-flex items-center gap-2 text-xs font-semibold uppercase ${online ? 'text-emerald-400' : 'text-gray-500'}`}>
-                        <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-400' : 'bg-gray-600'}`} />
-                        {online ? 'Online' : 'Offline'}
-                      </span>
-                    </td>
-                    <td className="px-5 py-4 text-gray-300">
-                      {host.cpu_usage != null ? `${Number(host.cpu_usage).toFixed(1)}%` : '—'}
-                    </td>
-                    <td className="px-5 py-4 text-gray-300">
-                      {host.memory_usage != null ? `${Number(host.memory_usage).toFixed(1)}%` : '—'}
-                    </td>
-                    <td className="px-5 py-4 text-gray-300">
-                      {host.disk_usage != null ? `${Number(host.disk_usage).toFixed(1)}%` : '—'}
-                    </td>
-                    <td className="px-5 py-4">
-                      {host.tags && host.tags.length > 0 ? (
-                        <div className="flex flex-wrap gap-1.5">
-                          {host.tags.map((tag) => (
-                            <span
-                              key={tag}
-                              className="
-                                px-2 py-0.5
-                                rounded-full
-                                bg-[#0f0f0f]
-                                border border-[#2a2a2a]
-                                text-xs
-                                text-gray-300
-                              "
-                            >
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                      ) : (
-                        <span className="text-xs text-gray-600">—</span>
-                      )}
-                    </td>
-                    <td className="px-5 py-4 text-gray-400">{timeAgo(host.last_seen_at)}</td>
-                    <td className="px-5 py-4 text-gray-400">
-                      {new Date(host.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="px-5 py-4">
-                      <div className="flex items-center gap-4 text-sm">
-                        <button
-                          onClick={() => openEdit(host)}
-                          className="text-gray-300 hover:text-white transition-colors"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => openRotate(host)}
-                          title="Regenerate API key"
-                          className="text-gray-300 hover:text-white transition-colors"
-                        >
-                          New key
-                        </button>
-                        <button
-                          onClick={() => openDelete(host)}
-                          className="text-red-400 hover:text-red-300 transition-colors"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        )}
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+</div>
 
-      </div>
 
       {/* EDIT HOST */}
       {hostToEdit && (

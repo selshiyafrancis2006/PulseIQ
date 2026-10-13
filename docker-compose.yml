@@ -22,10 +22,13 @@ services:
 
   agent:
     build: ./agent
+
+    env_file:
+      - ./agent/.env
     environment:
       BACKEND_URL: http://backend:5000/api/agent/metrics
-      API_KEY: ${AGENT_API_KEY:-}
       INTERVAL_MS: 5000
+
     depends_on:
       - backend
     restart: unless-stopped

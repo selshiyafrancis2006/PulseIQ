@@ -1,39 +1,82 @@
-import { useCallback, useEffect, useState } from "react";
+
+import { useCallback, useEffect, useRef, useState } from "react";
 import api from "../services/api";
+
+const HOST_REFRESH_INTERVAL_MS = 10000;
 
 export default function useHosts() {
   const [hosts, setHosts] = useState([]);
   const [selectedHostId, setSelectedHostId] = useState(null);
   const [tagFilter, setTagFilter] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState("");
 
-  const fetchHosts = useCallback(async (filterTag) => {
+  const mountedRef = useRef(false);
+  const requestIdRef = useRef(0);
+
+  const fetchHosts = useCallback(async (filterTag = tagFilter) => {
+    const requestId = ++requestIdRef.current;
+    const isInitialLoad = !mountedRef.current;
+
+    if (isInitialLoad) {
+      setLoading(true);
+    } else {
+      setRefreshing(true);
+    }
+
     try {
       const params = filterTag ? { tag: filterTag } : {};
       const { data } = await api.get("/hosts", { params });
+
+      if (requestId !== requestIdRef.current) return;
+
+      if (!Array.isArray(data)) {
+        throw new Error("Invalid hosts response");
+      }
+
       setHosts(data);
+      setError("");
 
       setSelectedHostId((current) => {
-        if (current !== null && data.some((h) => h.id === current)) {
+        if (current !== null && data.some((host) => host.id === current)) {
           return current;
         }
         return data.length > 0 ? data[0].id : null;
       });
     } catch (err) {
+      if (requestId !== requestIdRef.current) return;
+
       console.error("Failed to load hosts:", err);
+      setError(
+        err.response?.data?.error ||
+          "Unable to load hosts. Check your connection and try again."
+      );
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+        mountedRef.current = true;
+      }
     }
-  }, []);
+  }, [tagFilter]);
 
   useEffect(() => {
     fetchHosts(tagFilter);
+
+    const intervalId = setInterval(() => {
+      fetchHosts(tagFilter);
+    }, HOST_REFRESH_INTERVAL_MS);
+
+    return () => {
+      clearInterval(intervalId);
+      requestIdRef.current += 1;
+    };
   }, [fetchHosts, tagFilter]);
 
   const registerHost = async (name, tags = []) => {
     const { data } = await api.post("/hosts/register", { name, tags });
 
-    // non-secret fields only, matching what GET /hosts returns
     setHosts((prev) => [
       ...prev,
       {
@@ -47,28 +90,30 @@ export default function useHosts() {
 
     setSelectedHostId((current) => current ?? data.id);
 
-    return data; // caller needs the one-time api_key
+    return data;
   };
 
-  // Rename and/or re-tag. Refetches so sorting and the active tag filter
-  // are applied by the server, not guessed locally.
   const updateHost = async (id, { name, tags }) => {
     const { data } = await api.patch(`/hosts/${id}`, { name, tags });
     await fetchHosts(tagFilter);
     return data;
   };
 
-  // Returns { id, name, api_key }; the old key stops working immediately.
   const regenerateKey = async (id) => {
     const { data } = await api.post(`/hosts/${id}/regenerate-key`);
     return data;
   };
 
-  // Refetching also moves the selection if the deleted host was selected.
-  const deleteHost = async (id) => {
-    await api.delete(`/hosts/${id}`);
-    await fetchHosts(tagFilter);
-  };
+  
+const deleteHost = async (id) => {
+  await api.delete(`/hosts/${id}`);
+
+  setHosts((prev) => prev.filter((host) => host.id !== id));
+  setSelectedHostId((current) => (current === id ? null : current));
+
+  await fetchHosts(tagFilter);
+};
+
 
   return {
     hosts,
@@ -77,6 +122,8 @@ export default function useHosts() {
     tagFilter,
     setTagFilter,
     loading,
+    refreshing,
+    error,
     registerHost,
     updateHost,
     regenerateKey,
