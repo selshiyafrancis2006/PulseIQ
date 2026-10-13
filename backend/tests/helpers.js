@@ -5,7 +5,9 @@ const { app } = require('../src/app');
 let counter = 0;
 
 async function resetDb() {
-    await pool.query('TRUNCATE users, metrics, logs RESTART IDENTITY CASCADE');
+    await pool.query(
+        'TRUNCATE users, metrics, logs, traces RESTART IDENTITY CASCADE'
+    );
 }
 
 // Registers a fresh user through the real API and returns its token

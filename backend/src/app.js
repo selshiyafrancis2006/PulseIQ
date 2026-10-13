@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const pool = require('./config/db');
@@ -27,6 +28,7 @@ const hostsRoutes = require('./routes/hosts.routes');
 const apmRoutes = require('./routes/apm.routes');
 const anomalyRoutes = require('./routes/anomaly.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
+const agentRateLimit = require('./middleware/agentRateLimit.middleware');
 
 const app = express();
 // Behind a TLS-terminating reverse proxy, set TRUST_PROXY=1 so req.ip and
@@ -42,9 +44,10 @@ const wss = new WebSocketServer({ server });
 setWSS(wss);
 
 // Middleware
+app.use(helmet());
 app.use(cors(corsOptions));
 app.use(express.json());
-app.use('/api/agent', agentRoutes);
+app.use('/api/agent', agentRateLimit, agentRoutes);
 app.use(loggerMiddleware);
 
 // Routes

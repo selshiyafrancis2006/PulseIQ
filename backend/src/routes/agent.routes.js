@@ -151,43 +151,70 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
 
 router.post('/traces', authenticateAgent, async (req, res) => {
     try {
-        const {
-            method,
-            route,
-            status_code,
-            duration_ms
-        } = req.body;
+        const body = req.body;
 
-        if (!method || !route) {
-            return res.status(400).json({
-                error: 'method and route are required'
-            });
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return res.status(400).json({ error: 'Invalid trace payload' });
+        }
+
+        const { method, route, status_code, duration_ms } = body;
+
+        if (
+            typeof method !== 'string' ||
+            !method.trim() ||
+            method.trim().length > 10 ||
+            /[\x00-\x1F\x7F]/.test(method)
+        ) {
+            return res.status(400).json({ error: 'Invalid method' });
+        }
+
+        if (
+            typeof route !== 'string' ||
+            !route.trim() ||
+            route.trim().length > 255 ||
+            /[\x00-\x1F\x7F]/.test(route)
+        ) {
+            return res.status(400).json({ error: 'Invalid route' });
+        }
+
+        if (
+            status_code !== undefined &&
+            status_code !== null &&
+            (!Number.isInteger(status_code) ||
+                status_code < 100 ||
+                status_code > 599)
+        ) {
+            return res.status(400).json({ error: 'Invalid status_code' });
+        }
+
+        if (
+            duration_ms !== undefined &&
+            duration_ms !== null &&
+            (!Number.isInteger(duration_ms) ||
+                duration_ms < 0 ||
+                duration_ms > 2147483647)
+        ) {
+            return res.status(400).json({ error: 'Invalid duration_ms' });
         }
 
         const result = await pool.query(
-            `INSERT INTO traces (
-                host_id,
-                method,
-                route,
-                status_code,
-                duration_ms
-            )
-            VALUES ($1, $2, $3, $4, $5)
-            RETURNING *`,
+            `INSERT INTO traces
+                (host_id, method, route, status_code, duration_ms)
+             VALUES ($1, $2, $3, $4, $5)
+             RETURNING *`,
             [
                 req.agentHost.id,
-                method,
-                route,
-                status_code,
-                duration_ms
+                method.trim().toUpperCase(),
+                route.trim(),
+                status_code ?? null,
+                duration_ms ?? null
             ]
         );
 
-        res.status(201).json(result.rows[0]);
-
+        return res.status(201).json(result.rows[0]);
     } catch (err) {
         console.error('Agent trace ingestion error:', err);
-        res.status(500).json({
+        return res.status(500).json({
             error: 'Failed to save trace'
         });
     }

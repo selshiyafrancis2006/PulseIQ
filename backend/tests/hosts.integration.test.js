@@ -253,3 +253,74 @@ test('an empty host update is rejected', async () => {
 
     expect(response.status).toBe(400);
 });
+
+test.each([
+    ['missing method', {
+        route: '/api/orders',
+        status_code: 200,
+        duration_ms: 25
+    }],
+    ['missing route', {
+        method: 'GET',
+        status_code: 200,
+        duration_ms: 25
+    }],
+    ['invalid status code', {
+        method: 'GET',
+        route: '/api/orders',
+        status_code: 700,
+        duration_ms: 25
+    }],
+    ['negative duration', {
+        method: 'GET',
+        route: '/api/orders',
+        status_code: 200,
+        duration_ms: -1
+    }],
+    ['non-numeric duration', {
+        method: 'GET',
+        route: '/api/orders',
+        status_code: 200,
+        duration_ms: 'fast'
+    }]
+])('agent trace ingestion rejects %s', async (_description, payload) => {
+    const registration = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(tokenA))
+        .send({ name: `trace-test-${Date.now()}-${Math.random()}` });
+
+    expect(registration.status).toBe(201);
+
+    const response = await request(app)
+        .post('/api/agent/traces')
+        .set('x-api-key', registration.body.api_key)
+        .send(payload);
+
+    expect(response.status).toBe(400);
+});
+
+test('agent accepts a valid trace and optional fields', async () => {
+    const registration = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(tokenA))
+        .send({ name: `valid-trace-${Date.now()}` });
+
+    expect(registration.status).toBe(201);
+
+    const response = await request(app)
+        .post('/api/agent/traces')
+        .set('x-api-key', registration.body.api_key)
+        .send({
+            method: 'get',
+            route: '/api/orders',
+            status_code: 200,
+            duration_ms: 25
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body.method).toBe('GET');
+    expect(response.body.route).toBe('/api/orders');
+    expect(response.body.status_code).toBe(200);
+    expect(response.body.duration_ms).toBe(25);
+    expect(response.body.host_id).toBe(registration.body.id);
+});
