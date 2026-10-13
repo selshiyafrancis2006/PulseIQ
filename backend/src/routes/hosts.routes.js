@@ -116,7 +116,11 @@ router.get('/', async (req, res) => {
 
 router.get('/:id', async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = Number(req.params.id);
+
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
 
         const result = await pool.query(
             `SELECT
@@ -241,17 +245,25 @@ router.patch('/:id', async (req, res) => {
             return res.status(404).json({ error: 'Host not found' });
         }
 
-        
-
-
 const { name, tags } = req.body || {};
 
-const nameError = validateHostName(name);
-if (nameError) {
-    return res.status(400).json({ error: nameError });
+if (name === undefined && tags === undefined) {
+    return res.status(400).json({
+        error: 'At least one of name or tags must be provided'
+    });
 }
 
-const trimmedName = name.trim();
+let trimmedName = null;
+
+if (name !== undefined) {
+    const nameError = validateHostName(name);
+
+    if (nameError) {
+        return res.status(400).json({ error: nameError });
+    }
+
+    trimmedName = name.trim();
+}
 
 let normalizedTags = null;
 
@@ -265,25 +277,27 @@ if (tags !== undefined) {
     normalizedTags = tagResult.tags;
 }
 
-        const duplicate = await pool.query(
-            'SELECT id FROM hosts WHERE user_id = $1 AND name = $2 AND id <> $3',
-            [req.user.id, trimmedName, hostId]
-        );
+        if (trimmedName !== null) {
+    const duplicate = await pool.query(
+        'SELECT id FROM hosts WHERE user_id = $1 AND name = $2 AND id <> $3',
+        [req.user.id, trimmedName, hostId]
+    );
 
-        if (duplicate.rows.length > 0) {
-            return res.status(409).json({
-                error: 'A host with this name already exists'
-            });
-        }
+    if (duplicate.rows.length > 0) {
+        return res.status(409).json({
+            error: 'A host with this name already exists'
+        });
+    }
+}
 
         const result = await pool.query(
             `UPDATE hosts
-             SET name = $1,
-                 tags = COALESCE($2::text[], tags)
-             WHERE id = $3
-               AND user_id = $4
-             RETURNING id, name, tags`,
-            [trimmedName, normalizedTags, hostId, req.user.id]
+ SET name = COALESCE($1, name),
+     tags = COALESCE($2::text[], tags)
+ WHERE id = $3
+   AND user_id = $4
+ RETURNING id, name, tags`,
+[trimmedName, normalizedTags, hostId, req.user.id]
         );
 
         if (result.rows.length === 0) {
@@ -352,7 +366,11 @@ router.post('/:id/regenerate-key', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
     try {
-        const { id } = req.params;
+        const id = Number(req.params.id);
+
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
 
         const result = await pool.query(
             `DELETE FROM hosts

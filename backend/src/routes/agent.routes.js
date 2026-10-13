@@ -123,6 +123,10 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         );
         const savedMetric = result.rows[0];
 
+        await pool.query(
+    'UPDATE hosts SET last_seen_at = NOW() WHERE id = $1',
+    [req.agentHost.id]
+);
         // Host metadata is optional and must never break metric ingestion
         const metadata = sanitizeMetadata(req.body.metadata);
         if (metadata) {

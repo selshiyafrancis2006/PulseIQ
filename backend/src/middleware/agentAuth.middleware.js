@@ -15,12 +15,11 @@ const authenticateAgent = async (req, res, next) => {
 
         // Find the host by the key's hash and mark it active in one query
         const result = await pool.query(
-            `UPDATE hosts
-             SET last_seen_at = NOW()
-             WHERE api_key_hash = $1
-             RETURNING id, name`,
-            [hashApiKey(apiKey)]
-        );
+    `SELECT id, name
+     FROM hosts
+     WHERE api_key_hash = $1`,
+    [hashApiKey(apiKey)]
+);
 
         if (result.rows.length === 0) {
             return res.status(401).json({

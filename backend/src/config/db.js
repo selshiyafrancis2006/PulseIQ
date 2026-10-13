@@ -10,11 +10,13 @@ const pool = new Pool ({
     port: process.env.DB_PORT,
 });
 
-pool.connect((err) => {
+pool.connect((err, client, release) => {
     if (err) {
         console.error('Database connection failed:', err);
     }
     else {
+        // Return the startup connection to the pool instead of holding it forever
+        release();
         console.log('Connected to Postgres Successfully!');
     }
 });

@@ -124,20 +124,23 @@ wss.on('connection', async (ws, req) => {
 });
 
 // Start metrics job
-(async () => {
-    try {
-        await import('./jobs/uptime.job.js');
-        console.log('Uptime job registered');
+// Start background jobs (skipped under test so they don't run or hold the process open)
+if (process.env.NODE_ENV !== 'test') {
+    (async () => {
+        try {
+            await import('./jobs/uptime.job.js');
+            console.log('Uptime job registered');
 
-        await import('./jobs/rollup.job.js');
-        console.log('Rollup job registered');
+            await import('./jobs/rollup.job.js');
+            console.log('Rollup job registered');
 
-        await import('./jobs/baseline.job.js');
-        console.log('Baseline job registered');
-    } catch (err) {
-        console.error('Failed to register background jobs:', err);
-    }
-})();
+            await import('./jobs/baseline.job.js');
+            console.log('Baseline job registered');
+        } catch (err) {
+            console.error('Failed to register background jobs:', err);
+        }
+    })();
+}
 
 
 module.exports = {
