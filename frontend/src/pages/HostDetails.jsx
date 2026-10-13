@@ -253,82 +253,86 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
         )}
       </div>
 
-            {/* HEALTH & ALERTS */}
-      <div>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-white">
-            Health & Alerts
-          </h2>
 
-          <span className="text-sm text-gray-400">
-            {alerts.length} alert{alerts.length !== 1 ? 's' : ''}
-          </span>
-        </div>
-
-        {alerts.length === 0 && (
-          <div className="rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] p-5 text-sm text-gray-400">
-            No recent alerts for this host.
-          </div>
-        )}
-
-        {alerts.length > 0 && (
-  <div className="space-y-2">
-    {alerts.map((alert) => (
-      <div
-        key={alert.id}
-        className="flex items-center justify-between gap-4 rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] px-5 py-4"
-      >
-        
+{/* HEALTH & ALERTS */}
 <div>
-  <p className="text-sm font-medium text-white">
-    {alert.metric_name === "host_offline"
-  ? new Date(alert.timestamp) < new Date(host.last_seen_at)
-    ? "HOST RECOVERED"
-    : "HOST OFFLINE"
-  : alert.metric_name}
-  </p>
+  <div className="mb-4 flex items-center justify-between">
+    <h2 className="text-lg font-semibold text-white">
+      Health & Alerts
+    </h2>
 
- {alert.metric_name === "host_offline" ? (
-  <p
-    className={`mt-1 text-xs ${
-      new Date(alert.timestamp) < new Date(host.last_seen_at)
-        ? "text-emerald-400"
-        : "text-red-400"
-    }`}
-  >
-    {new Date(alert.timestamp) < new Date(host.last_seen_at)
-      ? "The host has resumed sending heartbeats."
-      : "No recent heartbeat received; the host is considered offline."}
-  </p>
-) : (
-    <p className="mt-1 text-xs text-gray-500">
-      Current: {Number(alert.current_value).toFixed(1)}%
-      {" · "}
-      Threshold: {Number(alert.threshold_value).toFixed(1)}%
-    </p>
+    <span className="text-sm text-gray-400">
+      {alerts.length} alert{alerts.length !== 1 ? 's' : ''}
+    </span>
+  </div>
+
+  {alerts.length === 0 && (
+    <div className="rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] p-5 text-sm text-gray-400">
+      No recent alerts for this host.
+    </div>
+  )}
+
+  {alerts.length > 0 && (
+    <div className="space-y-2">
+
+{alerts.map((alert) => {
+  const isOfflineAlert = alert.metric_name === 'host_offline';
+  const isRecoveredAlert = alert.metric_name === 'host_recovered';
+
+  return (
+    <div
+      key={alert.id}
+      className="flex items-center justify-between gap-4 rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] px-5 py-4"
+    >
+      <div>
+        <p className="text-sm font-medium text-white">
+          {isOfflineAlert
+            ? 'HOST OFFLINE'
+            : isRecoveredAlert
+              ? 'HOST RECOVERED'
+              : alert.metric_name}
+        </p>
+
+        {isOfflineAlert ? (
+          <p className="mt-1 text-xs text-red-400">
+            No recent heartbeat was received; the host
+            was detected as offline at this time.
+          </p>
+        ) : isRecoveredAlert ? (
+          <p className="mt-1 text-xs text-emerald-400">
+            The host resumed sending heartbeats and was detected as recovered.
+          </p>
+        ) : (
+          <p className="mt-1 text-xs text-gray-500">
+            Current: {Number(alert.current_value).toFixed(1)}%
+            {' · '}
+            Threshold: {Number(alert.threshold_value).toFixed(1)}%
+          </p>
+        )}
+      </div>
+
+      <span
+        className={`rounded-full px-3 py-1 text-xs font-medium ${
+          isOfflineAlert
+            ? 'bg-red-500/10 text-red-400'
+            : isRecoveredAlert
+              ? 'bg-emerald-500/10 text-emerald-400'
+              : alert.severity === 'Critical'
+                ? 'bg-red-500/10 text-red-400'
+                : alert.severity === 'Warning'
+                  ? 'bg-yellow-500/10 text-yellow-400'
+                  : 'bg-gray-500/10 text-gray-400'
+        }`}
+      >
+        {isRecoveredAlert ? 'Recovered' : alert.severity}
+      </span>
+    </div>
+  );
+})}
+
+    </div>
   )}
 </div>
-
-        <span
-  className={`rounded-full px-3 py-1 text-xs font-medium ${
-    alert.metric_name === "host_offline" &&
-    new Date(alert.timestamp) < new Date(host.last_seen_at)
-      ? "bg-emerald-500/10 text-emerald-400"
-      : alert.severity === "Critical"
-        ? "bg-red-500/10 text-red-400"
-        : "bg-yellow-500/10 text-yellow-400"
-  }`}
->
-  {alert.metric_name === "host_offline" &&
-  new Date(alert.timestamp) < new Date(host.last_seen_at)
-    ? "Recovered"
-    : alert.severity}
-</span>
-      </div>
-    ))}
-  </div>
-)}
-      </div>
 
 <div className="mb-4 flex justify-end">
   <div className="flex rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] p-1">
@@ -347,6 +351,7 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
     ))}
   </div>
 </div>
+
 
       {/* HOST METRICS */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-5">

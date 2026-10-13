@@ -7,11 +7,10 @@ const OFFLINE_THRESHOLD_SECONDS = Math.max(
     Number.parseInt(process.env.OFFLINE_THRESHOLD_SECONDS, 10) || 30
 );
 
-const recoveredHosts = new Set();
-
 const {
     checkMonitor
 } = require('../services/uptime.service');
+
 
 
 
@@ -23,50 +22,33 @@ async function checkHostStatus() {
     `);
 
     for (const host of result.rows) {
-                             const isOffline =
-            Date.now() - new Date(host.last_seen_at).getTime() >
+        const lastSeenMs = new Date(host.last_seen_at).getTime();
+
+        const isOffline =
+            Date.now() - lastSeenMs >
             OFFLINE_THRESHOLD_SECONDS * 1000;
 
-        if (isOffline) {
-            recoveredHosts.delete(host.id);
-        }
-
-        const existing = await db.query(`
-            SELECT id, timestamp
+        // Find the latest persisted host lifecycle event.
+        const eventResult = await db.query(`
+            SELECT id, metric_name, timestamp
             FROM alerts
             WHERE host_id = $1
-              AND metric_name = 'host_offline'
-            ORDER BY timestamp DESC
+              AND metric_name IN ('host_offline', 'host_recovered')
+            ORDER BY timestamp DESC, id DESC
             LIMIT 1
         `, [host.id]);
 
-        const lastAlert = existing.rows[0];
+        const latestEvent = eventResult.rows[0];
 
-        
-        if (!isOffline) {
-            if (
-                lastAlert &&
-                new Date(host.last_seen_at).getTime() >
-                    new Date(lastAlert.timestamp).getTime()
-            ) {
-                if (!recoveredHosts.has(host.id)) {
-                    console.log(
-                        `Host recovered (host_id: ${host.id}, name: ${host.name})`
-                    );
-
-                    recoveredHosts.add(host.id);
-                }
+        if (isOffline) {
+            // An existing offline event means this outage is
+            // already recorded.
+            if (latestEvent?.metric_name === 'host_offline') {
+                continue;
             }
 
-            continue;
-        }
-
-        const alreadyOffline =
-            lastAlert &&
-            new Date(lastAlert.timestamp).getTime() >
-                new Date(host.last_seen_at).getTime();
-
-        if (!alreadyOffline) {
+            // Insert an offline event only if the host is still
+            // stale and no unresolved outage already exists.
             const inserted = await db.query(`
                 INSERT INTO alerts (
                     metric_name,
@@ -81,20 +63,24 @@ async function checkHostStatus() {
                     1,
                     0,
                     'Critical',
-                    id,
+                    h.id,
                     NOW()
-                FROM hosts
-                WHERE id = $1
-                  AND last_seen_at < NOW() - ($2 * INTERVAL '1 second')
+                FROM hosts h
+                WHERE h.id = $1
+                  AND h.last_seen_at <
+                      NOW() - ($2 * INTERVAL '1 second')
                   AND NOT EXISTS (
                       SELECT 1
-                      FROM alerts
-                      WHERE host_id = $1
-                        AND metric_name = 'host_offline'
-                        AND timestamp > (
-                            SELECT last_seen_at
-                            FROM hosts
-                            WHERE id = $1
+                      FROM alerts o
+                      WHERE o.host_id = h.id
+                        AND o.metric_name = 'host_offline'
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM alerts r
+                            WHERE r.host_id = h.id
+                              AND r.metric_name = 'host_recovered'
+                              AND (r.timestamp, r.id) >
+                                  (o.timestamp, o.id)
                         )
                   )
                 RETURNING id
@@ -105,9 +91,66 @@ async function checkHostStatus() {
                     `Host offline alert created (host_id: ${host.id})`
                 );
             }
+
+            continue;
+        }
+
+        // A newer heartbeat after an offline event means the
+        // host has returned. Persist one recovery event.
+        if (
+            latestEvent?.metric_name === 'host_offline' &&
+            lastSeenMs > new Date(latestEvent.timestamp).getTime()
+        ) {
+            const recovered = await db.query(`
+                INSERT INTO alerts (
+                    metric_name,
+                    metric_value,
+                    average_value,
+                    severity,
+                    host_id,
+                    timestamp
+                )
+                SELECT
+                    'host_recovered',
+                    0,
+                    0,
+                    'Info',
+                    h.id,
+                    NOW()
+                FROM hosts h
+                WHERE h.id = $1
+                  AND h.last_seen_at > $2
+                  AND EXISTS (
+                      SELECT 1
+                      FROM alerts o
+                      WHERE o.id = $3
+                        AND o.host_id = h.id
+                        AND o.metric_name = 'host_offline'
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM alerts r
+                            WHERE r.host_id = h.id
+                              AND r.metric_name = 'host_recovered'
+                              AND (r.timestamp, r.id) >
+                                  (o.timestamp, o.id)
+                        )
+                  )
+                RETURNING id
+            `, [
+                host.id,
+                latestEvent.timestamp,
+                latestEvent.id
+            ]);
+
+            if (recovered.rowCount > 0) {
+                console.log(
+                    `Host recovered (host_id: ${host.id}, name: ${host.name})`
+                );
+            }
         }
     }
 }
+
 
 
 cron.schedule('*/30 * * * * *', async () => {
