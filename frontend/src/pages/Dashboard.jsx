@@ -4,6 +4,7 @@ import { apiFetch } from '../utils/apiFetch'
 import { Line } from 'react-chartjs-2'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
+import { formatMemory, formatUptime } from '../utils/hostStatus'
 import { API_BASE_URL, WS_URL } from '../config/api'
 import {
   Chart as ChartJS,
