@@ -2,7 +2,8 @@ const cron = require('node-cron');
 const {
     rollup5Minute,
     rollup1Hour,
-    cleanupRawMetrics
+    cleanupRawMetrics,
+    cleanupHistoricalData
 } = require('../services/metricRollup.service');
 
 // 5-minute rollup — runs every 5 minutes
@@ -25,12 +26,21 @@ cron.schedule('0 * * * *', async () => {
     }
 });
 
-// Raw metric retention cleanup — runs once a day at 3 AM
+ // Daily retention cleanup — runs at 3 AM
 cron.schedule('0 3 * * *', async () => {
     try {
-        const deleted = await cleanupRawMetrics();
-        console.log(`Retention cleanup: removed ${deleted} raw metric rows older than 3 days`);
+        const deletedRawMetrics = await cleanupRawMetrics();
+        console.log(
+            `Retention cleanup: removed ${deletedRawMetrics} raw metric rows older than 3 days`
+        );
     } catch (err) {
-        console.error('Retention cleanup error:', err);
+        console.error('Raw metric retention cleanup error:', err);
+    }
+
+    try {
+        const deletedCounts = await cleanupHistoricalData();
+        console.log('Historical retention cleanup complete:', deletedCounts);
+    } catch (err) {
+        console.error('Historical retention cleanup error:', err);
     }
 });

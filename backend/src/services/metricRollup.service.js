@@ -1,6 +1,6 @@
 const pool = require('../config/db');
 
-// Aggregates raw `metrics` rows from the last 15 minutes into 5-minute
+// Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
 // buckets. Uses ON CONFLICT to upsert, so it's safe to re-run every 5
 // minutes — the current (partial) bucket gets refined until it's complete,
 // and re-processing already-complete buckets is a no-op.
@@ -107,8 +107,44 @@ async function cleanupRawMetrics() {
     return result.rowCount;
 }
 
+
+async function cleanupHistoricalData() {
+    const cleanupQueries = [
+        {
+            name: '5-minute rollups',
+            sql: `DELETE FROM metric_rollups_5m
+                  WHERE bucket_start < NOW() - INTERVAL '8 days'`
+        },
+        {
+            name: 'hourly rollups',
+            sql: `DELETE FROM metric_rollups_1h
+                  WHERE bucket_start < NOW() - INTERVAL '90 days'`
+        },
+        {
+            name: 'anomalies',
+            sql: `DELETE FROM anomalies
+                  WHERE timestamp < NOW() - INTERVAL '30 days'`
+        },
+        {
+            name: 'traces',
+            sql: `DELETE FROM traces
+                  WHERE timestamp < NOW() - INTERVAL '7 days'`
+        }
+    ];
+
+    const deletedCounts = {};
+
+    for (const query of cleanupQueries) {
+        const result = await pool.query(query.sql);
+        deletedCounts[query.name] = result.rowCount;
+    }
+
+    return deletedCounts;
+}
+
 module.exports = {
     rollup5Minute,
     rollup1Hour,
-    cleanupRawMetrics
+    cleanupRawMetrics,
+    cleanupHistoricalData
 };
