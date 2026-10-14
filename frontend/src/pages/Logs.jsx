@@ -10,7 +10,6 @@ import LogDetails from "../components/logs/LogDetails";
 export default function Logs() {
   const {
     logs,
-    loading,
     error,
     refresh,
   } = useLogs();

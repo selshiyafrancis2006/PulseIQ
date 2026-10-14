@@ -31,12 +31,6 @@ const ProtectedRoute = ({ children }) => {
   return token ? children : <Navigate to="/login" />
 }
 
-const withLayout = (Component) => (
-  <DashboardLayout>
-    <Component />
-  </DashboardLayout>
-)
-
 export default function App() {
 
   return (

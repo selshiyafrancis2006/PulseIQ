@@ -36,10 +36,8 @@ export default function App() {
   const [alerts, setAlerts] = useState([])
   const [connected, setConnected] = useState(false)
   const [lastUpdated, setLastUpdated] = useState('')
-  const [alertRules, setAlertRules] = useState([])
   const [timeRange, setTimeRange] = useState('1m')
   const [systemInfo, setSystemInfo] = useState(null)
-  const [monitors, setMonitors] = useState([]);
   const { hosts, selectedHostId, setSelectedHostId } = useHosts()
 
   const navigate = useNavigate()
@@ -92,9 +90,9 @@ export default function App() {
               new Date().toLocaleTimeString()
             );
           }
-        } catch (err) {
-          console.error('Failed to parse WebSocket message:', event.data);
-        }
+        } catch {
+  console.error('Failed to parse WebSocket message:', event.data);
+}
       };
 
       // FIX: Log useful details instead of the raw Event object
@@ -152,6 +150,35 @@ export default function App() {
     };
 
   }, [selectedHostId, navigate]);
+
+    /* =========================
+     HISTORICAL METRICS
+  ========================= */
+
+  useEffect(() => {
+    if (!selectedHostId) {
+      return;
+    }
+
+    const fetchMetrics = async () => {
+      try {
+        const res = await apiFetch(
+          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
+        );
+
+        if (!res.ok) {
+          throw new Error(`Request failed (${res.status})`);
+        }
+
+        const data = await res.json();
+        setMetrics(Array.isArray(data) ? data.reverse() : []);
+      } catch (err) {
+        console.error('Failed to fetch metrics:', err);
+      }
+    };
+
+    fetchMetrics();
+  }, [timeRange, selectedHostId]);
 
   /* =========================
      ALERTS FETCH
@@ -258,63 +285,6 @@ export default function App() {
   }, [selectedHostId])
 
   /* =========================
-   ALERT RULES FETCH
-========================= */
-
-useEffect(() => {
-
-  const fetchRules = async () => {
-    try {
-      const res = await apiFetch(`${API_BASE_URL}/api/alert-rules`)
-      const data = await res.json()
-      setAlertRules(data)
-    } catch (err) {
-      console.error('Failed to fetch alert rules:', err)
-    }
-  }
-
-  fetchRules()
-
-}, [])
-
-  /* =========================
-     HISTORICAL METRICS
-  ========================= */
-
-  useEffect(() => {
-
-    if (!selectedHostId) {
-      return
-    }
-
-    const fetchMetrics = async () => {
-
-      try {
-
-        const res = await apiFetch(
-          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
-        )
-
-        const data = await res.json()
-
-        setMetrics(data.reverse())
-
-      } catch (err) {
-
-        console.error(
-          'Failed to fetch metrics:',
-          err
-        )
-
-      }
-
-    }
-
-    fetchMetrics()
-
-  }, [timeRange, selectedHostId])
-
-  /* =========================
      CHART DATA
   ========================= */
 
@@ -396,39 +366,9 @@ useEffect(() => {
 
   }
 
-  useEffect(() => {
-
-  const fetchMonitors = async () => {
-
-    try {
-
-      const response = await apiFetch(
-        `${API_BASE_URL}/api/monitors/status`
-      );
-
-      const data = await response.json();
-
-      setMonitors(data);
-
-    } catch (error) {
-
-      console.error(error);
-
-    }
-
-  };
-
-  fetchMonitors();
-
-}, []);
   /* =========================
      HELPERS
   ========================= */
-
-  const isWarning = (
-    value,
-    threshold
-  ) => parseFloat(value) > threshold
 
   const getSystemHealth = (
     cpu,
@@ -714,7 +654,6 @@ useEffect(() => {
         ].map(({
           label,
           key,
-          threshold,
           unit,
           color
         }) => (

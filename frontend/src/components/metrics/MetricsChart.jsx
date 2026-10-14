@@ -9,6 +9,7 @@ import {
   Filler,
   Legend
 } from 'chart.js'
+import { useState } from 'react'
 
 ChartJS.register(
   CategoryScale,
@@ -46,15 +47,17 @@ export default function MetricsChart({
   timeRange
 }) {
 
+  const [now] = useState(() => Date.now())
+
   if (!metrics.length) return null
 
-  const range = RANGES[timeRange]
+   const range = RANGES[timeRange]
 
   // Unknown range: show everything the API returned rather than nothing
   const filteredMetrics = range
     ? metrics.filter(metric =>
         new Date(metric.timestamp).getTime() >=
-        Date.now() - range.minutes * 60 * 1000
+                now - range.minutes * 60 * 1000
       )
     : metrics
 

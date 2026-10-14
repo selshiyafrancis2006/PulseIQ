@@ -8,6 +8,7 @@ function MonitorCard({ monitor }) {
   const [history, setHistory] = useState([]);
   const [uptime, setUptime] = useState(null);
   const [events, setEvents] = useState([]);
+  const [now] = useState(() => Date.now());
 
   useEffect(() => {
     const fetchData = async () => {
@@ -43,7 +44,7 @@ function MonitorCard({ monitor }) {
 
   const getLiveStatus = () => {
     if (!monitor.checked_at) return 'STALE';
-    const diff = Date.now() - new Date(monitor.checked_at).getTime();
+    const diff = now - new Date(monitor.checked_at).getTime();
     return diff < 120000 ? 'LIVE' : 'STALE';
   };
 

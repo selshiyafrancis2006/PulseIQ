@@ -33,7 +33,7 @@ export default function Login() {
       localStorage.setItem('token', data.token)
       navigate('/dashboard')
 
-    } catch (err) {
+        } catch {
       setError('Cannot connect to server')
       setLoading(false)
     }

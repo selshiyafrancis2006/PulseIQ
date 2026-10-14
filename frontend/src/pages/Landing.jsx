@@ -21,42 +21,6 @@ export default function Landing() {
     return () => observer.disconnect()
   }, [])
 
-  const features = [
-    {
-      title: 'Real-time Metrics',
-      desc: 'Watch CPU, memory, disk and network usage update live every 5 seconds. Never miss a spike.',
-      color: 'text-blue-400',
-      border: 'border-blue-900'
-    },
-    {
-      title: 'Anomaly Detection',
-      desc: 'Moving average algorithm detects abnormal spikes before they crash your system.',
-      color: 'text-purple-400',
-      border: 'border-purple-900'
-    },
-    {
-      title: 'Instant Alerts',
-      desc: 'Get notified the moment something goes wrong — before your users notice.',
-      color: 'text-red-400',
-      border: 'border-red-900'
-    },
-    {
-      title: 'Live Dashboard',
-      desc: 'Beautiful charts showing your system health in real time. No page refresh needed.',
-      color: 'text-green-400',
-      border: 'border-green-900'
-    }
-  ]
-
-  const comparison = [
-    { feature: 'Price', datadog: '$30/host/month', pulseiq: 'Free' },
-    { feature: 'Self-hosted', datadog: '❌', pulseiq: '✅' },
-    { feature: 'Open source', datadog: '❌', pulseiq: '✅' },
-    { feature: 'Real-time metrics', datadog: '✅', pulseiq: '✅' },
-    { feature: 'Anomaly detection', datadog: '✅', pulseiq: '✅' },
-    { feature: 'Data privacy', datadog: 'Cloud only', pulseiq: 'Your server' },
-  ]
-
   return (
     <div className="min-h-screen bg-[#050508] text-white">
 

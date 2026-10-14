@@ -125,7 +125,6 @@ const {
   hosts,
   loading,
   refreshing,
-  error: hostsError,
   refetch,
   registerHost,
   updateHost,
