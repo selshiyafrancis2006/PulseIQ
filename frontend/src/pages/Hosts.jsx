@@ -146,6 +146,7 @@ const {
 
   // Tag filter
   const [filterInput, setFilterInput] = useState('')
+  const [searchInput, setSearchInput] = useState('')
 
   // Edit host
   const [hostToEdit, setHostToEdit] = useState(null)
@@ -352,6 +353,27 @@ const closeModal = () => {
         </div>
       </div>
 
+      {/* HOST NAME SEARCH */}
+<div className="mb-4">
+  <input
+    type="text"
+    value={searchInput}
+    onChange={(e) => setSearchInput(e.target.value)}
+    placeholder="Search hosts by name..."
+    aria-label="Search hosts by name"
+    className="
+      w-full sm:w-80
+      bg-[#1a1a1a]
+      border border-[#2a2a2a]
+      rounded-lg
+      px-3 py-2
+      text-sm
+      outline-none
+      focus:border-emerald-500
+    "
+  />
+</div>
+
       {/* TAG FILTER */}
       <form onSubmit={applyFilter} className="flex items-center gap-3">
         <input
@@ -448,9 +470,26 @@ const closeModal = () => {
           </tr>
         </thead>
 
-        <tbody>
-          {hosts.map((host) => {
-            const online = isOnline(host.last_seen_at);
+       <tbody>
+  {hosts.filter((host) =>
+    (host.name || '')
+      .toLowerCase()
+      .includes(searchInput.trim().toLowerCase())
+  ).length === 0 ? (
+    <tr>
+      <td colSpan={9} className="px-5 py-8 text-center text-sm text-gray-500">
+        No hosts match your search.
+      </td>
+    </tr>
+  ) : (
+    hosts
+      .filter((host) =>
+        (host.name || '')
+          .toLowerCase()
+          .includes(searchInput.trim().toLowerCase())
+      )
+      .map((host) => {
+        const online = isOnline(host.last_seen_at);
 
             return (
               <tr
@@ -556,7 +595,8 @@ const closeModal = () => {
                 </td>
               </tr>
             );
-          })}
+                   })
+      )}
         </tbody>
       </table>
     </div>
