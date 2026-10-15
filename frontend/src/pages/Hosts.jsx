@@ -125,6 +125,7 @@ const {
   hosts,
   loading,
   refreshing,
+  error: loadError,
   refetch,
   registerHost,
   updateHost,
@@ -420,9 +421,9 @@ const closeModal = () => {
 {/* HOSTS LIST */}
 <div className="w-full min-w-0 rounded-xl border border-[#2a2a2a] bg-[#1a1a1a]">
 
-  {error && (
+  {loadError && (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2a2a2a] bg-red-950/20 px-5 py-4">
-      <p className="text-sm text-red-300">{error}</p>
+      <p className="text-sm text-red-300">{loadError}</p>
       <button
         type="button"
         onClick={() => refetch(tagFilter)}
@@ -434,7 +435,7 @@ const closeModal = () => {
     </div>
   )}
 
-  {refreshing && !loading && !error && (
+  {refreshing && !loading && !loadError && (
     <div className="border-b border-[#2a2a2a] px-5 py-2 text-xs text-gray-500">
       Refreshing host data...
     </div>
@@ -442,7 +443,7 @@ const closeModal = () => {
 
   {loading ? (
     <p className="p-5 text-sm text-gray-500">Loading hosts...</p>
-  ) : error && hosts.length === 0 ? (
+    ) : loadError && hosts.length === 0 ? (
     <div className="p-5 text-sm text-gray-400">
       Unable to display hosts until the connection is restored.
     </div>
