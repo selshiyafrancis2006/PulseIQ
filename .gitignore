@@ -1,3 +1,14 @@
 node_modules/ 
 .env
 dist/
+# Database backups and dumps
+backup-*.sql
+*-backup.sql
+*.dump
+*.bak
+*.backup
+*.sql.gz
+
+# Temporary diagnostic files
+hosts-diff.txt
+structure.txt
