@@ -324,3 +324,58 @@ test('agent accepts a valid trace and optional fields', async () => {
     expect(response.body.duration_ms).toBe(25);
     expect(response.body.host_id).toBe(registration.body.id);
 });
+
+test.each(['abc', '0', '-1', '1.5'])(
+    'PATCH host rejects invalid ID %s',
+    async (id) => {
+        const response = await request(app)
+            .patch(`/api/hosts/${id}`)
+            .set(authHeader(tokenA))
+            .send({ name: 'invalid-id-test' });
+
+        expect(response.status).toBe(404);
+        expect(response.body.error).toBe('Host not found');
+    }
+);
+
+test.each(['abc', '0', '-1', '1.5'])(
+    'key regeneration rejects invalid host ID %s',
+    async (id) => {
+        const response = await request(app)
+            .post(`/api/hosts/${id}/regenerate-key`)
+            .set(authHeader(tokenA));
+
+        expect(response.status).toBe(404);
+        expect(response.body.error).toBe('Host not found');
+    }
+);
+
+test.each([
+    ['empty name', ''],
+    ['whitespace-only name', '   '],
+    ['name exceeding 255 characters', 'a'.repeat(256)],
+    ['name containing a control character', 'invalid\nname']
+])('host registration rejects %s', async (_description, name) => {
+    const response = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(tokenA))
+        .send({ name });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['more than 20 tags', Array.from({ length: 21 }, (_, i) => `tag:${i}`)],
+    ['a tag exceeding 64 characters', ['a'.repeat(65)]],
+    ['a tag containing a control character', ['invalid\n tag']]
+])('host registration rejects %s', async (_description, tags) => {
+    const response = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(tokenA))
+        .send({
+            name: `validation-test-${Date.now()}-${Math.random()}`,
+            tags
+        });
+
+    expect(response.status).toBe(400);
+});
