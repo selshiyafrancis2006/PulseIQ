@@ -10,13 +10,29 @@ const {
     checkHostStatus
 } = require('../services/hostStatus.service');
 
-cron.schedule('*/30 * * * * *', async () => {
+// Host status: every 10s, so an outage is detected within roughly
+// OFFLINE_THRESHOLD_SECONDS + 10s. The guard prevents overlapping runs.
+let hostCheckRunning = false;
+
+cron.schedule('*/10 * * * * *', async () => {
+    if (hostCheckRunning) return;
+    hostCheckRunning = true;
+
     try {
-        console.log('Checking offline hosts...');
         await checkHostStatus();
     } catch (error) {
         console.error('Host status check error:', error);
+    } finally {
+        hostCheckRunning = false;
     }
+});
+
+// Uptime monitors: unchanged cadence (every 30s).
+let monitorCheckRunning = false;
+
+cron.schedule('*/30 * * * * *', async () => {
+    if (monitorCheckRunning) return;
+    monitorCheckRunning = true;
 
     try {
         console.log('Running uptime checks...');
@@ -39,5 +55,7 @@ cron.schedule('*/30 * * * * *', async () => {
         }
     } catch (error) {
         console.error('Uptime job error:', error);
+    } finally {
+        monitorCheckRunning = false;
     }
 });

@@ -1,10 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { apiFetch } from '../utils/apiFetch';
 import { API_BASE_URL } from '../config/api';
 import MetricsChart from '../components/metrics/MetricsChart';
 import {
-  isOnline,
+  getHostStatus,
+  STATUS_META,
   timeAgo,
   formatUptime,
   formatMemory,
@@ -61,13 +62,24 @@ function percent(value) {
 export default function HostDetails() {
   const { id } = useParams();
   const [host, setHost] = useState(null);
+  const currentHostIdRef = useRef(Number(id));
+  currentHostIdRef.current = Number(id);
+
   const [metrics, setMetrics] = useState([]);
   const [alerts, setAlerts] = useState([]);
+  const [hasMoreAlerts, setHasMoreAlerts] = useState(true);
+  const [loadingMoreAlerts, setLoadingMoreAlerts] = useState(false);
   const [timeRange, setTimeRange] = useState('1h');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
+
+if (host?.id !== Number(id)) {
+  setAlerts([]);
+  setHasMoreAlerts(true);
+  setLoadingMoreAlerts(false);
+}
 
     const fetchHost = async () => {
       try {
@@ -89,19 +101,28 @@ export default function HostDetails() {
           ? await metricsResponse.json()
           : [];
 
-        const alertsResponse = await apiFetch(
-  `${API_BASE_URL}/api/alerts?host_id=${id}`
+const alertsResponse = await apiFetch(
+  `${API_BASE_URL}/api/alerts?host_id=${id}&limit=20&offset=0`
 );
 
 const alertsData = alertsResponse.ok
   ? await alertsResponse.json()
   : [];
 
-        if (!active) return;
+if (!active || Number(id) !== currentHostIdRef.current) return;
 
-        setHost(hostData);
+setHost(hostData);
 setMetrics(Array.isArray(metricsData) ? metricsData : []);
-setAlerts(Array.isArray(alertsData) ? alertsData : []);
+setAlerts((previous) => {
+  const latest = Array.isArray(alertsData) ? alertsData : [];
+  const latestIds = new Set(latest.map((alert) => alert.id));
+
+  return [
+    ...latest,
+    ...previous.filter((alert) => !latestIds.has(alert.id)),
+  ];
+});
+setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
       } catch (error) {
         console.error('Failed to fetch host:', error);
       } finally {
@@ -121,6 +142,47 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
     };
   }, [id, timeRange]);
 
+
+  const loadMoreAlerts = async () => {
+    const requestedHostId = Number(id);
+
+    if (loadingMoreAlerts || !hasMoreAlerts) return;
+
+    setLoadingMoreAlerts(true);
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/alerts?host_id=${requestedHostId}&limit=20&offset=${alerts.length}`
+      );
+
+      if (!response.ok) {
+        throw new Error('Failed to load older alerts');
+      }
+
+      const olderAlerts = await response.json();
+
+      if (requestedHostId !== currentHostIdRef.current) return;
+      if (!Array.isArray(olderAlerts)) return;
+
+      setAlerts((previous) => {
+        const existingIds = new Set(previous.map((alert) => alert.id));
+        const newAlerts = olderAlerts.filter(
+          (alert) => !existingIds.has(alert.id)
+        );
+
+        return [...previous, ...newAlerts];
+      });
+
+      setHasMoreAlerts(olderAlerts.length === 20);
+    } catch (error) {
+      console.error('Failed to load older alerts:', error);
+    } finally {
+      if (requestedHostId === currentHostIdRef.current) {
+        setLoadingMoreAlerts(false);
+      }
+    }
+  };
+
   if (loading) {
     return (
       <div className="p-6 text-gray-400">
@@ -137,7 +199,9 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
     );
   }
 
-  const online = isOnline(host.last_seen_at);
+    const status = getHostStatus(host);
+  const meta = STATUS_META[status];
+  const online = status === 'online';
 
   return (
     <div className="space-y-8 p-6 text-white">
@@ -157,13 +221,9 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
           </h1>
 
           <span
-            className={`rounded-full px-3 py-1 text-xs font-medium ${
-              online
-                ? 'bg-emerald-500/10 text-emerald-400'
-                : 'bg-red-500/10 text-red-400'
-            }`}
+            className={`rounded-full px-3 py-1 text-xs font-medium ${meta.badge}`}
           >
-            ● {online ? 'ONLINE' : 'OFFLINE'}
+            ● {meta.label.toUpperCase()}
           </span>
 
           <span className="text-sm text-gray-500">
@@ -229,10 +289,16 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
               value={host.agent_version}
               mono
             />
-            <InfoRow
+                        <InfoRow
               label="Uptime"
-              value={online ? formatUptime(host.boot_time) : 'Offline'}
-              valueClassName={online ? '' : 'text-red-400'}
+              value={
+                online
+                  ? formatUptime(host.boot_time)
+                  : status === 'pending'
+                    ? 'Waiting for first heartbeat'
+                    : 'Offline'
+              }
+              valueClassName={status === 'offline' ? 'text-red-400' : ''}
             />
             <InfoRow
               label="Registered"
@@ -329,12 +395,24 @@ setAlerts(Array.isArray(alertsData) ? alertsData : []);
     </div>
   );
 })}
+    </div>
+  )}
 
+  {hasMoreAlerts && alerts.length > 0 && (
+    <div className="mt-4 flex justify-center">
+      <button
+        onClick={loadMoreAlerts}
+        disabled={loadingMoreAlerts}
+        className="rounded-lg border border-[#2a2a2a] px-4 py-2 text-sm text-gray-300 transition hover:border-emerald-500/50 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        {loadingMoreAlerts ? 'Loading older alerts...' : 'Load More Alerts'}
+      </button>
     </div>
   )}
 </div>
 
 <div className="mb-4 flex justify-end">
+
   <div className="flex rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] p-1">
     {['1h', '6h', '24h'].map((range) => (
       <button

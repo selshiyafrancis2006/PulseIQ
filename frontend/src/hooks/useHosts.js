@@ -85,6 +85,7 @@ export default function useHosts() {
         tags: data.tags || [],
         created_at: data.created_at,
         last_seen_at: null,
+        status: 'pending',
       },
     ]);
 

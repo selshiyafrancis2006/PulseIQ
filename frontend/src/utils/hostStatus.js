@@ -1,8 +1,29 @@
-export const ONLINE_THRESHOLD_MS = 30000
+// Status is computed by the backend (/api/hosts returns `status`).
+// The UI only displays it; there is no threshold in the frontend anymore.
 
-export function isOnline(lastSeenAt) {
-  if (!lastSeenAt) return false
-  return Date.now() - new Date(lastSeenAt).getTime() < ONLINE_THRESHOLD_MS
+export const STATUS_META = {
+  online: {
+    label: 'Online',
+    text: 'text-emerald-400',
+    dot: 'bg-emerald-400',
+    badge: 'bg-emerald-500/10 text-emerald-400',
+  },
+  offline: {
+    label: 'Offline',
+    text: 'text-red-400',
+    dot: 'bg-red-500',
+    badge: 'bg-red-500/10 text-red-400',
+  },
+  pending: {
+    label: 'Pending',
+    text: 'text-yellow-400',
+    dot: 'bg-yellow-500',
+    badge: 'bg-yellow-500/10 text-yellow-400',
+  },
+}
+
+export function getHostStatus(host) {
+  return STATUS_META[host?.status] ? host.status : 'pending'
 }
 
 export function timeAgo(dateString) {

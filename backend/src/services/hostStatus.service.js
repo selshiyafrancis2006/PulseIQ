@@ -1,28 +1,26 @@
 const db = require('../config/db');
 
-const OFFLINE_THRESHOLD_SECONDS = Math.max(
-    30,
-    Number.parseInt(process.env.OFFLINE_THRESHOLD_SECONDS, 10) || 30
-);
+const {
+    OFFLINE_THRESHOLD_SECONDS,
+    statusSql
+} = require('../utils/hostStatus');
 
-// Records one host_offline event per outage and one host_recovered event
-// when the host reports again. Safe to run repeatedly: it never duplicates
-// an event for the same outage.
 async function checkHostStatus() {
-    // Staleness is decided in SQL (NOW() vs last_seen_at, same clock and
-    // timezone) so it does not depend on the Node process timezone.
+    // Offline is decided in SQL with the same rule the hosts API uses,
+    // so the alerts and the UI can never disagree.
     const result = await db.query(`
         SELECT
             id,
             name,
             last_seen_at,
-            last_seen_at < NOW() - ($1 * INTERVAL '1 second') AS is_offline
+            (${statusSql('hosts', 1)}) = 'offline' AS is_offline
         FROM hosts
         WHERE last_seen_at IS NOT NULL
     `, [OFFLINE_THRESHOLD_SECONDS]);
 
     for (const host of result.rows) {
         const lastSeenMs = new Date(host.last_seen_at).getTime();
+        const isOffline = host.is_offline;
 
         // Find the latest persisted host lifecycle event.
         const eventResult = await db.query(`
@@ -36,7 +34,7 @@ async function checkHostStatus() {
 
         const latestEvent = eventResult.rows[0];
 
-        if (host.is_offline) {
+        if (isOffline) {
             // An existing offline event means this outage is
             // already recorded.
             if (latestEvent?.metric_name === 'host_offline') {
@@ -147,7 +145,4 @@ async function checkHostStatus() {
     }
 }
 
-module.exports = {
-    checkHostStatus,
-    OFFLINE_THRESHOLD_SECONDS
-};
+module.exports = { checkHostStatus };
