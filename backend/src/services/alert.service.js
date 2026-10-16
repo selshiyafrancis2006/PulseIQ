@@ -1,9 +1,5 @@
+﻿
 const pool = require('../config/db');
-
-// store consecutive breaches in memory, keyed per host+metric so one
-// host's breach streak never affects another host's
-const breachState = new Map();
-const activeBreaches = new Set();
 
 function getAlertSeverity(metricName, value) {
     const percentageMetrics = new Set([
@@ -19,31 +15,30 @@ function getAlertSeverity(metricName, value) {
     return 'Warning';
 }
 
-function breachKey(hostId, metricName) {
-    return `${hostId ?? 'unknown'}:${metricName}`;
-}
 
 async function evaluateAlerts(metric) {
+    let client;
+
     try {
+        client = await pool.connect();
+        await client.query('BEGIN');
 
-       const rulesResult = await pool.query(`
-    SELECT *
-    FROM alert_rules
-    WHERE is_active = true
-      AND user_id = (
-          SELECT user_id
-          FROM hosts
-          WHERE id = $1
-      )
-`, [metric.host_id]);
+        const rulesResult = await client.query(`
+            SELECT ar.*
+            FROM alert_rules ar
+            JOIN hosts h ON h.user_id = ar.user_id
+            WHERE h.id = $1
+              AND ar.is_active = true
+            ORDER BY ar.id
+            FOR UPDATE OF ar
+        `, [metric.host_id]);
 
-        const rules = rulesResult.rows;
-
-        for (const rule of rules) {
-
+        for (const rule of rulesResult.rows) {
             const value = metric[rule.metric_name];
 
-            if (value === undefined) continue;
+            if (value === undefined || value === null || !Number.isFinite(Number(value))) {
+                continue;
+            }
 
             let conditionMet = false;
 
@@ -60,56 +55,108 @@ async function evaluateAlerts(metric) {
                 case '<=':
                     conditionMet = value <= rule.threshold;
                     break;
+                default:
+                    continue;
             }
 
-            const key = breachKey(metric.host_id, rule.metric_name);
+            await client.query(`
+                INSERT INTO alert_rule_states (
+                    host_id,
+                    rule_id,
+                    consecutive_breaches,
+                    is_breaching,
+                    updated_at
+                )
+                VALUES ($1, $2, 0, false, NOW())
+                ON CONFLICT (host_id, rule_id) DO NOTHING
+            `, [metric.host_id, rule.id]);
 
-if (conditionMet) {
-    if (activeBreaches.has(key)) {
-        continue;
-    }
+            const lockedState = await client.query(`
+                SELECT consecutive_breaches, is_breaching
+                FROM alert_rule_states
+                WHERE host_id = $1 AND rule_id = $2
+                FOR UPDATE
+            `, [metric.host_id, rule.id]);
 
-    const count = (breachState.get(key) || 0) + 1;
-    breachState.set(key, count);
+            const state = lockedState.rows[0];
 
-    if (count >= rule.duration) {
-        const severity = getAlertSeverity(rule.metric_name, value);
+            if (conditionMet) {
+                if (state.is_breaching) {
+                    continue;
+                }
 
-        await pool.query(`
-            INSERT INTO alerts (
-                metric_name,
-                metric_value,
-                average_value,
-                severity,
-                host_id,
-                timestamp
-            )
-            VALUES ($1, $2, $3, $4, $5, NOW())
-        `, [
-            rule.metric_name,
-            value,
-            rule.threshold,
-            severity,
-            metric.host_id ?? null
-        ]);
+                const count = state.consecutive_breaches + 1;
 
-        activeBreaches.add(key);
-        breachState.set(key, 0);
+                if (count >= Math.max(1, rule.duration || 1)) {
+                    const severity = getAlertSeverity(rule.metric_name, Number(value));
 
-        console.log(
-            `Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id ?? 'unknown'})`
-        );
-    }
-} else {
-    breachState.set(key, 0);
-    activeBreaches.delete(key);
-}
+                    await client.query(`
+                        INSERT INTO alerts (
+                            metric_name,
+                            metric_value,
+                            average_value,
+                            severity,
+                            host_id,
+                            timestamp
+                        )
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                    `, [
+                        rule.metric_name,
+                        Number(value),
+                        rule.threshold,
+                        severity,
+                        metric.host_id
+                    ]);
+
+                    await client.query(`
+                        UPDATE alert_rule_states
+                        SET consecutive_breaches = 0,
+                            is_breaching = true,
+                            updated_at = NOW()
+                        WHERE host_id = $1 AND rule_id = $2
+                    `, [metric.host_id, rule.id]);
+
+                    console.log(
+                        `Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id})`
+                    );
+                } else {
+                    await client.query(`
+                        UPDATE alert_rule_states
+                        SET consecutive_breaches = $3,
+                            updated_at = NOW()
+                        WHERE host_id = $1 AND rule_id = $2
+                    `, [metric.host_id, rule.id, count]);
+                }
+            } else {
+                await client.query(`
+                    UPDATE alert_rule_states
+                    SET consecutive_breaches = 0,
+                        is_breaching = false,
+                        updated_at = NOW()
+                    WHERE host_id = $1 AND rule_id = $2
+                `, [metric.host_id, rule.id]);
+            }
         }
 
+        await client.query('COMMIT');
+
     } catch (err) {
-        console.error("Alert engine error:", err);
+        if (client) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Alert engine rollback error:', rollbackError);
+            }
+        }
+
+        console.error('Alert engine error:', err);
+    } finally {
+        if (client) {
+            client.release();
+        }
     }
 }
+
 
 async function fetchAlerts(hostId, userId, limit = 20, offset = 0) {
     const result = await pool.query(`

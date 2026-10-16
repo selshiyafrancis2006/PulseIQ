@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   created_at TIMESTAMP DEFAULT NOW()
 );
 
+
+-- Persist alert evaluation state across backend restarts.
+CREATE TABLE IF NOT EXISTS alert_rule_states (
+    host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+    rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
+    consecutive_breaches INTEGER NOT NULL DEFAULT 0,
+    is_breaching BOOLEAN NOT NULL DEFAULT false,
+    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (host_id, rule_id)
+);
+
+
 CREATE TABLE IF NOT EXISTS monitors (
   id SERIAL PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
