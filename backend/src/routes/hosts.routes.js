@@ -2,6 +2,7 @@ const express = require('express');
 const { generateApiKey, hashApiKey } = require('../utils/apiKey');
 const router = express.Router();
 const pool = require('../config/db');
+const { OFFLINE_THRESHOLD_SECONDS, statusSql } = require('../utils/hostStatus');
 
 const MAX_HOST_NAME_LENGTH = 255;
 const MAX_TAGS_PER_HOST = 20;
@@ -83,6 +84,7 @@ router.get('/', async (req, res) => {
     h.tags,
     h.last_seen_at,
     h.created_at,
+    ${statusSql('h', 3)} AS status,
     m.cpu_usage,
     m.memory_usage,
     m.disk_usage
@@ -97,7 +99,7 @@ router.get('/', async (req, res) => {
  WHERE h.user_id = $1
    AND ($2::text IS NULL OR h.tags @> ARRAY[$2::text])
  ORDER BY h.name ASC`,
-            [req.user.id, tag || null]
+            [req.user.id, tag || null, OFFLINE_THRESHOLD_SECONDS]
         );
 
         res.json(result.rows);
@@ -129,6 +131,7 @@ router.get('/:id', async (req, res) => {
                 h.tags,
                 h.last_seen_at,
                 h.created_at,
+                ${statusSql('h', 3)} AS status,
                 h.hostname,
                 h.os,
                 h.platform,
@@ -154,7 +157,7 @@ router.get('/:id', async (req, res) => {
              ) m ON true
              WHERE h.id = $1
                AND h.user_id = $2`,
-            [id, req.user.id]
+            [id, req.user.id, OFFLINE_THRESHOLD_SECONDS]
         );
 
         if (result.rows.length === 0) {

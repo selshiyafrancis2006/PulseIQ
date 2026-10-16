@@ -111,40 +111,26 @@ if (conditionMet) {
     }
 }
 
-async function fetchAlerts(hostId, userId) {
-
+async function fetchAlerts(hostId, userId, limit = 20, offset = 0) {
     const result = await pool.query(`
         SELECT a.*
         FROM alerts a
         JOIN hosts h ON h.id = a.host_id
         WHERE h.id = $1
           AND h.user_id = $2
-        ORDER BY a.timestamp DESC
-        LIMIT 20
-    `, [hostId, userId]);
+        ORDER BY a.timestamp DESC, a.id DESC
+        LIMIT $3 OFFSET $4
+    `, [hostId, userId, limit, offset]);
 
     return result.rows.map(alert => ({
-
         id: alert.id,
-
         metric_name: alert.metric_name,
-
         current_value: alert.metric_value,
-
         threshold_value: alert.average_value,
-
         host_id: alert.host_id,
-
-        severity:
-    alert.severity || getAlertSeverity(
-    alert.metric_name,
-    alert.metric_value
-),
-
+        severity: alert.severity || getAlertSeverity(alert.metric_name, alert.metric_value),
         timestamp: alert.timestamp
-
     }));
-
 }
 
 async function fetchRules(userId) {
