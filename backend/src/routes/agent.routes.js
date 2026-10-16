@@ -137,9 +137,26 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             }
         }
 
-        await evaluateAlerts(savedMetric);
-        await detectAnomalies(savedMetric);
-        broadcastMetrics(savedMetric);
+               // The metric is already saved. Alerting, anomaly detection and the
+        // live broadcast are side effects: a failure in one must not make
+        // the agent think ingestion failed, nor skip the others.
+        const sideEffects = [
+            ['evaluateAlerts', () => evaluateAlerts(savedMetric)],
+            ['detectAnomalies', () => detectAnomalies(savedMetric)],
+            ['broadcastMetrics', () => broadcastMetrics(savedMetric)]
+        ];
+
+        for (const [label, run] of sideEffects) {
+            try {
+                await run();
+            } catch (sideEffectErr) {
+                console.error(
+                    `Post-ingestion step failed (${label}, host_id: ${req.agentHost.id}):`,
+                    sideEffectErr
+                );
+            }
+        }
+
         res.status(201).json(savedMetric);
     } catch (err) {
         console.error('Agent metrics ingestion error:', err);

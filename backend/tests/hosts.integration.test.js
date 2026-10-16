@@ -379,3 +379,54 @@ test.each([
 
     expect(response.status).toBe(400);
 });
+
+test('host status moves from pending to online to offline', async () => {
+    const registration = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(tokenA))
+        .send({ name: `status-test-${Date.now()}` });
+
+    expect(registration.status).toBe(201);
+
+    const id = registration.body.id;
+
+    const getStatus = async () => {
+        const res = await request(app)
+            .get(`/api/hosts/${id}`)
+            .set(authHeader(tokenA));
+        return res.body.status;
+    };
+
+    // Registered but never reported
+    expect(await getStatus()).toBe('pending');
+
+    // First heartbeat
+    const ingest = await request(app)
+        .post('/api/agent/metrics')
+        .set('x-api-key', registration.body.api_key)
+        .send({
+            cpu_usage: 20,
+            memory_usage: 30,
+            disk_usage: 40,
+            network_in: 100,
+            network_out: 50
+        });
+
+    expect(ingest.status).toBe(201);
+    expect(await getStatus()).toBe('online');
+
+    // Heartbeat goes stale
+    await pool.query(
+        `UPDATE hosts SET last_seen_at = NOW() - INTERVAL '10 minutes' WHERE id = $1`,
+        [id]
+    );
+
+    expect(await getStatus()).toBe('offline');
+
+    // The list endpoint reports the same status
+    const list = await request(app)
+        .get('/api/hosts')
+        .set(authHeader(tokenA));
+
+    expect(list.body.find((h) => h.id === id).status).toBe('offline');
+});

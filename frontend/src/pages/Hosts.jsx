@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import useHosts from '../hooks/useHosts'
-import { isOnline, timeAgo } from '../utils/hostStatus'
+import { getHostStatus, STATUS_META, timeAgo } from '../utils/hostStatus'
 import InstallInstructions from '../components/hosts/InstallInstructions'
 
 function parseTagsInput(input) {
@@ -125,6 +125,7 @@ const {
   hosts,
   loading,
   refreshing,
+  error: loadError,
   refetch,
   registerHost,
   updateHost,
@@ -321,8 +322,8 @@ const closeModal = () => {
           </button>
         </div>
 
-        {/* HOST SUMMARY */}
-        <div className="grid grid-cols-3 gap-4 mt-6">
+                {/* HOST SUMMARY */}
+        <div className="grid grid-cols-2 gap-4 mt-6 sm:grid-cols-4">
           <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-4">
             <p className="text-xs uppercase tracking-widest text-gray-500">
               Total Hosts
@@ -337,7 +338,7 @@ const closeModal = () => {
               Online
             </p>
             <p className="mt-2 text-2xl font-semibold text-emerald-400">
-              {hosts.filter((host) => isOnline(host.last_seen_at)).length}
+              {hosts.filter((host) => getHostStatus(host) === 'online').length}
             </p>
           </div>
 
@@ -345,12 +346,21 @@ const closeModal = () => {
             <p className="text-xs uppercase tracking-widest text-gray-500">
               Offline
             </p>
-            <p className="mt-2 text-2xl font-semibold text-gray-400">
-              {hosts.filter((host) => !isOnline(host.last_seen_at)).length}
+            <p className="mt-2 text-2xl font-semibold text-red-400">
+              {hosts.filter((host) => getHostStatus(host) === 'offline').length}
+            </p>
+          </div>
+
+          <div className="bg-[#1a1a1a] border border-[#2a2a2a] rounded-xl p-4">
+            <p className="text-xs uppercase tracking-widest text-gray-500">
+              Pending
+            </p>
+            <p className="mt-2 text-2xl font-semibold text-yellow-400">
+              {hosts.filter((host) => getHostStatus(host) === 'pending').length}
             </p>
           </div>
         </div>
-      </div>
+        </div>
 
       {/* HOST NAME SEARCH */}
 <div className="mb-4">
@@ -420,9 +430,9 @@ const closeModal = () => {
 {/* HOSTS LIST */}
 <div className="w-full min-w-0 rounded-xl border border-[#2a2a2a] bg-[#1a1a1a]">
 
-  {error && (
+  {loadError && (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#2a2a2a] bg-red-950/20 px-5 py-4">
-      <p className="text-sm text-red-300">{error}</p>
+      <p className="text-sm text-red-300">{loadError}</p>
       <button
         type="button"
         onClick={() => refetch(tagFilter)}
@@ -434,7 +444,7 @@ const closeModal = () => {
     </div>
   )}
 
-  {refreshing && !loading && !error && (
+  {refreshing && !loading && !loadError && (
     <div className="border-b border-[#2a2a2a] px-5 py-2 text-xs text-gray-500">
       Refreshing host data...
     </div>
@@ -442,7 +452,7 @@ const closeModal = () => {
 
   {loading ? (
     <p className="p-5 text-sm text-gray-500">Loading hosts...</p>
-  ) : error && hosts.length === 0 ? (
+    ) : loadError && hosts.length === 0 ? (
     <div className="p-5 text-sm text-gray-400">
       Unable to display hosts until the connection is restored.
     </div>
@@ -488,7 +498,7 @@ const closeModal = () => {
           .includes(searchInput.trim().toLowerCase())
       )
       .map((host) => {
-        const online = isOnline(host.last_seen_at);
+                const meta = STATUS_META[getHostStatus(host)];
 
             return (
               <tr
@@ -507,16 +517,10 @@ const closeModal = () => {
 
                 <td className="px-5 py-4">
                   <span
-                    className={`inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold uppercase ${
-                      online ? "text-emerald-400" : "text-gray-500"
-                    }`}
+                    className={`inline-flex items-center gap-2 whitespace-nowrap text-xs font-semibold uppercase ${meta.text}`}
                   >
-                    <span
-                      className={`h-2 w-2 rounded-full ${
-                        online ? "bg-emerald-400" : "bg-gray-600"
-                      }`}
-                    />
-                    {online ? "Online" : "Offline"}
+                    <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+                    {meta.label}
                   </span>
                 </td>
 
