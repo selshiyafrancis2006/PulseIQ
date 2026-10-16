@@ -44,9 +44,7 @@ function KpiCard({ label, value, online }) {
     <div className="rounded-xl border border-emerald-500/20 bg-[#0d0d0d] p-5 shadow-[0_0_20px_rgba(16,185,129,0.04)]">
       <p className="text-sm font-medium text-gray-400">{label}</p>
 
-      <p className="mt-2 text-3xl font-semibold text-emerald-400">
-        {value}
-      </p>
+      <p className="mt-2 text-3xl font-semibold text-emerald-400">{value}</p>
 
       <p className="mt-1 text-xs text-gray-500">
         {online ? 'Current' : 'Last known'}
@@ -63,6 +61,7 @@ export default function HostDetails() {
   const { id } = useParams();
   const [host, setHost] = useState(null);
   const currentHostIdRef = useRef(Number(id));
+  const previousRouteIdRef = useRef(id);
   currentHostIdRef.current = Number(id);
 
   const [metrics, setMetrics] = useState([]);
@@ -71,24 +70,41 @@ export default function HostDetails() {
   const [loadingMoreAlerts, setLoadingMoreAlerts] = useState(false);
   const [timeRange, setTimeRange] = useState('1h');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let active = true;
+    let failed = false;
+    let inFlight = false;
 
-if (host?.id !== Number(id)) {
-  setAlerts([]);
-  setHasMoreAlerts(true);
-  setLoadingMoreAlerts(false);
-}
+    if (previousRouteIdRef.current !== id) {
+      previousRouteIdRef.current = id;
+      setLoading(true);
+      setError('');
+      setHost(null);
+      setMetrics([]);
+      setAlerts([]);
+      setHasMoreAlerts(true);
+      setLoadingMoreAlerts(false);
+    }
 
     const fetchHost = async () => {
+      if (!active || failed || inFlight) return;
+
+      inFlight = true;
+
       try {
-        const hostResponse = await apiFetch(
-          `${API_BASE_URL}/api/hosts/${id}`
-        );
+        const hostResponse = await apiFetch(`${API_BASE_URL}/api/hosts/${id}`);
 
         if (!hostResponse.ok) {
-          throw new Error('Failed to fetch host');
+          if (hostResponse.status === 404) {
+            throw new Error('Host not found (404).');
+          }
+
+          throw new Error(
+            `Failed to fetch host (HTTP ${hostResponse.status}).`
+          );
         }
 
         const hostData = await hostResponse.json();
@@ -97,51 +113,69 @@ if (host?.id !== Number(id)) {
           `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${id}`
         );
 
-        const metricsData = metricsResponse.ok
-          ? await metricsResponse.json()
-          : [];
+        if (!metricsResponse.ok) {
+          throw new Error(
+            `Failed to load metrics (HTTP ${metricsResponse.status}).`
+          );
+        }
 
-const alertsResponse = await apiFetch(
-  `${API_BASE_URL}/api/alerts?host_id=${id}&limit=20&offset=0`
-);
+        const metricsData = await metricsResponse.json();
 
-const alertsData = alertsResponse.ok
-  ? await alertsResponse.json()
-  : [];
+        const alertsResponse = await apiFetch(
+          `${API_BASE_URL}/api/alerts?host_id=${id}&limit=20&offset=0`
+        );
 
-if (!active || Number(id) !== currentHostIdRef.current) return;
+        if (!alertsResponse.ok) {
+          throw new Error(
+            `Failed to load alerts (HTTP ${alertsResponse.status}).`
+          );
+        }
 
-setHost(hostData);
-setMetrics(Array.isArray(metricsData) ? metricsData : []);
-setAlerts((previous) => {
-  const latest = Array.isArray(alertsData) ? alertsData : [];
-  const latestIds = new Set(latest.map((alert) => alert.id));
+        const alertsData = await alertsResponse.json();
 
-  return [
-    ...latest,
-    ...previous.filter((alert) => !latestIds.has(alert.id)),
-  ];
-});
-setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
+        if (!active || Number(id) !== currentHostIdRef.current) return;
+
+        setError('');
+        setHost(hostData);
+        setMetrics(Array.isArray(metricsData) ? metricsData : []);
+        setAlerts((previous) => {
+          const latest = Array.isArray(alertsData) ? alertsData : [];
+          const latestIds = new Set(latest.map((alert) => alert.id));
+
+          return [
+            ...latest,
+            ...previous.filter((alert) => !latestIds.has(alert.id)),
+          ];
+        });
+
+        setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
       } catch (error) {
         console.error('Failed to fetch host:', error);
+
+        if (active && Number(id) === currentHostIdRef.current) {
+          failed = true;
+          setError(error.message || 'Unable to load host details.');
+        }
       } finally {
-        if (active) setLoading(false);
+        inFlight = false;
+
+        if (active && Number(id) === currentHostIdRef.current) {
+          setLoading(false);
+        }
       }
     };
 
     fetchHost();
 
     const interval = setInterval(() => {
-      if (!document.hidden) fetchHost();
+      if (!document.hidden && !failed) fetchHost();
     }, 5000);
 
     return () => {
       active = false;
       clearInterval(interval);
     };
-  }, [id, timeRange]);
-
+  }, [id, timeRange, retryCount]);
 
   const loadMoreAlerts = async () => {
     const requestedHostId = Number(id);
@@ -184,41 +218,46 @@ setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
   };
 
   if (loading) {
+    return <div className="p-6 text-gray-400">Loading host...</div>;
+  }
+
+  if (error) {
     return (
-      <div className="p-6 text-gray-400">
-        Loading host...
+      <div className="space-y-4 p-6 text-white">
+        <p className="text-red-400">{error}</p>
+
+        <button
+          onClick={() => {
+            setError('');
+            setLoading(true);
+            setRetryCount((count) => count + 1);
+          }}
+          className="rounded-lg bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-500"
+        >
+          Retry
+        </button>
       </div>
     );
   }
 
   if (!host) {
-    return (
-      <div className="p-6 text-red-400">
-        Host not found.
-      </div>
-    );
+    return <div className="p-6 text-gray-400">Host not found.</div>;
   }
 
-    const status = getHostStatus(host);
+  const status = getHostStatus(host);
   const meta = STATUS_META[status];
   const online = status === 'online';
 
   return (
     <div className="space-y-8 p-6 text-white">
-
       {/* HEADER */}
       <div>
-        <Link
-          to="/hosts"
-          className="text-sm text-gray-400 hover:text-white"
-        >
+        <Link to="/hosts" className="text-sm text-gray-400 hover:text-white">
           ← Hosts
         </Link>
 
         <div className="mt-4 flex flex-wrap items-center gap-3">
-          <h1 className="text-3xl font-semibold">
-            {host.name}
-          </h1>
+          <h1 className="text-3xl font-semibold">{host.name}</h1>
 
           <span
             className={`rounded-full px-3 py-1 text-xs font-medium ${meta.badge}`}
@@ -247,12 +286,9 @@ setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
 
       {/* SYSTEM INFO */}
       <div>
-        <h2 className="mb-4 text-lg font-semibold text-white">
-          System info
-        </h2>
+        <h2 className="mb-4 text-lg font-semibold text-white">System info</h2>
 
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-
           <InfoCard title="Host">
             <InfoRow label="Hostname" value={host.hostname} />
             <InfoRow label="IP address" value={host.ip_address} mono />
@@ -284,12 +320,8 @@ setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
           </InfoCard>
 
           <InfoCard title="Agent">
+            <InfoRow label="Agent version" value={host.agent_version} mono />
             <InfoRow
-              label="Agent version"
-              value={host.agent_version}
-              mono
-            />
-                        <InfoRow
               label="Uptime"
               value={
                 online
@@ -309,7 +341,6 @@ setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
               }
             />
           </InfoCard>
-
         </div>
 
         {!host.hostname && !host.os && (
@@ -319,169 +350,161 @@ setHasMoreAlerts(Array.isArray(alertsData) && alertsData.length === 20);
         )}
       </div>
 
-
-{/* HEALTH & ALERTS */}
-<div>
-  <div className="mb-4 flex items-center justify-between">
-    <h2 className="text-lg font-semibold text-white">
-      Health & Alerts
-    </h2>
-
-    <span className="text-sm text-gray-400">
-      {alerts.length} alert{alerts.length !== 1 ? 's' : ''}
-    </span>
-  </div>
-
-  {alerts.length === 0 && (
-    <div className="rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] p-5 text-sm text-gray-400">
-      No recent alerts for this host.
-    </div>
-  )}
-
-  {alerts.length > 0 && (
-    <div className="space-y-2">
-
-{alerts.map((alert) => {
-  const isOfflineAlert = alert.metric_name === 'host_offline';
-  const isRecoveredAlert = alert.metric_name === 'host_recovered';
-
-  return (
-    <div
-      key={alert.id}
-      className="flex items-center justify-between gap-4 rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] px-5 py-4"
-    >
+      {/* HEALTH & ALERTS */}
       <div>
-        <p className="text-sm font-medium text-white">
-          {isOfflineAlert
-            ? 'HOST OFFLINE'
-            : isRecoveredAlert
-              ? 'HOST RECOVERED'
-              : alert.metric_name}
-        </p>
+        <div className="mb-4 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">Health & Alerts</h2>
 
-        {isOfflineAlert ? (
-          <p className="mt-1 text-xs text-red-400">
-            No recent heartbeat was received; the host
-            was detected as offline at this time.
-          </p>
-        ) : isRecoveredAlert ? (
-          <p className="mt-1 text-xs text-emerald-400">
-            The host resumed sending heartbeats and was detected as recovered.
-          </p>
-        ) : (
-          <p className="mt-1 text-xs text-gray-500">
-            Current: {Number(alert.current_value).toFixed(1)}%
-            {' · '}
-            Threshold: {Number(alert.threshold_value).toFixed(1)}%
-          </p>
+          <span className="text-sm text-gray-400">
+            {alerts.length} alert{alerts.length !== 1 ? 's' : ''}
+          </span>
+        </div>
+
+        {alerts.length === 0 && (
+          <div className="rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] p-5 text-sm text-gray-400">
+            No recent alerts for this host.
+          </div>
+        )}
+
+        {alerts.length > 0 && (
+          <div className="space-y-2">
+            {alerts.map((alert) => {
+              const isOfflineAlert = alert.metric_name === 'host_offline';
+              const isRecoveredAlert = alert.metric_name === 'host_recovered';
+
+              return (
+                <div
+                  key={alert.id}
+                  className="flex items-center justify-between gap-4 rounded-xl border border-[#2a2a2a] bg-[#0d0d0d] px-5 py-4"
+                >
+                  <div>
+                    <p className="text-sm font-medium text-white">
+                      {isOfflineAlert
+                        ? 'HOST OFFLINE'
+                        : isRecoveredAlert
+                          ? 'HOST RECOVERED'
+                          : alert.metric_name}
+                    </p>
+
+                    {isOfflineAlert ? (
+                      <p className="mt-1 text-xs text-red-400">
+                        No recent heartbeat was received; the host was detected
+                        as offline at this time.
+                      </p>
+                    ) : isRecoveredAlert ? (
+                      <p className="mt-1 text-xs text-emerald-400">
+                        The host resumed sending heartbeats and was detected as
+                        recovered.
+                      </p>
+                    ) : (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Current: {Number(alert.current_value).toFixed(1)}%
+                        {' · '}
+                        Threshold: {Number(alert.threshold_value).toFixed(1)}%
+                      </p>
+                    )}
+                  </div>
+
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-medium ${
+                      isOfflineAlert
+                        ? 'bg-red-500/10 text-red-400'
+                        : isRecoveredAlert
+                          ? 'bg-emerald-500/10 text-emerald-400'
+                          : alert.severity === 'Critical'
+                            ? 'bg-red-500/10 text-red-400'
+                            : alert.severity === 'Warning'
+                              ? 'bg-yellow-500/10 text-yellow-400'
+                              : 'bg-gray-500/10 text-gray-400'
+                    }`}
+                  >
+                    {isRecoveredAlert ? 'Recovered' : alert.severity}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {hasMoreAlerts && alerts.length > 0 && (
+          <div className="mt-4 flex justify-center">
+            <button
+              onClick={loadMoreAlerts}
+              disabled={loadingMoreAlerts}
+              className="rounded-lg border border-[#2a2a2a] px-4 py-2 text-sm text-gray-300 transition hover:border-emerald-500/50 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {loadingMoreAlerts
+                ? 'Loading older alerts...'
+                : 'Load More Alerts'}
+            </button>
+          </div>
         )}
       </div>
 
-      <span
-        className={`rounded-full px-3 py-1 text-xs font-medium ${
-          isOfflineAlert
-            ? 'bg-red-500/10 text-red-400'
-            : isRecoveredAlert
-              ? 'bg-emerald-500/10 text-emerald-400'
-              : alert.severity === 'Critical'
-                ? 'bg-red-500/10 text-red-400'
-                : alert.severity === 'Warning'
-                  ? 'bg-yellow-500/10 text-yellow-400'
-                  : 'bg-gray-500/10 text-gray-400'
-        }`}
-      >
-        {isRecoveredAlert ? 'Recovered' : alert.severity}
-      </span>
-    </div>
-  );
-})}
-    </div>
-  )}
-
-  {hasMoreAlerts && alerts.length > 0 && (
-    <div className="mt-4 flex justify-center">
-      <button
-        onClick={loadMoreAlerts}
-        disabled={loadingMoreAlerts}
-        className="rounded-lg border border-[#2a2a2a] px-4 py-2 text-sm text-gray-300 transition hover:border-emerald-500/50 hover:text-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        {loadingMoreAlerts ? 'Loading older alerts...' : 'Load More Alerts'}
-      </button>
-    </div>
-  )}
-</div>
-
-<div className="mb-4 flex justify-end">
-
-  <div className="flex rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] p-1">
-    {['1h', '6h', '24h'].map((range) => (
-      <button
-        key={range}
-        onClick={() => setTimeRange(range)}
-        className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
-          timeRange === range
-            ? 'bg-emerald-500/10 text-emerald-400'
-            : 'text-gray-400 hover:text-white'
-        }`}
-      >
-        {range.toUpperCase()}
-      </button>
-    ))}
-  </div>
-</div>
-
+      <div className="mb-4 flex justify-end">
+        <div className="flex rounded-lg border border-[#2a2a2a] bg-[#0d0d0d] p-1">
+          {['1h', '6h', '24h'].map((range) => (
+            <button
+              key={range}
+              onClick={() => setTimeRange(range)}
+              className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                timeRange === range
+                  ? 'bg-emerald-500/10 text-emerald-400'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              {range.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* HOST METRICS */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
-       <KpiCard
-  label="CPU"
-  value={percent(host.cpu_usage)}
-  online={online}
-/>
+        <KpiCard label="CPU" value={percent(host.cpu_usage)} online={online} />
 
-<KpiCard
-  label="Memory"
-  value={percent(host.memory_usage)}
-  online={online}
-/>
+        <KpiCard
+          label="Memory"
+          value={percent(host.memory_usage)}
+          online={online}
+        />
 
-<KpiCard
-  label="Disk"
-  value={percent(host.disk_usage)}
-  online={online}
-/>
+        <KpiCard
+          label="Disk"
+          value={percent(host.disk_usage)}
+          online={online}
+        />
 
-<KpiCard
-  label="Network In"
-  value={formatRate(host.network_in)}
-  online={online}
-/>
+        <KpiCard
+          label="Network In"
+          value={formatRate(host.network_in)}
+          online={online}
+        />
 
-<KpiCard
-  label="Network Out"
-  value={formatRate(host.network_out)}
-  online={online}
-/>
+        <KpiCard
+          label="Network Out"
+          value={formatRate(host.network_out)}
+          online={online}
+        />
       </div>
 
       <MetricsChart
-  metrics={metrics}
-  selectedMetrics={['cpu_usage']}
-  timeRange={timeRange}
-/>
+        metrics={metrics}
+        selectedMetrics={['cpu_usage']}
+        timeRange={timeRange}
+      />
 
       <MetricsChart
-  metrics={metrics}
-  selectedMetrics={['memory_usage']}
-  timeRange={timeRange}
-/>
+        metrics={metrics}
+        selectedMetrics={['memory_usage']}
+        timeRange={timeRange}
+      />
 
       <MetricsChart
-  metrics={metrics}
-  selectedMetrics={['disk_usage']}
-  timeRange={timeRange}
-/>
-
+        metrics={metrics}
+        selectedMetrics={['disk_usage']}
+        timeRange={timeRange}
+      />
     </div>
   );
 }
