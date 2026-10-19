@@ -81,12 +81,20 @@ CREATE TABLE IF NOT EXISTS monitors (
 
 CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
 
+
 CREATE TABLE IF NOT EXISTS monitor_results (
   id SERIAL PRIMARY KEY,
   monitor_id INTEGER REFERENCES monitors(id) ON DELETE CASCADE,
   status VARCHAR(10) NOT NULL,
   response_time_ms INTEGER,
   status_code INTEGER,
+  error_type VARCHAR(50),
+  error_message TEXT,
+dns_time_ms DOUBLE PRECISION,
+connect_time_ms DOUBLE PRECISION,
+tls_time_ms DOUBLE PRECISION,
+ttfb_time_ms DOUBLE PRECISION,
+download_time_ms DOUBLE PRECISION
   checked_at TIMESTAMP DEFAULT NOW()
 );
 
