@@ -94,8 +94,8 @@ dns_time_ms DOUBLE PRECISION,
 connect_time_ms DOUBLE PRECISION,
 tls_time_ms DOUBLE PRECISION,
 ttfb_time_ms DOUBLE PRECISION,
-download_time_ms DOUBLE PRECISION
-  checked_at TIMESTAMP DEFAULT NOW()
+download_time_ms DOUBLE PRECISION,
+checked_at TIMESTAMP DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_results_monitor_checked

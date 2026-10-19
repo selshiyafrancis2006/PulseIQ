@@ -107,6 +107,11 @@ const getMonitorHistory = async (req, res) => {
                 mr.status,
                 mr.response_time_ms,
                 mr.status_code,
+                mr.dns_time_ms,
+                mr.connect_time_ms,
+                mr.tls_time_ms,
+                mr.ttfb_time_ms,
+                mr.download_time_ms,
                 mr.checked_at
              FROM monitor_results mr
              JOIN monitors m ON mr.monitor_id = m.id
