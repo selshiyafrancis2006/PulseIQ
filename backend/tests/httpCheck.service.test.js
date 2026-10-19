@@ -57,7 +57,9 @@ describe('checkHttp', () => {
     test('rejects invalid URL schemes', async () => {
         await expect(
             checkHttp({ url: 'file:///etc/passwd' })
-        ).rejects.toThrow('Only HTTP/HTTPS URLs without credentials are allowed');
+        ).rejects.toThrow(
+            'Only HTTP/HTTPS URLs without credentials are allowed'
+        );
 
         expect(axios.request).not.toHaveBeenCalled();
     });
@@ -65,7 +67,9 @@ describe('checkHttp', () => {
     test('rejects URLs containing credentials', async () => {
         await expect(
             checkHttp({ url: 'https://user:pass@example.com' })
-        ).rejects.toThrow('Only HTTP/HTTPS URLs without credentials are allowed');
+        ).rejects.toThrow(
+            'Only HTTP/HTTPS URLs without credentials are allowed'
+        );
 
         expect(axios.request).not.toHaveBeenCalled();
     });
@@ -76,7 +80,9 @@ describe('checkHttp', () => {
                 url: 'https://example.com',
                 timeout_ms: 60_000
             })
-        ).rejects.toThrow('timeout_ms must be between 1 and 30000');
+        ).rejects.toThrow(
+            'timeout_ms must be between 1 and 30000'
+        );
 
         expect(axios.request).not.toHaveBeenCalled();
     });
@@ -118,6 +124,48 @@ describe('checkHttp', () => {
         expect(axios.request).toHaveBeenCalledTimes(1);
     });
 
+    test('revalidates redirect destinations before making the next request', async () => {
+        axios.request.mockResolvedValue({
+            status: 302,
+            data: '',
+            headers: {
+                location: 'http://127.0.0.1/private'
+            }
+        });
+
+        const validateUrl = jest.fn(async input => {
+            if (input === 'https://example.com/') {
+                return {
+                    url: new URL(input),
+                    hostname: 'example.com',
+                    addresses: [
+                        { address: '93.184.216.34' }
+                    ],
+                    dnsTimeMs: 1
+                };
+            }
+
+            throw new Error(
+                'Monitor URL resolves to a non-public IP address'
+            );
+        });
+
+        await expect(
+            checkHttp(
+                { url: 'https://example.com' },
+                { validateUrl }
+            )
+        ).rejects.toThrow(
+            'Monitor URL resolves to a non-public IP address'
+        );
+
+        expect(validateUrl).toHaveBeenCalledTimes(2);
+        expect(validateUrl).toHaveBeenLastCalledWith(
+            'http://127.0.0.1/private'
+        );
+        expect(axios.request).toHaveBeenCalledTimes(1);
+    });
+
     test('rejects redirects beyond the configured limit', async () => {
         axios.request.mockResolvedValue({
             status: 302,
@@ -127,7 +175,9 @@ describe('checkHttp', () => {
 
         await expect(
             checkHttp({ url: 'https://example.com' })
-        ).rejects.toThrow('Too many redirects (maximum 3)');
+        ).rejects.toThrow(
+            'Too many redirects (maximum 3)'
+        );
 
         expect(axios.request).toHaveBeenCalledTimes(4);
     });
