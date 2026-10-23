@@ -1,17 +1,20 @@
+
 function MonitorStatusBadge({ status }) {
   const statusConfig = {
     UP: {
-      label: '🟢 UP',
-      className: 'bg-emerald-900/40 text-emerald-400 border border-emerald-700'
+      label: 'UP',
+      className:
+        'bg-emerald-900/40 text-emerald-400 border border-emerald-700'
     },
     DOWN: {
-      label: '🔴 DOWN',
-      className: 'bg-red-900/40 text-red-400 border border-red-700'
+      label: 'DOWN',
+      className:
+        'bg-gray-800 text-gray-300 border border-gray-600'
     }
   };
 
   const currentStatus = statusConfig[status] || {
-    label: '⚪ UNKNOWN',
+    label: 'UNKNOWN',
     className: 'bg-gray-800 text-gray-400 border border-gray-700'
   };
 

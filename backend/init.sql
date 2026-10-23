@@ -211,6 +211,9 @@ ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS user_id INTEGER
   REFERENCES users(id) ON DELETE CASCADE;
 
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30;
+
 CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
 
 ALTER TABLE alert_rules

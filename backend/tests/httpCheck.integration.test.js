@@ -1,5 +1,6 @@
 
 const http = require('node:http');
+const { spawnSync } = require('node:child_process');
 const { checkHttp } = require('../src/services/httpCheck.service');
 
 describe('checkHttp real HTTP integration', () => {
@@ -121,5 +122,75 @@ expect(result.downloadTimeMs).toEqual(expect.any(Number));
                 { validateUrl: allowTestServer }
             )
         ).rejects.toThrow();
+    });
+
+        test('handles a refused TCP connection without crashing the process', async () => {
+        const unusedServer = http.createServer();
+
+        await new Promise((resolve, reject) => {
+            unusedServer.once('error', reject);
+            unusedServer.listen(0, '127.0.0.1', resolve);
+        });
+
+        const unusedPort = unusedServer.address().port;
+
+        await new Promise((resolve, reject) => {
+            unusedServer.close(error => {
+                if (error) reject(error);
+                else resolve();
+            });
+        });
+
+        await expect(
+            checkHttp(
+                { url: `http://127.0.0.1:${unusedPort}`, timeout_ms: 1000 },
+                {
+                    validateUrl: async input => ({
+                        url: new URL(input),
+                        hostname: '127.0.0.1',
+                        addresses: [{ address: '127.0.0.1' }],
+                        dnsTimeMs: 0
+                    })
+                }
+            )
+        ).rejects.toThrow();
+    });
+
+        test('handles an unreachable IPv6 HTTPS connection without crashing Node', () => {
+        const script = `
+            const { checkHttp } = require('./src/services/httpCheck.service');
+
+            checkHttp(
+                { url: 'https://example.com', timeout_ms: 1500 },
+                {
+                    validateUrl: async input => ({
+                        url: new URL(input),
+                        hostname: 'example.com',
+                        addresses: [{ address: '2001:db8::1' }],
+                        dnsTimeMs: 0
+                    })
+                }
+            )
+                .then(() => {
+                    console.log('REQUEST_FINISHED');
+                })
+                .catch(() => {
+                    console.log('REQUEST_FAILED');
+                });
+        `;
+
+        const result = spawnSync(
+            process.execPath,
+            ['-e', script],
+            {
+                cwd: require('node:path').resolve(__dirname, '..'),
+                encoding: 'utf8',
+                timeout: 10000
+            }
+        );
+
+        expect(result.error).toBeUndefined();
+        expect(result.status).toBe(0);
+        expect(result.stdout).toMatch(/REQUEST_(FINISHED|FAILED)/);
     });
 });

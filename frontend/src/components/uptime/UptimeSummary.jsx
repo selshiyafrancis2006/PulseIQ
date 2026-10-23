@@ -6,28 +6,39 @@ function UptimeSummary({ monitors }) {
   const healthyMonitors = monitors.filter(
     (monitor) =>
       monitor.status === 'UP' &&
-      (monitor.response_time_ms ?? 0) <= DEGRADED_THRESHOLD_MS
+      monitor.response_time_ms != null &&
+      Number.isFinite(Number(monitor.response_time_ms)) &&
+      Number(monitor.response_time_ms) <= DEGRADED_THRESHOLD_MS
   ).length;
 
   const degradedMonitors = monitors.filter(
     (monitor) =>
       monitor.status === 'UP' &&
-      (monitor.response_time_ms ?? 0) > DEGRADED_THRESHOLD_MS
+      monitor.response_time_ms != null &&
+      Number.isFinite(Number(monitor.response_time_ms)) &&
+      Number(monitor.response_time_ms) > DEGRADED_THRESHOLD_MS
   ).length;
 
   const downMonitors = monitors.filter(
     (monitor) => monitor.status === 'DOWN'
   ).length;
 
-  const totalResponseTime = monitors.reduce(
-    (sum, monitor) => sum + (monitor.response_time_ms ?? 0),
+  const monitorsWithResponseTime = monitors.filter(
+    (monitor) =>
+      monitor.status === 'UP' &&
+      monitor.response_time_ms != null &&
+      Number.isFinite(Number(monitor.response_time_ms))
+  );
+
+  const totalResponseTime = monitorsWithResponseTime.reduce(
+    (sum, monitor) => sum + Number(monitor.response_time_ms),
     0
   );
 
   const avgResponseTime =
-    totalMonitors > 0
-      ? Math.round(totalResponseTime / totalMonitors)
-      : 0;
+    monitorsWithResponseTime.length > 0
+      ? Math.round(totalResponseTime / monitorsWithResponseTime.length)
+      : null;
 
   const cards = [
     {
@@ -43,23 +54,21 @@ function UptimeSummary({ monitors }) {
     {
       title: 'Degraded',
       value: degradedMonitors,
-      color: degradedMonitors > 0 ? 'text-yellow-400' : 'text-emerald-400',
+      color: 'text-emerald-400',
     },
     {
-      title: 'Down',
-      value: downMonitors,
-      color: downMonitors > 0 ? 'text-red-400' : 'text-emerald-400',
-    },
-    {
-      title: 'Avg Response',
-      value: `${avgResponseTime} ms`,
-      color:
-        avgResponseTime < 200
-          ? 'text-emerald-400'
-          : avgResponseTime < 500
-          ? 'text-yellow-400'
-          : 'text-red-400',
-    },
+  title: 'Down',
+  value: downMonitors,
+  color: downMonitors > 0 ? 'text-red-400' : 'text-emerald-400',
+},
+{
+  title: 'Avg Response',
+  value: avgResponseTime == null ? '--' : `${avgResponseTime} ms`,
+  color:
+    avgResponseTime == null
+      ? 'text-gray-400'
+      : 'text-emerald-400',
+},
   ];
 
   return (

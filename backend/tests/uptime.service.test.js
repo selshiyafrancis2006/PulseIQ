@@ -136,6 +136,41 @@ expect(result).toEqual({
         );
     });
 
+        test('records a recovery event when status changes from DOWN to UP', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 200,
+            responseTimeMs: 25
+        });
+
+        db.query.mockResolvedValueOnce({
+            rows: [{ status: 'DOWN' }]
+        });
+
+        await checkMonitor({ id: 6, url: 'https://example.com' });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            [6, 'UP', 'Service recovered', 25]
+        );
+    });
+
+    test('does not record another outage event when already DOWN', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        db.query.mockResolvedValueOnce({
+            rows: [{ status: 'DOWN' }]
+        });
+
+        await checkMonitor({ id: 7, url: 'https://example.com' });
+
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            expect.anything()
+        );
+    });
     test('does not classify database errors as network failures', async () => {
         checkHttp.mockResolvedValue({
             statusCode: 200,

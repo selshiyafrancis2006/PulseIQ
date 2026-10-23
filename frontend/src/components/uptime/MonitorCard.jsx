@@ -1,61 +1,99 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../utils/apiFetch';
 import { API_BASE_URL } from '../../config/api';
 import ResponseTimeChart from './ResponseTimeChart';
 import MonitorStatusBadge from './MonitorStatusBadge';
 
-function MonitorCard({ monitor }) {
+function MonitorCard({
+  monitor,
+  timeRange,
+  onEdit,
+  onTogglePause,
+  onDelete,
+
+  onConfirmDelete,
+  deleteTarget,
+  onCancelDelete,
+  busy,
+}) {
+  const cardRef = useRef(null);
   const [history, setHistory] = useState([]);
   const [uptime, setUptime] = useState(null);
   const [events, setEvents] = useState([]);
-  const [now] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     const fetchData = async () => {
       try {
         const [h, u, e] = await Promise.all([
-          apiFetch(`${API_BASE_URL}/api/monitors/${monitor.id}/history`).then(r => r.json()),
-          apiFetch(`${API_BASE_URL}/api/monitors/${monitor.id}/uptime`).then(r => r.json()),
+          apiFetch(`${API_BASE_URL}/api/monitors/${monitor.id}/history?range=${timeRange}`).then(r => { if (!r.ok) throw new Error("Failed to fetch monitor history"); return r.json(); }),
+          apiFetch(
+  `${API_BASE_URL}/api/monitors/${monitor.id}/uptime?range=${timeRange}`
+).then((r) => {
+  if (!r.ok) throw new Error('Failed to fetch monitor uptime');
+  return r.json();
+}),
           apiFetch(`${API_BASE_URL}/api/monitors/${monitor.id}/events`).then(r => r.json()),
         ]);
 
         setHistory(h.reverse());
         setUptime(u.uptime);
-        setEvents(e.reverse());
+        setEvents(e);
       } catch (err) {
         console.error(err);
       }
     };
 
     fetchData();
-  }, [monitor.id]);
+  }, [monitor.id, timeRange]);
 
   const getTrend = () => {
-    if (history.length < 2) return { icon: '→', color: 'text-gray-500' };
+    const validMeasurements = history
+      .filter((item) => item.response_time_ms != null)
+      .map((item) => Number(item.response_time_ms))
+      .filter((value) => Number.isFinite(value));
 
-    const latest = history[0]?.response_time_ms ?? 0;
-    const prev = history[1]?.response_time_ms ?? 0;
+    if (validMeasurements.length < 2) {
+      return { icon: '—', color: 'text-gray-500' };
+    }
 
-    if (latest > prev) return { icon: '▲', color: 'text-red-400' };
-    if (latest < prev) return { icon: '▼', color: 'text-emerald-400' };
+    const latest = validMeasurements[validMeasurements.length - 1];
+    const previous = validMeasurements[validMeasurements.length - 2];
+
+    if (latest > previous) {
+      return { icon: '↑', color: 'text-gray-400' };
+    }
+
+    if (latest < previous) {
+      return { icon: '↓', color: 'text-emerald-400' };
+    }
 
     return { icon: '→', color: 'text-gray-500' };
   };
 
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 30000);
+    return () => clearInterval(timer);
+  }, []);
+
   const getLiveStatus = () => {
+    if (monitor.is_active === false) return 'PAUSED';
     if (!monitor.checked_at) return 'STALE';
-    const diff = now - new Date(monitor.checked_at).getTime();
-    return diff < 120000 ? 'LIVE' : 'STALE';
+
+    const checkedAt = new Date(monitor.checked_at).getTime();
+    if (!Number.isFinite(checkedAt)) return 'STALE';
+
+    return now - checkedAt < 120000 ? 'LIVE' : 'STALE';
   };
 
   const getEventColor = (type) => {
     switch (type) {
       case 'DOWN':
-        return 'text-red-400';
+        return 'text-gray-400';
       case 'UP':
         return 'text-emerald-400';
       case 'SLOW':
-        return 'text-yellow-400';
+        return 'text-gray-400';
       default:
         return 'text-gray-500';
     }
@@ -65,7 +103,11 @@ function MonitorCard({ monitor }) {
   const liveStatus = getLiveStatus();
 
   return (
-    <div className="border border-[#2a2a2a] rounded-lg bg-[#111] hover:bg-[#151515] transition">
+        <div
+      ref={cardRef}
+      data-monitor-id={monitor.id}
+      className="border border-[#2a2a2a] rounded-lg bg-[#111] hover:bg-[#151515] transition"
+    >
 
       {/* ================= HEADER ================= */}
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#2a2a2a]">
@@ -98,10 +140,39 @@ function MonitorCard({ monitor }) {
           )}
         </div>
 
-        <MonitorStatusBadge
-          status={monitor.status}
-          responseTime={monitor.response_time_ms}
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <MonitorStatusBadge
+            status={monitor.status}
+            responseTime={monitor.response_time_ms}
+          />
+
+          <button
+            type="button"
+            onClick={() => onEdit(monitor)}
+            disabled={busy}
+            className="rounded-md border border-[#3a3a3a] px-3 py-1.5 text-sm text-gray-200 hover:bg-[#252525] disabled:opacity-50"
+          >
+            Edit
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onTogglePause(monitor)}
+            disabled={busy}
+            className="rounded-md border border-[#3a3a3a] px-3 py-1.5 text-sm text-gray-200 hover:bg-[#252525] disabled:opacity-50"
+          >
+            {monitor.is_active === false ? 'Resume' : 'Pause'}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => onDelete(monitor)}
+            disabled={busy}
+            className="rounded-md border border-[#3a3a3a] px-3 py-1.5 text-sm text-gray-200 hover:bg-[#1b1b1b] disabled:opacity-50"
+          >
+            Delete
+          </button>
+        </div>
       </div>
 
       {/* ================= METRICS ================= */}
@@ -145,7 +216,7 @@ function MonitorCard({ monitor }) {
               liveStatus === 'LIVE' ? 'text-emerald-400' : 'text-gray-500'
             }`}
           >
-            ● {liveStatus}
+            {liveStatus === 'LIVE' ? '●' : liveStatus === 'PAUSED' ? 'Ⅱ' : '○'} {liveStatus}
           </span>
         </div>
       </div>
@@ -166,7 +237,7 @@ function MonitorCard({ monitor }) {
                 className="flex justify-between text-xs"
               >
                 <span className={getEventColor(event.type)}>
-                  ● {event.type}
+                  {event.type === 'DOWN' ? '●' : event.type === 'UP' ? '✓' : '○'} {event.type}
                 </span>
                 <span className="text-gray-500">
                   {event.message}
@@ -175,7 +246,7 @@ function MonitorCard({ monitor }) {
             ))}
           </div>
         )}
-      </div>
+     </div>
     </div>
   );
 }

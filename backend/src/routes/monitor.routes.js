@@ -10,10 +10,15 @@ const {
 const {
     createMonitor,
     getMonitors,
+    getMonitorById,
     getMonitorStatus,
     getMonitorHistory,
     getMonitorUptime,
-    getMonitorEvents
+    getMonitorEvents,
+    updateMonitor,
+    deleteMonitor,
+    pauseMonitor,
+    resumeMonitor
 } = require('../controllers/monitor.controller');
 
 router.post('/', createMonitor);
@@ -21,12 +26,6 @@ router.post('/', createMonitor);
 router.get('/', getMonitors);
 
 router.get('/status', getMonitorStatus);
-
-router.get('/:id/history', getMonitorHistory);
-
-router.get('/:id/uptime', getMonitorUptime);
-
-router.get('/:id/events', getMonitorEvents);
 
 router.get('/test', async (req, res) => {
     try {
@@ -55,5 +54,18 @@ router.get('/test', async (req, res) => {
         });
     }
 });
+
+router.get('/:id', getMonitorById);
+
+router.get('/:id/history', getMonitorHistory);
+
+router.get('/:id/uptime', getMonitorUptime);
+
+router.get('/:id/events', getMonitorEvents);
+
+router.patch('/:id', updateMonitor);
+router.delete('/:id', deleteMonitor);
+router.patch('/:id/pause', pauseMonitor);
+router.patch('/:id/resume', resumeMonitor);
 
 module.exports = router;

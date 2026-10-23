@@ -9,28 +9,33 @@ const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_REDIRECTS = 3;
 
 function createPinnedAgent(url, validatedAddress, timings) {
+
     const lookup = (hostname, options, callback) => {
         if (typeof options === 'function') {
             callback = options;
             options = {};
         }
 
-        // Never resolve the hostname again during this connection.
-        if (hostname.toLowerCase() !== url.hostname.toLowerCase()) {
-            callback(new Error('Unexpected hostname during connection'));
-            return;
-        }
+        // Match the asynchronous behavior of dns.lookup().
+        // This prevents TLS setup from racing with an immediate
+        // connection failure.
+        process.nextTick(() => {
+            if (hostname.toLowerCase() !== url.hostname.toLowerCase()) {
+                callback(new Error('Unexpected hostname during connection'));
+                return;
+            }
 
-        const result = {
-            address: validatedAddress,
-            family: require('node:net').isIP(validatedAddress)
-        };
+            const result = {
+                address: validatedAddress,
+                family: require('node:net').isIP(validatedAddress)
+            };
 
-        if (options && options.all) {
-            callback(null, [result]);
-        } else {
-            callback(null, result.address, result.family);
-        }
+            if (options && options.all) {
+                callback(null, [result]);
+            } else {
+                callback(null, result.address, result.family);
+            }
+        });
     };
 
     const Agent = url.protocol === 'https:' ? https.Agent : http.Agent;
