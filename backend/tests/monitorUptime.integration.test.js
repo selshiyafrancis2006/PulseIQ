@@ -245,6 +245,38 @@ test('uptime ignores a long gap before the selected window', async () => {
     expect(response.body.coverage).toBe('complete');
 });
 
+test('uptime reports insufficient coverage when the latest check is stale', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'uptime-stale-check'
+    );
+
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
+    // The latest check is older than three configured intervals.
+    await insertResultAt(
+        monitor.id,
+        'UP',
+        new Date(Date.now() - 5 * 60 * 60 * 1000)
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '24h' })
+        .set(authHeader(user.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body.uptime).toBe(100);
+    expect(response.body.coverage).toBe('insufficient_data');
+});
+
 test('uptime detects an initial gap even when a historical check exists', async () => {
     const user = await createUser();
     const monitor = await createMonitor(user.token, 'uptime-initial-gap');

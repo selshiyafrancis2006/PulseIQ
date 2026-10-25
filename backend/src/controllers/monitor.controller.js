@@ -352,9 +352,34 @@ const selectedRangeCoverageResult = await db.query(
         FROM checks
         WHERE checked_at IS NOT NULL
     )
-    SELECT
+        SELECT
         COUNT(*) FILTER (WHERE in_window)::int AS check_count,
-                       COALESCE(
+
+        COALESCE(
+            BOOL_OR(
+                in_window
+                AND previous_check >= (
+                    SELECT window_start FROM monitor_bounds
+                )
+                AND EXTRACT(
+                    EPOCH FROM (checked_at - previous_check)
+                ) > (
+                    SELECT interval_seconds * 3 FROM monitor_bounds
+                )
+            ),
+            FALSE
+        ) AS has_gap,
+
+        COALESCE(
+            EXTRACT(
+                EPOCH FROM (NOW() - MAX(checked_at))
+            ) > (
+                SELECT interval_seconds * 3 FROM monitor_bounds
+            ),
+            TRUE
+        ) AS is_stale,
+
+        COALESCE(
             EXTRACT(EPOCH FROM (
                 MIN(checked_at) FILTER (WHERE in_window)
                 - (SELECT window_start FROM monitor_bounds)
@@ -371,6 +396,7 @@ const selectedRangeCoverageResult = await db.query(
             ),
             TRUE
         ) AS has_initial_gap
+
     FROM ordered_checks`,
     [Number(id), req.user.id, windows[range]]
 );
