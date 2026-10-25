@@ -376,3 +376,13 @@ CREATE INDEX IF NOT EXISTS idx_maintenance_windows_monitor
 -- Results recorded during a maintenance window are flagged, not deleted.
 ALTER TABLE monitor_results
   ADD COLUMN IF NOT EXISTS in_maintenance BOOLEAN NOT NULL DEFAULT false;
+
+-- Ensure existing databases have all monitor result fields.
+ALTER TABLE monitor_results
+  ADD COLUMN IF NOT EXISTS error_type VARCHAR(50),
+  ADD COLUMN IF NOT EXISTS error_message TEXT,
+  ADD COLUMN IF NOT EXISTS dns_time_ms DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS connect_time_ms DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS tls_time_ms DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS ttfb_time_ms DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS download_time_ms DOUBLE PRECISION;

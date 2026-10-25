@@ -7,9 +7,16 @@ const ALLOWED_DOWNTIME_MINUTES = Number(
 
 function calculateSlo(events, options = {}) {
     const now = options.now ? new Date(options.now) : new Date();
-    const windowStart = new Date(
+    const defaultWindowStart = new Date(
         now.getTime() - WINDOW_MINUTES * 60 * 1000
     );
+    const requestedWindowStart = options.windowStart
+        ? new Date(options.windowStart)
+        : defaultWindowStart;
+    const windowStart = new Date(Math.max(
+        defaultWindowStart.getTime(),
+        requestedWindowStart.getTime()
+    ));
 
     const orderedEvents = [...events]
         .map(event => ({
@@ -39,14 +46,21 @@ function calculateSlo(events, options = {}) {
         status: 'insufficient_data'
     };
 
-    // We need a known state at the window boundary.
-    // A DOWN event inside the window can establish an outage start,
-    // but an UP event alone cannot establish the earlier state.
-    if (!previousEvent) {
-        if (windowEvents.length === 0 || windowEvents[0].type !== 'DOWN') {
-            return baseResult;
-        }
+if (!previousEvent) {
+    const firstEvent = windowEvents[0];
+
+    const upAtWindowStart =
+        options.windowStart &&
+        firstEvent?.type === 'UP' &&
+        firstEvent.created_at.getTime() === windowStart.getTime();
+
+    if (
+        !firstEvent ||
+        (firstEvent.type !== 'DOWN' && !upAtWindowStart)
+    ) {
+        return baseResult;
     }
+}
 
     let state = previousEvent?.type ?? null;
     let observedDowntimeMs = 0;

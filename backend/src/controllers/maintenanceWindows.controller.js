@@ -267,7 +267,8 @@ const endWindow = async (req, res) => {
 
         await db.query(
             `UPDATE maintenance_windows
-             SET ends_at = GREATEST(NOW(), starts_at + INTERVAL '1 second')
+             SET starts_at = LEAST(starts_at, NOW() - INTERVAL '1 microsecond'),
+                 ends_at = NOW()
              WHERE id = $1 AND user_id = $2`,
             [Number(id), req.user.id]
         );

@@ -176,6 +176,19 @@ test('uptime reports incomplete coverage when monitoring has a long gap', async 
     [monitor.id]
 );
 
+await pool.query(
+    `INSERT INTO monitor_events
+        (monitor_id, type, message, created_at)
+     SELECT
+        id,
+        'UP',
+        'Monitor available at monitoring start',
+        created_at
+     FROM monitors
+     WHERE id = $1`,
+    [monitor.id]
+);
+
     const now = Date.now();
 
     await insertResultAt(
@@ -376,4 +389,321 @@ test('uptime does not expose another user’s monitor', async () => {
         .set(authHeader(otherUser.token));
 
     expect(response.status).toBe(404);
+});
+
+
+test('uptime excludes checks recorded during maintenance', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'uptime-maintenance-exclusion'
+    );
+
+    await pool.query(
+        `INSERT INTO monitor_results
+            (monitor_id, status, response_time_ms, status_code,
+             checked_at, in_maintenance)
+         VALUES
+            ($1, 'UP', 100, 200, NOW() - INTERVAL '1 hour', false),
+            ($1, 'DOWN', NULL, NULL, NOW() - INTERVAL '30 minutes', true),
+            ($1, 'DOWN', NULL, NULL, NOW() - INTERVAL '15 minutes', true)`,
+        [monitor.id]
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '24h' })
+        .set(authHeader(user.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+        range: '24h',
+        total_checks: 1,
+        up_checks: 1,
+        uptime: 100
+    });
+});
+
+
+test('coverage does not become stale during active maintenance', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'uptime-active-maintenance'
+    );
+
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
+    // Simulate regular hourly checks, with the latest 5 hours ago.
+    for (let hoursAgo = 23; hoursAgo >= 5; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    const userResult = await pool.query(
+        'SELECT id FROM users WHERE email = $1',
+        [user.email]
+    );
+    const userId = userResult.rows[0].id;
+
+    // Maintenance started 4 hours ago and is still active.
+    await pool.query(
+        `INSERT INTO maintenance_windows
+            (user_id, monitor_id, reason, starts_at, ends_at)
+         VALUES (
+            $1, $2, 'Planned maintenance',
+            NOW() - INTERVAL '4 hours',
+            NOW() + INTERVAL '1 hour'
+         )`,
+        [userId, monitor.id]
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '24h' })
+        .set(authHeader(user.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body.coverage).toBe('complete');
+});
+
+
+test('coverage ignores a long gap covered by maintenance', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'uptime-maintenance-gap'
+    );
+
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
+    // Regular hourly checks before the maintenance gap.
+    for (let hoursAgo = 23; hoursAgo >= 12; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    // Checks resume after maintenance ends.
+    for (let hoursAgo = 2; hoursAgo >= 0; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    const userResult = await pool.query(
+        'SELECT id FROM users WHERE email = $1',
+        [user.email]
+    );
+    const userId = userResult.rows[0].id;
+
+    // The 10-hour gap is covered by 8 hours of planned maintenance.
+    await pool.query(
+        `INSERT INTO maintenance_windows
+            (user_id, monitor_id, reason, starts_at, ends_at)
+         VALUES (
+            $1, $2, 'Planned maintenance',
+            NOW() - INTERVAL '11 hours',
+            NOW() - INTERVAL '3 hours'
+         )`,
+        [userId, monitor.id]
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '24h' })
+        .set(authHeader(user.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body.coverage).toBe('complete');
+});
+
+test('coverage does not double-count overlapping maintenance windows', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'uptime-overlapping-maintenance'
+    );
+
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
+    // Regular checks before the 10-hour gap.
+    for (let hoursAgo = 23; hoursAgo >= 12; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    // Checks resume after the gap.
+    for (let hoursAgo = 2; hoursAgo >= 0; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    const userResult = await pool.query(
+        'SELECT id FROM users WHERE email = $1',
+        [user.email]
+    );
+    const userId = userResult.rows[0].id;
+
+    // These windows overlap by 2 hours.
+    // Their combined coverage is 6 hours, not 8 hours.
+    await pool.query(
+        `INSERT INTO maintenance_windows
+            (user_id, monitor_id, reason, starts_at, ends_at)
+         VALUES
+            ($1, $2, 'Maintenance window A',
+             NOW() - INTERVAL '11 hours',
+             NOW() - INTERVAL '7 hours'),
+            ($1, $2, 'Maintenance window B',
+             NOW() - INTERVAL '9 hours',
+             NOW() - INTERVAL '5 hours')`,
+        [userId, monitor.id]
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '24h' })
+        .set(authHeader(user.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body.coverage).toBe('insufficient_data');
+});
+
+test('coverage accounts for maintenance at the start of the selected range', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'uptime-initial-maintenance'
+    );
+
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
+    await pool.query(
+    `INSERT INTO monitor_events
+        (monitor_id, type, message, created_at)
+     SELECT id, 'UP', 'Monitor available at monitoring start', created_at
+     FROM monitors
+     WHERE id = $1`,
+    [monitor.id]
+);
+
+    // The first check is 20 hours ago, leaving a 4-hour initial gap
+    // in the selected 24-hour range.
+    for (let hoursAgo = 20; hoursAgo >= 0; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    const userResult = await pool.query(
+        'SELECT id FROM users WHERE email = $1',
+        [user.email]
+    );
+    const userId = userResult.rows[0].id;
+
+    // Two hours of the initial gap are covered by maintenance.
+    // The remaining uncovered gap is 2 hours, below the 3-hour threshold.
+    await pool.query(
+        `INSERT INTO maintenance_windows
+            (user_id, monitor_id, reason, starts_at, ends_at)
+         VALUES (
+            $1, $2, 'Initial planned maintenance',
+            NOW() - INTERVAL '24 hours',
+            NOW() - INTERVAL '22 hours'
+         )`,
+        [userId, monitor.id]
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '24h' })
+        .set(authHeader(user.token));
+
+    expect(response.status).toBe(200);
+    expect(response.body.coverage).toBe('complete');
+});
+
+
+test('SLO coverage accounts for maintenance-covered gaps', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(
+        user.token,
+        'slo-maintenance-gap'
+    );
+
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
+    await pool.query(
+    `INSERT INTO monitor_events
+        (monitor_id, type, message, created_at)
+     SELECT
+        id,
+        'UP',
+        'Monitor available at monitoring start',
+        created_at
+     FROM monitors
+     WHERE id = $1`,
+    [monitor.id]
+);
+
+    // Regular hourly checks before the gap.
+    for (let hoursAgo = 47; hoursAgo >= 12; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    // Checks resume after the gap.
+    for (let hoursAgo = 2; hoursAgo >= 0; hoursAgo--) {
+        await insertResultHoursAgo(monitor.id, 'UP', hoursAgo);
+    }
+
+    const userResult = await pool.query(
+        'SELECT id FROM users WHERE email = $1',
+        [user.email]
+    );
+    const userId = userResult.rows[0].id;
+
+    // The gap between checks is 10 hours.
+    // These overlapping windows cover 8 hours in total,
+    // leaving only 2 uncovered hours (below the 3-hour threshold).
+    await pool.query(
+        `INSERT INTO maintenance_windows
+            (user_id, monitor_id, reason, starts_at, ends_at)
+         VALUES
+            ($1, $2, 'Maintenance A',
+             NOW() - INTERVAL '11 hours',
+             NOW() - INTERVAL '7 hours'),
+            ($1, $2, 'Maintenance B',
+             NOW() - INTERVAL '9 hours',
+             NOW() - INTERVAL '3 hours')`,
+        [userId, monitor.id]
+    );
+
+    const response = await request(app)
+        .get(`/api/monitors/${monitor.id}/uptime`)
+        .query({ range: '30d' })
+        .set(authHeader(user.token));
+
+expect(response.status).toBe(200);
+expect(response.body.slo.status).not.toBe('insufficient_data');
 });

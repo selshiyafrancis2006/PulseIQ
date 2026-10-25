@@ -315,6 +315,7 @@ const getMonitorUptime = async (req, res) => {
                 ON mr.monitor_id = m.id
                 AND mr.checked_at >= NOW() -
                     ($3 * INTERVAL '1 hour')
+            AND mr.in_maintenance = FALSE
              WHERE m.id = $1
                AND m.user_id = $2
              GROUP BY m.id`,
@@ -332,6 +333,7 @@ const getMonitorUptime = async (req, res) => {
         const uptime = total_checks === 0
             ? null
             : Number(((up_checks / total_checks) * 100).toFixed(2));
+
 
 
 const selectedRangeCoverageResult = await db.query(
@@ -355,6 +357,7 @@ const selectedRangeCoverageResult = await db.query(
         WHERE mr.monitor_id = $1
           AND mr.checked_at >= b.window_start
           AND mr.checked_at <= b.window_end
+          AND mr.in_maintenance = FALSE
 
         UNION ALL
 
@@ -363,6 +366,7 @@ const selectedRangeCoverageResult = await db.query(
         CROSS JOIN monitor_bounds b
         WHERE mr.monitor_id = $1
           AND mr.checked_at < b.window_start
+          AND mr.in_maintenance = FALSE
     ),
     ordered_checks AS (
         SELECT
@@ -371,9 +375,48 @@ const selectedRangeCoverageResult = await db.query(
             LAG(checked_at) OVER (ORDER BY checked_at) AS previous_check
         FROM checks
         WHERE checked_at IS NOT NULL
+    ),
+    latest_check AS (
+        SELECT MAX(checked_at) AS checked_at
+        FROM ordered_checks
+    ),
+    maintenance_overlap AS (
+        SELECT COALESCE(
+            SUM(
+                EXTRACT(EPOCH FROM (upper(period) - lower(period)))
+            ),
+            0
+        ) AS seconds
+        FROM (
+            SELECT unnest(
+                range_agg(
+                    tsrange(
+                        GREATEST(
+                            w.starts_at::timestamp,
+                            lc.checked_at
+                        ),
+                        LEAST(
+                            w.ends_at::timestamp,
+                            b.window_end::timestamp
+                        ),
+                        '[)'
+                    )
+                )
+            ) AS period
+            FROM latest_check lc
+            CROSS JOIN monitor_bounds b
+            JOIN maintenance_windows w
+              ON w.user_id = $2
+             AND (w.monitor_id IS NULL OR w.monitor_id = $1)
+             AND w.starts_at < b.window_end
+             AND w.ends_at > lc.checked_at
+            WHERE lc.checked_at IS NOT NULL
+        ) merged
     )
-        SELECT
+    SELECT
         COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+
+
 
         COALESCE(
             BOOL_OR(
@@ -381,8 +424,41 @@ const selectedRangeCoverageResult = await db.query(
                 AND previous_check >= (
                     SELECT window_start FROM monitor_bounds
                 )
-                AND EXTRACT(
-                    EPOCH FROM (checked_at - previous_check)
+                AND (
+                    EXTRACT(
+                        EPOCH FROM (checked_at - previous_check)
+                    ) - COALESCE((
+                        SELECT SUM(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    upper(merged.period) - lower(merged.period)
+                                )
+                            )
+                        )
+                        FROM unnest((
+                            SELECT range_agg(
+                                tsrange(
+                                    GREATEST(
+                                        w.starts_at::timestamp,
+                                        ordered_checks.previous_check
+                                    ),
+                                    LEAST(
+                                        w.ends_at::timestamp,
+                                        ordered_checks.checked_at
+                                    ),
+                                    '[)'
+                                )
+                            )
+                            FROM maintenance_windows w
+                            WHERE w.user_id = $2
+                              AND (
+                                  w.monitor_id IS NULL
+                                  OR w.monitor_id = $1
+                              )
+                              AND w.starts_at < ordered_checks.checked_at
+                              AND w.ends_at > ordered_checks.previous_check
+                        )) AS merged(period)
+                    ), 0)
                 ) > (
                     SELECT interval_seconds * 3 FROM monitor_bounds
                 )
@@ -390,21 +466,56 @@ const selectedRangeCoverageResult = await db.query(
             FALSE
         ) AS has_gap,
 
-        COALESCE(
-            EXTRACT(
-                EPOCH FROM (NOW() - MAX(checked_at))
-            ) > (
-                SELECT interval_seconds * 3 FROM monitor_bounds
-            ),
-            TRUE
-        ) AS is_stale,
-
-        COALESCE(
-            EXTRACT(EPOCH FROM (
-                MIN(checked_at) FILTER (WHERE in_window)
-                - (SELECT window_start FROM monitor_bounds)
-            )) > (
-                SELECT interval_seconds * 3 FROM monitor_bounds
+                COALESCE(
+            (
+                EXTRACT(EPOCH FROM (
+                    MIN(checked_at) FILTER (WHERE in_window)
+                    - (SELECT window_start FROM monitor_bounds)
+                ))
+                - COALESCE((
+                    SELECT SUM(
+                        EXTRACT(
+                            EPOCH FROM (
+                                upper(merged.period) - lower(merged.period)
+                            )
+                        )
+                    )
+                    FROM unnest((
+                        SELECT range_agg(
+                            tsrange(
+                                GREATEST(
+                                    w.starts_at::timestamp,
+                                    b.window_start::timestamp
+                                ),
+                                LEAST(
+                                    w.ends_at::timestamp,
+                                    (
+                                        SELECT MIN(oc.checked_at)
+                                        FROM ordered_checks oc
+                                        WHERE oc.in_window
+                                    )::timestamp
+                                ),
+                                '[)'
+                            )
+                        )
+                        FROM maintenance_windows w
+                        CROSS JOIN monitor_bounds b
+                        WHERE w.user_id = $2
+                          AND (
+                              w.monitor_id IS NULL
+                              OR w.monitor_id = $1
+                          )
+                          AND w.starts_at < (
+                              SELECT MIN(oc.checked_at)
+                              FROM ordered_checks oc
+                              WHERE oc.in_window
+                          )
+                          AND w.ends_at > b.window_start
+                    )) AS merged(period)
+                ), 0) > (
+                    SELECT interval_seconds * 3
+                    FROM monitor_bounds
+                )
             )
             AND NOT EXISTS (
                 SELECT 1
@@ -413,6 +524,7 @@ const selectedRangeCoverageResult = await db.query(
                   AND prior.checked_at < (
                       SELECT window_start FROM monitor_bounds
                   )
+                  AND prior.in_maintenance = FALSE
             ),
             TRUE
         ) AS has_initial_gap
@@ -420,6 +532,7 @@ const selectedRangeCoverageResult = await db.query(
     FROM ordered_checks`,
     [Number(id), req.user.id, windows[range]]
 );
+
 
 const {
     check_count: selectedRangeCheckCount,
@@ -435,8 +548,6 @@ const coverage =
     selectedRangeHasInitialGap
         ? 'insufficient_data'
         : 'complete';
-
-
 
 const coverageResult = await db.query(
     `WITH bounds AS (
@@ -458,6 +569,7 @@ const coverageResult = await db.query(
         WHERE mr.monitor_id = $1
           AND mr.checked_at >= b.window_start
           AND mr.checked_at <= b.window_end
+          AND mr.in_maintenance = FALSE
 
         UNION ALL
 
@@ -466,6 +578,7 @@ const coverageResult = await db.query(
         CROSS JOIN bounds b
         WHERE mr.monitor_id = $1
           AND mr.checked_at < b.window_start
+          AND mr.in_maintenance = FALSE
     ),
     ordered_checks AS (
         SELECT
@@ -474,40 +587,165 @@ const coverageResult = await db.query(
             LAG(checked_at) OVER (ORDER BY checked_at) AS previous_check
         FROM checks
         WHERE checked_at IS NOT NULL
+    ),
+    latest_check AS (
+        SELECT MAX(checked_at) AS checked_at
+        FROM ordered_checks
+    ),
+    maintenance_overlap AS (
+        SELECT COALESCE(
+            SUM(
+                EXTRACT(
+                    EPOCH FROM (
+                        upper(merged.period) - lower(merged.period)
+                    )
+                )
+            ),
+            0
+        ) AS seconds
+        FROM (
+            SELECT unnest(
+                range_agg(
+                    tsrange(
+                        GREATEST(
+                            w.starts_at::timestamp,
+                            lc.checked_at
+                        ),
+                        LEAST(
+                            w.ends_at::timestamp,
+                            b.window_end::timestamp
+                        ),
+                        '[)'
+                    )
+                )
+            ) AS period
+            FROM latest_check lc
+            CROSS JOIN bounds b
+            JOIN maintenance_windows w
+              ON w.user_id = $2
+             AND (w.monitor_id IS NULL OR w.monitor_id = $1)
+             AND w.starts_at < b.window_end
+             AND w.ends_at > lc.checked_at
+            WHERE lc.checked_at IS NOT NULL
+        ) merged
     )
     SELECT
         COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+
         COALESCE(
             BOOL_OR(
                 in_window
                 AND previous_check >= (
                     SELECT window_start FROM bounds
                 )
-                AND EXTRACT(
-                    EPOCH FROM (checked_at - previous_check)
-                ) > (
-                    SELECT gap_threshold_seconds FROM bounds
+                AND (
+                    EXTRACT(
+                        EPOCH FROM (checked_at - previous_check)
+                    ) - COALESCE((
+                        SELECT SUM(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    upper(merged.period)
+                                    - lower(merged.period)
+                                )
+                            )
+                        )
+                        FROM unnest((
+                            SELECT range_agg(
+                                tsrange(
+                                    GREATEST(
+                                        w.starts_at::timestamp,
+                                        ordered_checks.previous_check
+                                    ),
+                                    LEAST(
+                                        w.ends_at::timestamp,
+                                        ordered_checks.checked_at
+                                    ),
+                                    '[)'
+                                )
+                            )
+                            FROM maintenance_windows w
+                            WHERE w.user_id = $2
+                              AND (
+                                  w.monitor_id IS NULL
+                                  OR w.monitor_id = $1
+                              )
+                              AND w.starts_at < ordered_checks.checked_at
+                              AND w.ends_at > ordered_checks.previous_check
+                        )) AS merged(period)
+                    ), 0) > (
+                        SELECT gap_threshold_seconds FROM bounds
+                    )
                 )
             ),
             FALSE
         ) AS has_gap,
+
         COALESCE(
             EXTRACT(
                 EPOCH FROM (NOW() - MAX(checked_at))
+            ) - (
+                SELECT seconds FROM maintenance_overlap
             ) > (
                 SELECT gap_threshold_seconds FROM bounds
             ),
             TRUE
         ) AS is_stale,
+
         COALESCE(
-            EXTRACT(EPOCH FROM (
-                MIN(checked_at) FILTER (WHERE in_window)
-                - (SELECT window_start FROM bounds)
-            )) > (
-                SELECT gap_threshold_seconds FROM bounds
+            (
+                EXTRACT(EPOCH FROM (
+                    MIN(checked_at) FILTER (WHERE in_window)
+                    - (SELECT window_start FROM bounds)
+                ))
+                - COALESCE((
+                    SELECT SUM(
+                        EXTRACT(
+                            EPOCH FROM (
+                                upper(merged.period)
+                                - lower(merged.period)
+                            )
+                        )
+                    )
+                    FROM unnest((
+                        SELECT range_agg(
+                            tsrange(
+                                GREATEST(
+                                    w.starts_at::timestamp,
+                                    b.window_start::timestamp
+                                ),
+                                LEAST(
+                                    w.ends_at::timestamp,
+                                    (
+                                        SELECT MIN(oc.checked_at)
+                                        FROM ordered_checks oc
+                                        WHERE oc.in_window
+                                    )::timestamp
+                                ),
+                                '[)'
+                            )
+                        )
+                        FROM maintenance_windows w
+                        CROSS JOIN bounds b
+                        WHERE w.user_id = $2
+                          AND (
+                              w.monitor_id IS NULL
+                              OR w.monitor_id = $1
+                          )
+                          AND w.starts_at < (
+                              SELECT MIN(oc.checked_at)
+                              FROM ordered_checks oc
+                              WHERE oc.in_window
+                          )
+                          AND w.ends_at > b.window_start
+                    )) AS merged(period)
+                ), 0) > (
+                    SELECT gap_threshold_seconds FROM bounds
+                )
             ),
             TRUE
         ) AS has_initial_gap
+
     FROM ordered_checks`,
     [Number(id), req.user.id]
 );
@@ -519,41 +757,48 @@ const {
     has_initial_gap
 } = coverageResult.rows[0];
 
+
 const monitoringCoverageInsufficient =
     check_count === 0 ||
     has_gap ||
     is_stale ||
     has_initial_gap;
 
+
 const eventResult = await db.query(
     `WITH reference_time AS (
-        SELECT NOW() AS now
+        SELECT
+            NOW() AS now,
+            GREATEST(
+                NOW() - INTERVAL '30 days',
+                m.created_at
+            ) AS window_start
+        FROM monitors m
+        WHERE m.id = $1
+          AND m.user_id = $2
     ),
     previous_event AS (
         SELECT me.type, me.created_at
         FROM monitor_events me
-        JOIN monitors m ON m.id = me.monitor_id
         CROSS JOIN reference_time rt
         WHERE me.monitor_id = $1
-          AND m.user_id = $2
-          AND me.created_at < rt.now - INTERVAL '30 days'
+          AND me.created_at < rt.window_start
         ORDER BY me.created_at DESC
         LIMIT 1
     ),
     window_events AS (
         SELECT me.type, me.created_at
         FROM monitor_events me
-        JOIN monitors m ON m.id = me.monitor_id
         CROSS JOIN reference_time rt
         WHERE me.monitor_id = $1
-          AND m.user_id = $2
-          AND me.created_at >= rt.now - INTERVAL '30 days'
+          AND me.created_at >= rt.window_start
           AND me.created_at <= rt.now
     )
     SELECT
         events.type,
         events.created_at,
-        rt.now AS reference_time
+        rt.now AS reference_time,
+        rt.window_start
     FROM (
         SELECT type, created_at FROM previous_event
         UNION ALL
@@ -564,9 +809,11 @@ const eventResult = await db.query(
     [Number(id), req.user.id]
 );
 
+const referenceTime =
+    eventResult.rows[0]?.reference_time ?? new Date();
 
-const referenceTime = eventResult.rows[0]?.reference_time ?? new Date();
-
+const windowStart =
+    eventResult.rows[0]?.window_start ?? referenceTime;
 const slo = monitoringCoverageInsufficient
     ? {
         target_percent: 99.9,
@@ -577,8 +824,12 @@ const slo = monitoringCoverageInsufficient
     }
     : calculateSlo(
         eventResult.rows,
-        { now: referenceTime }
+        {
+            now: referenceTime,
+            windowStart
+        }
     );
+
 
 return res.json({
     uptime,
