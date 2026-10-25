@@ -3,6 +3,7 @@ import { apiFetch } from '../../utils/apiFetch';
 import { API_BASE_URL } from '../../config/api';
 import ResponseTimeChart from './ResponseTimeChart';
 import MonitorStatusBadge from './MonitorStatusBadge';
+import { Link } from 'react-router-dom';
 
 function MonitorCard({
   monitor,
@@ -113,9 +114,18 @@ function MonitorCard({
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#2a2a2a]">
         
         <div className="flex flex-col gap-1.5">
-          <h3 className="text-white font-semibold text-lg">
-            {monitor.name}
-          </h3>
+<div className="flex flex-wrap items-center gap-3">
+  <h3 className="text-white font-semibold text-lg">
+    {monitor.name}
+  </h3>
+
+  <Link
+    to={`/uptime/${monitor.id}`}
+    className="text-sm text-emerald-400 hover:text-emerald-300"
+  >
+    View details →
+  </Link>
+</div>
           <p className="text-gray-500 text-sm">
             {monitor.url}
           </p>

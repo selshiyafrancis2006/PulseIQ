@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { calculateSlo } = require('../utils/slo');
 
 // Same normalization used for host tags: trims, drops empties, de-dupes.
 // Validate and normalize monitor tags.
@@ -312,12 +313,236 @@ const getMonitorUptime = async (req, res) => {
             ? null
             : Number(((up_checks / total_checks) * 100).toFixed(2));
 
-        return res.json({
-            uptime,
-            range,
-            total_checks,
-            up_checks
-        });
+
+const selectedRangeCoverageResult = await db.query(
+    `WITH monitor_bounds AS (
+        SELECT
+            GREATEST(
+                NOW() - ($3 * INTERVAL '1 hour'),
+                m.created_at
+            ) AS window_start,
+            NOW() AS window_end,
+            m.interval_seconds,
+            m.created_at
+        FROM monitors m
+        WHERE m.id = $1
+          AND m.user_id = $2
+    ),
+    checks AS (
+        SELECT mr.checked_at, TRUE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN monitor_bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at >= b.window_start
+          AND mr.checked_at <= b.window_end
+
+        UNION ALL
+
+        SELECT MAX(mr.checked_at) AS checked_at, FALSE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN monitor_bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at < b.window_start
+    ),
+    ordered_checks AS (
+        SELECT
+            checked_at,
+            in_window,
+            LAG(checked_at) OVER (ORDER BY checked_at) AS previous_check
+        FROM checks
+        WHERE checked_at IS NOT NULL
+    )
+    SELECT
+        COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+                       COALESCE(
+            EXTRACT(EPOCH FROM (
+                MIN(checked_at) FILTER (WHERE in_window)
+                - (SELECT window_start FROM monitor_bounds)
+            )) > (
+                SELECT interval_seconds * 3 FROM monitor_bounds
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM monitor_results prior
+                WHERE prior.monitor_id = $1
+                  AND prior.checked_at < (
+                      SELECT window_start FROM monitor_bounds
+                  )
+            ),
+            TRUE
+        ) AS has_initial_gap
+    FROM ordered_checks`,
+    [Number(id), req.user.id, windows[range]]
+);
+
+const {
+    check_count: selectedRangeCheckCount,
+    has_gap: selectedRangeHasGap,
+    is_stale: selectedRangeIsStale,
+    has_initial_gap: selectedRangeHasInitialGap
+} = selectedRangeCoverageResult.rows[0];
+
+const coverage =
+    selectedRangeCheckCount === 0 ||
+    selectedRangeHasGap ||
+    selectedRangeIsStale ||
+    selectedRangeHasInitialGap
+        ? 'insufficient_data'
+        : 'complete';
+
+
+
+const coverageResult = await db.query(
+    `WITH bounds AS (
+        SELECT
+            GREATEST(
+                NOW() - INTERVAL '30 days',
+                m.created_at
+            ) AS window_start,
+            NOW() AS window_end,
+            m.interval_seconds * 3 AS gap_threshold_seconds
+        FROM monitors m
+        WHERE m.id = $1
+          AND m.user_id = $2
+    ),
+    checks AS (
+        SELECT mr.checked_at, TRUE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at >= b.window_start
+          AND mr.checked_at <= b.window_end
+
+        UNION ALL
+
+        SELECT MAX(mr.checked_at) AS checked_at, FALSE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at < b.window_start
+    ),
+    ordered_checks AS (
+        SELECT
+            checked_at,
+            in_window,
+            LAG(checked_at) OVER (ORDER BY checked_at) AS previous_check
+        FROM checks
+        WHERE checked_at IS NOT NULL
+    )
+    SELECT
+        COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+        COALESCE(
+            BOOL_OR(
+                in_window
+                AND previous_check >= (
+                    SELECT window_start FROM bounds
+                )
+                AND EXTRACT(
+                    EPOCH FROM (checked_at - previous_check)
+                ) > (
+                    SELECT gap_threshold_seconds FROM bounds
+                )
+            ),
+            FALSE
+        ) AS has_gap,
+        COALESCE(
+            EXTRACT(
+                EPOCH FROM (NOW() - MAX(checked_at))
+            ) > (
+                SELECT gap_threshold_seconds FROM bounds
+            ),
+            TRUE
+        ) AS is_stale,
+        COALESCE(
+            EXTRACT(EPOCH FROM (
+                MIN(checked_at) FILTER (WHERE in_window)
+                - (SELECT window_start FROM bounds)
+            )) > (
+                SELECT gap_threshold_seconds FROM bounds
+            ),
+            TRUE
+        ) AS has_initial_gap
+    FROM ordered_checks`,
+    [Number(id), req.user.id]
+);
+
+const {
+    check_count,
+    has_gap,
+    is_stale,
+    has_initial_gap
+} = coverageResult.rows[0];
+
+const monitoringCoverageInsufficient =
+    check_count === 0 ||
+    has_gap ||
+    is_stale ||
+    has_initial_gap;
+
+const eventResult = await db.query(
+    `WITH reference_time AS (
+        SELECT NOW() AS now
+    ),
+    previous_event AS (
+        SELECT me.type, me.created_at
+        FROM monitor_events me
+        JOIN monitors m ON m.id = me.monitor_id
+        CROSS JOIN reference_time rt
+        WHERE me.monitor_id = $1
+          AND m.user_id = $2
+          AND me.created_at < rt.now - INTERVAL '30 days'
+        ORDER BY me.created_at DESC
+        LIMIT 1
+    ),
+    window_events AS (
+        SELECT me.type, me.created_at
+        FROM monitor_events me
+        JOIN monitors m ON m.id = me.monitor_id
+        CROSS JOIN reference_time rt
+        WHERE me.monitor_id = $1
+          AND m.user_id = $2
+          AND me.created_at >= rt.now - INTERVAL '30 days'
+          AND me.created_at <= rt.now
+    )
+    SELECT
+        events.type,
+        events.created_at,
+        rt.now AS reference_time
+    FROM (
+        SELECT type, created_at FROM previous_event
+        UNION ALL
+        SELECT type, created_at FROM window_events
+    ) events
+    CROSS JOIN reference_time rt
+    ORDER BY events.created_at ASC`,
+    [Number(id), req.user.id]
+);
+
+
+const referenceTime = eventResult.rows[0]?.reference_time ?? new Date();
+
+const slo = monitoringCoverageInsufficient
+    ? {
+        target_percent: 99.9,
+        allowed_downtime_minutes: 43.2,
+        observed_downtime_minutes: null,
+        remaining_budget_minutes: null,
+        status: 'insufficient_data'
+    }
+    : calculateSlo(
+        eventResult.rows,
+        { now: referenceTime }
+    );
+
+return res.json({
+    uptime,
+    range,
+    total_checks,
+    up_checks,
+    coverage,
+    slo
+});
+
     } catch (err) {
         console.error(err);
         return res.status(500).json({

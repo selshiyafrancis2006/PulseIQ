@@ -9,6 +9,7 @@ import Landing from './pages/Landing'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Uptime from './pages/Uptime'
+import MonitorDetails from './pages/MonitorDetails'
 import AlertRules from './pages/AlertRules'
 import DashboardLayout from './layouts/DashboardLayout'
 import Metrics from './pages/Metrics'
@@ -23,6 +24,7 @@ import Apm from './pages/Apm'
 import Anomalies from './pages/Anomalies'
 import Dashboards from './pages/Dashboards'
 import DashboardBuilder from './pages/DashboardBuilder'
+
 
 const ProtectedRoute = ({ children }) => {
 
@@ -65,6 +67,17 @@ export default function App() {
             </ProtectedRoute>
           }
         />
+
+        <Route
+  path="/uptime/:id"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <MonitorDetails />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
 
         <Route
   path="/metrics"
