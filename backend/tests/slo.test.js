@@ -129,5 +129,5 @@ describe('calculateSlo', () => {
         expect(result.remaining_budget_minutes).toBe(0);
         expect(result.status).toBe('exhausted');
     });
-    
+
 });
