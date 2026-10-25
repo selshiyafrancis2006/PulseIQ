@@ -12,6 +12,12 @@ const BLOCKED_HOST_SUFFIXES = [
     '.example'
 ];
 
+const NAT64_PREFIX = [
+    0x00, 0x64, 0xff, 0x9b,
+    0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00
+];
+
 function normalizeHostname(hostname) {
     return hostname.replace(/^\[|\]$/g, '').toLowerCase();
 }
@@ -24,11 +30,27 @@ function isPublicIp(address) {
     try {
         const parsed = ipaddr.parse(address);
 
+        // IPv4-mapped IPv6 addresses must pass IPv4 validation.
         if (
             parsed.kind() === 'ipv6' &&
             parsed.isIPv4MappedAddress()
         ) {
             return isPublicIp(parsed.toIPv4Address().toString());
+        }
+
+        if (parsed.kind() === 'ipv6') {
+            const bytes = parsed.toByteArray();
+
+            // Handle only the well-known NAT64 prefix: 64:ff9b::/96.
+            // Validate the embedded IPv4 address using the same rules.
+            if (
+                NAT64_PREFIX.every(
+                    (byte, index) => bytes[index] === byte
+                )
+            ) {
+                const embeddedIpv4 = bytes.slice(12).join('.');
+                return isPublicIp(embeddedIpv4);
+            }
         }
 
         if (parsed.range() !== 'unicast') {
@@ -87,7 +109,7 @@ async function validatePublicHttpUrl(input) {
 
     if (net.isIP(hostname)) {
         addresses = [{ address: hostname }];
-        } else {
+    } else {
         const dnsStartedAt = Date.now();
 
         try {

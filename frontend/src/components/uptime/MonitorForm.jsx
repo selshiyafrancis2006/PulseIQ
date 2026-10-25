@@ -1,11 +1,25 @@
 import { useState } from 'react';
 
+const RENOTIFY_OPTIONS = [
+  { value: 0, label: 'Never (only the first alert)' },
+  { value: 15, label: 'Every 15 minutes' },
+  { value: 30, label: 'Every 30 minutes' },
+  { value: 60, label: 'Every hour' },
+  { value: 180, label: 'Every 3 hours' },
+  { value: 360, label: 'Every 6 hours' },
+  { value: 720, label: 'Every 12 hours' },
+  { value: 1440, label: 'Every 24 hours' },
+];
+
 const EMPTY_FORM = {
   name: '',
   url: '',
   tags: '',
   interval_seconds: 30,
+  renotify_minutes: 60,
 };
+
+const NUMERIC_FIELDS = ['interval_seconds', 'renotify_minutes'];
 
 function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
   const [form, setForm] = useState(() => monitor ? {
@@ -13,14 +27,29 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
     url: monitor.url || '',
     tags: Array.isArray(monitor.tags) ? monitor.tags.join(', ') : '',
     interval_seconds: monitor.interval_seconds ?? 30,
+    renotify_minutes: monitor.renotify_minutes ?? 60,
   } : { ...EMPTY_FORM });
   const [error, setError] = useState('');
+
+  // A value set through the API may not be one of the presets;
+  // keep it selectable so editing never silently changes it.
+  const renotifyOptions = RENOTIFY_OPTIONS.some(
+    (option) => option.value === form.renotify_minutes
+  )
+    ? RENOTIFY_OPTIONS
+    : [
+        ...RENOTIFY_OPTIONS,
+        {
+          value: form.renotify_minutes,
+          label: `Every ${form.renotify_minutes} minutes`,
+        },
+      ].sort((a, b) => a.value - b.value);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
     setForm((current) => ({
       ...current,
-      [name]: name === 'interval_seconds' ? Number(value) : value,
+      [name]: NUMERIC_FIELDS.includes(name) ? Number(value) : value,
     }));
   };
 
@@ -59,6 +88,13 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
       return;
     }
 
+    if (!Number.isInteger(form.renotify_minutes) ||
+        (form.renotify_minutes !== 0 &&
+          (form.renotify_minutes < 5 || form.renotify_minutes > 1440))) {
+      setError('Re-notify interval must be off, or between 5 and 1440 minutes.');
+      return;
+    }
+
     const tags = form.tags.split(',').map((tag) => tag.trim()).filter(Boolean);
     if (tags.length > 20 || tags.some((tag) => tag.length > 50)) {
       setError('Use at most 20 tags, each up to 50 characters.');
@@ -70,6 +106,7 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
       url,
       tags: [...new Set(tags)],
       interval_seconds: form.interval_seconds,
+      renotify_minutes: form.renotify_minutes,
     };
 
     try {
@@ -152,6 +189,29 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
           </select>
           <p className="mt-1 text-xs text-gray-500">
             Allowed range: 30–3600 seconds.
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass} htmlFor="monitor-renotify">
+            Re-notify while down
+          </label>
+          <select
+            id="monitor-renotify"
+            name="renotify_minutes"
+            value={form.renotify_minutes}
+            onChange={handleChange}
+            className={inputClass}
+          >
+            {renotifyOptions.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-xs text-gray-500">
+            Send a reminder to your notification channels if the monitor
+            stays down.
           </p>
         </div>
 

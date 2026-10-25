@@ -47,6 +47,14 @@ function validateInterval(value) {
     return Number.isInteger(value) && value >= 30 && value <= 3600;
 }
 
+function validateRenotify(value) {
+    return Number.isInteger(value) &&
+        (value === 0 || (value >= 5 && value <= 1440));
+}
+
+const RENOTIFY_ERROR =
+    'renotify_minutes must be 0 (disabled) or an integer between 5 and 1440';
+
 function validateMonitorId(value) {
     return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) &&
         Number(value) > 0;
@@ -54,7 +62,13 @@ function validateMonitorId(value) {
 const createMonitor = async (req, res) => {
     try {
         const body = req.body || {};
-        const { name, url, tags, interval_seconds = 30 } = body;
+        const {
+            name,
+            url,
+            tags,
+            interval_seconds = 30,
+            renotify_minutes = 60
+        } = body;
 
         const nameError = validateName(name);
         if (nameError) return res.status(400).json({ message: nameError });
@@ -68,6 +82,10 @@ const createMonitor = async (req, res) => {
             });
         }
 
+        if (!validateRenotify(renotify_minutes)) {
+            return res.status(400).json({ message: RENOTIFY_ERROR });
+        }
+
         let normalizedTags;
         try {
             normalizedTags = normalizeTags(tags);
@@ -77,15 +95,16 @@ const createMonitor = async (req, res) => {
 
         const result = await db.query(
             `INSERT INTO monitors
-                (name, url, user_id, tags, interval_seconds)
-             VALUES ($1, $2, $3, $4, $5)
+                (name, url, user_id, tags, interval_seconds, renotify_minutes)
+             VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING *`,
             [
                 name,
                 url,
                 req.user.id,
                 normalizedTags,
-                interval_seconds
+                interval_seconds,
+                renotify_minutes
             ]
         );
 
@@ -156,6 +175,7 @@ const getMonitorStatus = async (req, res) => {
                 m.url,
                 m.tags,
                 m.interval_seconds,
+                m.renotify_minutes,
                 m.is_active,
                 mr.status,
                 mr.response_time_ms,
@@ -619,12 +639,14 @@ const updateMonitor = async (req, res) => {
 
     try {
         const body = req.body || {};
-        const allowed = ['name', 'url', 'tags', 'interval_seconds'];
+        const allowed = [
+            'name', 'url', 'tags', 'interval_seconds', 'renotify_minutes'
+        ];
         const keys = Object.keys(body);
 
         if (!keys.length || keys.some(key => !allowed.includes(key))) {
             return res.status(400).json({
-                message: 'Provide supported fields: name, url, tags, interval_seconds'
+                message: 'Provide supported fields: name, url, tags, interval_seconds, renotify_minutes'
             });
         }
 
@@ -639,6 +661,8 @@ const updateMonitor = async (req, res) => {
         const url = Object.hasOwn(body, 'url') ? body.url : monitor.url;
         const interval = Object.hasOwn(body, 'interval_seconds')
             ? body.interval_seconds : monitor.interval_seconds;
+        const renotify = Object.hasOwn(body, 'renotify_minutes')
+            ? body.renotify_minutes : monitor.renotify_minutes;
 
         const nameError = validateName(name);
         if (nameError) return res.status(400).json({ message: nameError });
@@ -652,6 +676,10 @@ const updateMonitor = async (req, res) => {
             });
         }
 
+        if (!validateRenotify(renotify)) {
+            return res.status(400).json({ message: RENOTIFY_ERROR });
+        }
+
         let tags = monitor.tags || [];
         if (Object.hasOwn(body, 'tags')) {
             try {
@@ -663,9 +691,18 @@ const updateMonitor = async (req, res) => {
 
         const result = await db.query(
             `UPDATE monitors
-             SET name = $1, url = $2, tags = $3, interval_seconds = $4
-             WHERE id = $5 AND user_id = $6 RETURNING *`,
-            [name.trim(), url.trim(), tags, interval, Number(id), req.user.id]
+             SET name = $1, url = $2, tags = $3, interval_seconds = $4,
+                 renotify_minutes = $5
+             WHERE id = $6 AND user_id = $7 RETURNING *`,
+            [
+                name.trim(),
+                url.trim(),
+                tags,
+                interval,
+                renotify,
+                Number(id),
+                req.user.id
+            ]
         );
         return res.json(result.rows[0]);
     } catch (error) {

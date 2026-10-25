@@ -326,3 +326,53 @@ END $$;
 ALTER TABLE hosts ALTER COLUMN api_key_hash SET NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_api_key_hash ON hosts (api_key_hash);
+
+-- Outbound notification channels (Slack / generic webhook), per user.
+CREATE TABLE IF NOT EXISTS notification_channels (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  type VARCHAR(20) NOT NULL CHECK (type IN ('slack', 'webhook')),
+  name VARCHAR(100) NOT NULL,
+  url TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_channels_user
+  ON notification_channels (user_id);
+
+  -- Per-monitor notification state (dedup + flap detection).
+CREATE TABLE IF NOT EXISTS monitor_alert_state (
+  monitor_id INTEGER PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
+  notified_status VARCHAR(10),
+  last_notified_at TIMESTAMP,
+  is_flapping BOOLEAN NOT NULL DEFAULT false,
+  flapping_since TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- Re-notify interval for monitors that stay down (0 = disabled).
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS renotify_minutes INTEGER NOT NULL DEFAULT 60;
+
+-- Planned maintenance / muting. monitor_id NULL = all of the user's monitors.
+CREATE TABLE IF NOT EXISTS maintenance_windows (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  monitor_id INTEGER REFERENCES monitors(id) ON DELETE CASCADE,
+  reason VARCHAR(200),
+  starts_at TIMESTAMPTZ NOT NULL,
+  ends_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMP DEFAULT NOW(),
+  CHECK (ends_at > starts_at)
+);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_windows_user
+  ON maintenance_windows (user_id, starts_at, ends_at);
+
+CREATE INDEX IF NOT EXISTS idx_maintenance_windows_monitor
+  ON maintenance_windows (monitor_id);
+
+-- Results recorded during a maintenance window are flagged, not deleted.
+ALTER TABLE monitor_results
+  ADD COLUMN IF NOT EXISTS in_maintenance BOOLEAN NOT NULL DEFAULT false;

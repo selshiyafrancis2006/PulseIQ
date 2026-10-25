@@ -19,6 +19,10 @@ describe('urlSecurity.service', () => {
             ['::ffff:127.0.0.1', false],
             ['::ffff:10.0.0.1', false],
 
+            ['64:ff9b::d7e:8ac9', true],
+['64:ff9b::a00:1', false],
+['64:ff9b::7f00:1', false],
+
             ['100.64.0.1', false],
             ['198.18.0.1', false],
             ['198.19.255.254', false],

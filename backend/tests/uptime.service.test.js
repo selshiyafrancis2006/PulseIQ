@@ -187,4 +187,32 @@ expect(result).toEqual({
 
         expect(classifyCheckError).not.toHaveBeenCalled();
     });
+
+        test('records no events and sends no alerts during maintenance', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        db.query
+            .mockResolvedValueOnce({ rows: [{ status: 'UP' }] })
+            .mockResolvedValueOnce({ rows: [{ in_maintenance: true }] });
+
+        await checkMonitor({
+            id: 9,
+            url: 'https://example.com',
+            user_id: 1
+        });
+
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            expect.anything()
+        );
+
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('monitor_alert_state'),
+            expect.anything()
+        );
+    });
+    
 });

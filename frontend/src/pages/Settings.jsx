@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 
+import NotificationChannels from "../components/settings/NotificationChannels";
+import SettingsEmpty from "../components/settings/SettingsEmpty";
 import SettingsQuickActions from "../components/settings/SettingsQuickActions";
 import SettingsSearch from "../components/settings/SettingsSearch";
 import SettingsSection from "../components/settings/SettingsSection";
@@ -113,6 +115,9 @@ export default function Settings() {
 
       {/* Quick Actions */}
       <SettingsQuickActions />
+
+      {/* Notification Channels */}
+      <NotificationChannels />
 
       {/* Search */}
       <SettingsSearch

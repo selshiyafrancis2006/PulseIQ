@@ -29,6 +29,8 @@ const apmRoutes = require('./routes/apm.routes');
 const anomalyRoutes = require('./routes/anomaly.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const agentRateLimit = require('./middleware/agentRateLimit.middleware');
+const notificationChannelRoutes = require('./routes/notificationChannels.routes');
+const maintenanceWindowRoutes = require('./routes/maintenanceWindows.routes');
 
 const app = express();
 // Behind a TLS-terminating reverse proxy, set TRUST_PROXY=1 so req.ip and
@@ -65,6 +67,8 @@ app.use('/api/hosts', authenticate, hostsRoutes);
 app.use('/api/apm', authenticate, apmRoutes);
 app.use('/api/anomalies', authenticate, anomalyRoutes);
 app.use('/api/dashboards', authenticate, dashboardRoutes);
+app.use('/api/notification-channels', authenticate, notificationChannelRoutes);
+app.use('/api/maintenance-windows', authenticate, maintenanceWindowRoutes);
 
 // Health Route
 app.get('/', (req, res) => {
