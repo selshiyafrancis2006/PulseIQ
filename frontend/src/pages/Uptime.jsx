@@ -19,17 +19,6 @@ function Uptime() {
   const [notice, setNotice] = useState('');
   const formRef = useRef(null);
   const noticeRef = useRef(null);
-  const scrollToMonitor = (monitorId) => {
-    requestAnimationFrame(() => {
-  const card = document.querySelector(`[data-monitor-id="${monitorId}"]`);
- const container = document.querySelector('main');
- if (!card || !container) return;
- const cardRect = card.getBoundingClientRect();
- const containerRect = container.getBoundingClientRect();
- const targetTop = container.scrollTop + cardRect.top - containerRect.top - (container.clientHeight - cardRect.height) / 2;
- container.scrollTo({ top: targetTop, behavior: 'smooth' });
- });
- };
 
   useEffect(() => {
     if (!showForm) return;

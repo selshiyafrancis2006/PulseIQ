@@ -11,10 +11,6 @@ function MonitorCard({
   onEdit,
   onTogglePause,
   onDelete,
-
-  onConfirmDelete,
-  deleteTarget,
-  onCancelDelete,
   busy,
 }) {
   const cardRef = useRef(null);

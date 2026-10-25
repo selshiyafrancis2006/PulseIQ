@@ -360,12 +360,20 @@ useEffect(() => {
           value={
             uptime?.slo?.status === 'insufficient_data'
               ? 'Insufficient data'
-              : `${uptime.slo.target_percent}%`
+              : uptime?.slo?.status === 'exhausted'
+                ? 'Budget exhausted'
+                : uptime?.slo
+                  ? `${uptime.slo.target_percent}%`
+                  : '—'
           }
           note={
             uptime?.slo?.status === 'insufficient_data'
               ? 'More outage history is needed'
-              : `${uptime.slo.observed_downtime_minutes} min downtime · ${uptime.slo.remaining_budget_minutes} min budget left`
+              : uptime?.slo?.status === 'exhausted'
+                ? `${uptime.slo.observed_downtime_minutes} min downtime · Budget exhausted`
+                : uptime?.slo
+                  ? `${uptime.slo.observed_downtime_minutes} min downtime · ${uptime.slo.remaining_budget_minutes} min budget left`
+                  : 'Waiting for data'
           }
         />
       </div>
