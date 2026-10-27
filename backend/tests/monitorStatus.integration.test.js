@@ -56,6 +56,7 @@ test('returns the latest result per monitor, null fields when none, only own mon
     const latest = res.body.find((m) => m.id === withResults);
     expect(latest.status).toBe('UP');
     expect(latest.response_time_ms).toBe(120);
+    expect(latest.tags).toEqual(['prod']);
 
     const empty = res.body.find((m) => m.id === noResults);
     expect(empty.status).toBeNull();

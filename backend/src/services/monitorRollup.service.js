@@ -57,7 +57,8 @@ async function rollupRecentMonitorResults(hours = 3) {
     return runRollup(
         `mr.checked_at >= date_trunc(
             'hour',
-            (NOW()) - $1::int * INTERVAL '1 hour'
+            NOW() - $1::int * INTERVAL '1 hour',
+            'UTC'
          )`,
         [hours]
     );
@@ -69,11 +70,12 @@ async function rollupAllMonitorResults() {
 }
 
 // 1) roll up everything about to be deleted, 2) delete it, 3) trim old rollups.
-// The cutoff is aligned to a whole hour so a bucket is never half-deleted.
+// The cutoff is aligned to a whole UTC hour so a bucket is never half-deleted.
 async function cleanupMonitorResults() {
     const cutoff = `date_trunc(
         'hour',
-        (NOW()) - $1::int * INTERVAL '1 day'
+        NOW() - $1::int * INTERVAL '1 day',
+        'UTC'
     )`;
 
     const rolledUp = await runRollup(

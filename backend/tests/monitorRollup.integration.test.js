@@ -32,11 +32,7 @@ async function insert(status, ms, minutesAgo, inMaintenance = false) {
     await pool.query(
         `INSERT INTO monitor_results
             (monitor_id, status, response_time_ms, checked_at, in_maintenance)
-         VALUES (
-            $1, $2, $3,
-            (NOW() AT TIME ZONE 'UTC') - ($4 * INTERVAL '1 minute'),
-            $5
-         )`,
+         VALUES ($1, $2, $3, NOW() - ($4 * INTERVAL '1 minute'), $5)`,
         [monitorId, status, ms, minutesAgo, inMaintenance]
     );
 }
@@ -81,7 +77,7 @@ test('cleanup rolls up old rows before deleting them and keeps recent rows', asy
         `SELECT COUNT(*)::int AS n
          FROM monitor_results
          WHERE monitor_id = $1
-           AND checked_at < (NOW() AT TIME ZONE 'UTC') - INTERVAL '35 days'`,
+           AND checked_at < NOW() - INTERVAL '35 days'`,
         [monitorId]
     );
     expect(rows[0].n).toBe(0);

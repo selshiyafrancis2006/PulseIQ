@@ -1,4 +1,4 @@
-import {
+﻿import {
   BrowserRouter,
   Routes,
   Route,
@@ -24,6 +24,9 @@ import Apm from './pages/Apm'
 import Anomalies from './pages/Anomalies'
 import Dashboards from './pages/Dashboards'
 import DashboardBuilder from './pages/DashboardBuilder'
+import StatusPageSettings from './pages/StatusPageSettings'
+import PublicStatusPage from './pages/PublicStatusPage'
+import ApiTests from './pages/ApiTests'
 
 
 const ProtectedRoute = ({ children }) => {
@@ -44,7 +47,29 @@ export default function App() {
         {/* PUBLIC ROUTES */}
         <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/status/:slug" element={<PublicStatusPage />} />
+        <Route
+          path="/status-page"
+          element={
+            <ProtectedRoute>
+              <DashboardLayout>
+                <StatusPageSettings />
+              </DashboardLayout>
+            </ProtectedRoute>
+          }
+        />
 
+
+<Route
+  path="/api-tests"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <ApiTests />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
         {/* PROTECTED DASHBOARD ROUTES */}
         <Route
           path="/dashboard"
@@ -226,3 +251,4 @@ export default function App() {
 
   )
 }
+

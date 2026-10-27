@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS users (
+﻿CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -449,3 +449,137 @@ CREATE INDEX IF NOT EXISTS idx_monitor_rollups_1h_bucket
 -- Lets the retention DELETE find old rows without a full table scan.
 CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at
   ON monitor_results (checked_at);
+
+-- ===== F3: TIMESTAMP -> TIMESTAMPTZ =====
+-- Pin the database default to UTC so date_trunc/bucketing is deterministic.
+DO $$
+BEGIN
+  EXECUTE format('ALTER DATABASE %I SET timezone TO ''UTC''', current_database());
+END $$;
+
+-- Convert every remaining TIMESTAMP column. Idempotent: once converted, the
+-- loop finds nothing. Aborts untouched unless this session is on UTC,
+-- because stored naive values are assumed to be UTC.
+DO $$
+DECLARE
+  r RECORD;
+  converted INTEGER := 0;
+BEGIN
+  IF current_setting('TimeZone') NOT IN ('UTC', 'Etc/UTC') THEN
+    RAISE EXCEPTION
+      'F3 aborted: session TimeZone is %, expected UTC. Re-run init.sql in a new session.',
+      current_setting('TimeZone');
+  END IF;
+
+  FOR r IN
+    SELECT c.table_name, c.column_name
+    FROM information_schema.columns c
+    JOIN information_schema.tables t
+      ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+    WHERE c.table_schema = 'public'
+      AND t.table_type = 'BASE TABLE'
+      AND c.data_type = 'timestamp without time zone'
+    ORDER BY c.table_name, c.ordinal_position
+  LOOP
+    EXECUTE format(
+      'ALTER TABLE %I ALTER COLUMN %I TYPE TIMESTAMPTZ USING %I AT TIME ZONE ''UTC''',
+      r.table_name, r.column_name, r.column_name
+    );
+    converted := converted + 1;
+  END LOOP;
+
+  RAISE NOTICE 'F3: converted % timestamp column(s) to TIMESTAMPTZ', converted;
+END $$;
+
+-- ===== G1.1: multi-location checks =====
+
+-- Agents (hosts) that also run a monitor, in addition to the central server.
+CREATE TABLE IF NOT EXISTS monitor_locations (
+  monitor_id INTEGER NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+  host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (monitor_id, host_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_locations_host
+  ON monitor_locations (host_id);
+
+-- Raw probe results reported by agents. The quorum verdict is still written
+-- to monitor_results as a single consolidated row, so uptime, history and
+-- rollups never double-count.
+CREATE TABLE IF NOT EXISTS monitor_location_results (
+  id BIGSERIAL PRIMARY KEY,
+  monitor_id INTEGER NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+  host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  status VARCHAR(10) NOT NULL CHECK (status IN ('UP', 'DOWN')),
+  response_time_ms INTEGER,
+  status_code INTEGER,
+  error_type VARCHAR(50),
+  error_message TEXT,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Latest result per (monitor, agent), used by quorum evaluation.
+CREATE INDEX IF NOT EXISTS idx_monitor_location_results_latest
+  ON monitor_location_results (monitor_id, host_id, checked_at DESC);
+
+-- Used by retention cleanup.
+CREATE INDEX IF NOT EXISTS idx_monitor_location_results_checked_at
+  ON monitor_location_results (checked_at);
+
+-- How many locations must report DOWN before the monitor counts as DOWN.
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS quorum INTEGER NOT NULL DEFAULT 1 CHECK (quorum >= 1);
+
+-- ===== G3: multi-step API tests =====
+CREATE TABLE IF NOT EXISTS api_tests (
+    id SERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL
+        REFERENCES users(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    steps JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT api_tests_name_not_empty
+        CHECK (length(trim(name)) > 0),
+
+    CONSTRAINT api_tests_steps_array
+        CHECK (
+            jsonb_typeof(steps) = 'array'
+            AND jsonb_array_length(steps) BETWEEN 1 AND 10
+        ),
+
+    CONSTRAINT api_tests_id_user_unique UNIQUE (id, user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_tests_user_updated
+    ON api_tests (user_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS api_test_runs (
+    id BIGSERIAL PRIMARY KEY,
+    api_test_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    status VARCHAR(10) NOT NULL
+        CHECK (status IN ('passed', 'failed')),
+    results JSONB NOT NULL DEFAULT '[]'::jsonb,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    finished_at TIMESTAMPTZ,
+    duration_ms INTEGER
+        CHECK (duration_ms IS NULL OR duration_ms >= 0),
+
+    CONSTRAINT api_test_runs_test_owner_fk
+        FOREIGN KEY (api_test_id, user_id)
+        REFERENCES api_tests(id, user_id) ON DELETE CASCADE,
+
+    CONSTRAINT api_test_runs_results_array
+        CHECK (jsonb_typeof(results) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_api_test_runs_test_started
+    ON api_test_runs (api_test_id, started_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_api_test_runs_user_started
+    ON api_test_runs (user_id, started_at DESC);
+
+

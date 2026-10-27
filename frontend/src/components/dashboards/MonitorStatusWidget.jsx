@@ -3,19 +3,22 @@ import { apiFetch } from '../../utils/apiFetch'
 import { API_BASE_URL } from '../../config/api'
 
 export default function MonitorStatusWidget({ monitorId }) {
-
   const [monitor, setMonitor] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-
-    if (!monitorId) return
+    if (!monitorId) {
+      setLoading(false)
+      return
+    }
 
     const fetchStatus = async () => {
       try {
         const res = await apiFetch(`${API_BASE_URL}/api/monitors/status`)
+        if (!res.ok) throw new Error('Failed to fetch monitor status')
+
         const data = await res.json()
-        const match = data.find((m) => m.id === monitorId)
+        const match = data.find((m) => String(m.id) === String(monitorId))
         setMonitor(match || null)
       } catch (err) {
         console.error('Widget failed to fetch monitor status:', err)
@@ -28,7 +31,6 @@ export default function MonitorStatusWidget({ monitorId }) {
 
     const interval = setInterval(fetchStatus, 10000)
     return () => clearInterval(interval)
-
   }, [monitorId])
 
   if (loading) {
@@ -42,22 +44,28 @@ export default function MonitorStatusWidget({ monitorId }) {
   }
 
   if (!monitor) {
-    return <div className="h-full flex items-center justify-center text-xs text-gray-600">Monitor not found</div>
+    return (
+      <div className="h-full flex items-center justify-center text-xs text-gray-600">
+        Monitor not found
+      </div>
+    )
   }
 
   const isUp = monitor.status === 'UP'
+  const tags = Array.isArray(monitor.tags) ? monitor.tags : []
 
   return (
     <div className="h-full flex flex-col justify-center items-center p-4 text-center">
-
       <p className="text-base text-white mb-3 truncate max-w-full">
         {monitor.name}
       </p>
 
-      <div className={`
-        w-4 h-4 rounded-full mb-3
-        ${isUp ? 'bg-emerald-500' : 'bg-red-500'}
-      `} />
+      <div
+        className={`
+          w-4 h-4 rounded-full mb-3
+          ${isUp ? 'bg-emerald-500' : 'bg-red-500'}
+        `}
+      />
 
       <p className={`text-lg font-bold ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>
         {monitor.status || 'UNKNOWN'}
@@ -75,6 +83,18 @@ export default function MonitorStatusWidget({ monitorId }) {
         </p>
       )}
 
+      {tags.length > 0 && (
+        <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+          {tags.map((tag) => (
+            <span
+              key={tag}
+              className="rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-300"
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

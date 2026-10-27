@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const http = require('http');
@@ -31,6 +31,9 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const agentRateLimit = require('./middleware/agentRateLimit.middleware');
 const notificationChannelRoutes = require('./routes/notificationChannels.routes');
 const maintenanceWindowRoutes = require('./routes/maintenanceWindows.routes');
+const publicStatusPageRoutes = require('./routes/publicStatusPage.routes');
+const statusPageRoutes = require('./routes/statusPage.routes');
+const apiTestRoutes = require('./routes/apiTest.routes');
 
 const app = express();
 // Behind a TLS-terminating reverse proxy, set TRUST_PROXY=1 so req.ip and
@@ -48,15 +51,18 @@ setWSS(wss);
 // Middleware
 app.use(helmet());
 app.use(cors(corsOptions));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 app.use('/api/agent', agentRateLimit, agentRoutes);
 app.use(loggerMiddleware);
 
 // Routes
-// Public — no auth required
+// Public â€” no auth required
 app.use('/api/auth', authRoutes);
+app.use('/api/public/status', publicStatusPageRoutes);
 
-// Protected — requires a valid JWT
+// Protected â€” requires a valid JWT
+app.use('/api/status-pages', authenticate, statusPageRoutes);
+app.use('/api/api-tests', authenticate, apiTestRoutes);
 app.use('/api/monitors', authenticate, monitorRoutes);
 app.use('/api', authenticate, metricsRoutes);
 app.use('/api', authenticate, alertsRoutes);
@@ -77,7 +83,7 @@ app.get('/', (req, res) => {
 
 // WebSocket Connection
 // Metrics are pushed to clients via broadcastMetrics() from metric.job.js
-// and agent.routes.js — no per-client polling here.
+// and agent.routes.js â€” no per-client polling here.
 wss.on('connection', async (ws, req) => {
 
     const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
@@ -150,7 +156,21 @@ if (process.env.NODE_ENV !== 'test') {
 }
 
 
+app.use((err, req, res, next) => {
+    if (err?.type === 'entity.too.large') {
+        return res.status(413).json({ error: 'Request body is too large' });
+    }
+
+    if (err instanceof SyntaxError && err?.status === 400 && 'body' in err) {
+        return res.status(400).json({ error: 'Invalid JSON request body' });
+    }
+
+    return next(err);
+});
 module.exports = {
     app,
     server
 };
+
+
+

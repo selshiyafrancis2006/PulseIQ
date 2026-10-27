@@ -1,4 +1,4 @@
-export const sidebarItems = [
+﻿export const sidebarItems = [
 {
   title: 'OVERVIEW',
   items: [
@@ -42,6 +42,10 @@ export const sidebarItems = [
         label: 'Processes',
         path: '/processes',
       },
+      {
+        label: 'API Tests',
+        path: '/api-tests',
+      },
     ],
   },
 
@@ -81,6 +85,10 @@ export const sidebarItems = [
       {
         label: 'Configuration',
         path: '/settings',
+      },
+      {
+        label: 'Status page',
+        path: '/status-page',
       },
     ],
   },

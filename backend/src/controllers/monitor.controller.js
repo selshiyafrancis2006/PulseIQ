@@ -244,6 +244,8 @@ const getMonitorStatus = async (req, res) => {
                 mr.status,
                 mr.response_time_ms,
                 mr.status_code,
+                mr.certificate_expires_at,
+                mr.certificate_days_remaining,
                 mr.checked_at
             FROM monitors m
             LEFT JOIN LATERAL (
@@ -251,6 +253,8 @@ const getMonitorStatus = async (req, res) => {
                     status,
                     response_time_ms,
                     status_code,
+                    certificate_expires_at,
+                    certificate_days_remaining,
                     checked_at
                 FROM monitor_results
                 WHERE monitor_id = m.id
