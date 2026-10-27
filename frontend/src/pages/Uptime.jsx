@@ -187,9 +187,15 @@ function Uptime() {
   const filteredMonitors = monitors.filter((monitor) => {
     const name = (monitor.name || '').toLowerCase();
     const url = (monitor.url || '').toLowerCase();
-    const query = search.toLowerCase();
+    const tcpTarget = `${monitor.tcp_host || ''}:${monitor.tcp_port || ''}`.toLowerCase();
+    const dnsTarget = `${monitor.dns_hostname || ''} ${monitor.dns_record_type || ''}`.toLowerCase();
+    const query = search.trim().toLowerCase();
 
-    const matchesSearch = name.includes(query) || url.includes(query);
+    const matchesSearch =
+      name.includes(query) ||
+      url.includes(query) ||
+      tcpTarget.includes(query) ||
+      dnsTarget.includes(query);
     const matchesStatus =
       statusFilter === 'ALL' || monitor.status === statusFilter;
     const matchesTag =

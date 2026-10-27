@@ -332,6 +332,13 @@ test('SLO reports insufficient data when monitoring has a long gap', async () =>
     const user = await createUser();
     const monitor = await createMonitor(user.token, 'slo-monitoring-gap');
 
+    await pool.query(
+        `UPDATE monitors
+         SET created_at = NOW() - INTERVAL '48 hours'
+         WHERE id = $1`,
+        [monitor.id]
+    );
+
     const now = Date.now();
 
     await insertResultAt(
@@ -377,7 +384,7 @@ test('uptime rejects an invalid monitor ID', async () => {
     expect(response.status).toBe(400);
 });
 
-test('uptime does not expose another user’s monitor', async () => {
+test('uptime does not expose another userâ€™s monitor', async () => {
     const owner = await createUser();
     const otherUser = await createUser();
     const monitor = await createMonitor(owner.token, 'private-uptime');

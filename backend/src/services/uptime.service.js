@@ -1,5 +1,7 @@
 const db = require('../config/db');
 const { checkHttp } = require('./httpCheck.service');
+const { checkTcp } = require('./tcpCheck.service');
+const { checkDns } = require('./dnsCheck.service');
 const { classifyCheckError } = require('./checkError.service');
 const { processCheckOutcome } = require('./monitorAlert.service');
 
@@ -25,10 +27,12 @@ async function saveCheckResult(monitor, result) {
          (monitor_id, status, response_time_ms, status_code,
           error_type, error_message,
           dns_time_ms, connect_time_ms, tls_time_ms,
-          ttfb_time_ms, download_time_ms, in_maintenance)
+          ttfb_time_ms, download_time_ms,
+          certificate_expires_at, certificate_days_remaining,
+          in_maintenance)
          VALUES (
             $1, $2, $3, $4, $5, $6,
-            $7, $8, $9, $10, $11,
+            $7, $8, $9, $10, $11, $12, $13,
             EXISTS (
                 SELECT 1
                 FROM maintenance_windows w
@@ -47,11 +51,13 @@ async function saveCheckResult(monitor, result) {
             result.statusCode,
             result.errorType,
             result.errorMessage,
-            result.dnsTimeMs,
-            result.connectTimeMs,
-            result.tlsTimeMs,
-            result.ttfbTimeMs,
-            result.downloadTimeMs
+            result.dnsTimeMs ?? null,
+            result.connectTimeMs ?? null,
+            result.tlsTimeMs ?? null,
+            result.ttfbTimeMs ?? null,
+            result.downloadTimeMs ?? null,
+            result.certificateExpiresAt ?? null,
+            result.certificateDaysRemaining ?? null
         ]
     );
 
@@ -118,25 +124,63 @@ async function checkMonitor(monitor) {
     let result;
 
     try {
-        const checked = await checkHttp(monitor);
-        const isUp =
-            checked.statusCode >= 200 &&
-            checked.statusCode < 400;
+        if (monitor.monitor_type === 'DNS') {
+            const checked = await checkDns(monitor);
 
-        result = {
-            status: isUp ? 'UP' : 'DOWN',
-            responseTime: checked.responseTimeMs,
-            statusCode: checked.statusCode,
-            dnsTimeMs: checked.dnsTimeMs,
-            connectTimeMs: checked.connectTimeMs,
-            tlsTimeMs: checked.tlsTimeMs,
-            ttfbTimeMs: checked.ttfbTimeMs,
-            downloadTimeMs: checked.downloadTimeMs,
-            errorType: isUp ? null : 'BAD_STATUS',
-            errorMessage: isUp
-                ? null
-                : `Monitor returned HTTP ${checked.statusCode}`
-        };
+            result = {
+                status: 'UP',
+                responseTime: checked.responseTimeMs,
+                statusCode: null,
+                dnsTimeMs: checked.dnsTimeMs ?? checked.responseTimeMs ?? null,
+                connectTimeMs: null,
+                tlsTimeMs: null,
+                ttfbTimeMs: null,
+                downloadTimeMs: null,
+                certificateExpiresAt: null,
+                certificateDaysRemaining: null,
+                errorType: null,
+                errorMessage: null
+            };
+        } else if (monitor.monitor_type === 'TCP') {
+            const checked = await checkTcp(monitor);
+
+            result = {
+                status: 'UP',
+                responseTime: checked.responseTimeMs,
+                statusCode: null,
+                dnsTimeMs: checked.dnsTimeMs ?? null,
+                connectTimeMs: checked.connectTimeMs ?? null,
+                tlsTimeMs: null,
+                ttfbTimeMs: null,
+                downloadTimeMs: null,
+                certificateExpiresAt: null,
+                certificateDaysRemaining: null,
+                errorType: null,
+                errorMessage: null
+            };
+        } else {
+            const checked = await checkHttp(monitor);
+            const isUp =
+                checked.statusCode >= 200 &&
+                checked.statusCode < 400;
+
+            result = {
+                status: isUp ? 'UP' : 'DOWN',
+                responseTime: checked.responseTimeMs,
+                statusCode: checked.statusCode,
+                dnsTimeMs: checked.dnsTimeMs,
+                connectTimeMs: checked.connectTimeMs,
+                tlsTimeMs: checked.tlsTimeMs,
+                ttfbTimeMs: checked.ttfbTimeMs,
+                downloadTimeMs: checked.downloadTimeMs,
+                certificateExpiresAt: checked.certificateExpiresAt ?? null,
+                certificateDaysRemaining: checked.certificateDaysRemaining ?? null,
+                errorType: isUp ? null : 'BAD_STATUS',
+                errorMessage: isUp
+                    ? null
+                    : `Monitor returned HTTP ${checked.statusCode}`
+            };
+        }
     } catch (error) {
         const classified = classifyCheckError(error);
 
@@ -149,7 +193,7 @@ async function checkMonitor(monitor) {
         };
     }
 
-    // Keep database operations outside the HTTP-check catch.
+    // Keep database operations outside the checker catch.
     // Database errors must propagate to the caller.
     return saveCheckResult(monitor, result);
 }

@@ -1,5 +1,7 @@
 const db = require('../config/db');
 const { calculateSlo } = require('../utils/slo');
+const { validatePublicTcpTarget } = require('../services/urlSecurity.service');
+const { validateDnsTarget } = require('../services/dnsCheck.service');
 
 // Same normalization used for host tags: trims, drops empties, de-dupes.
 // Validate and normalize monitor tags.
@@ -65,6 +67,11 @@ const createMonitor = async (req, res) => {
         const {
             name,
             url,
+            monitor_type = 'HTTP',
+            tcp_host,
+            tcp_port,
+            dns_hostname,
+            dns_record_type = 'A',
             tags,
             interval_seconds = 30,
             renotify_minutes = 60
@@ -73,8 +80,11 @@ const createMonitor = async (req, res) => {
         const nameError = validateName(name);
         if (nameError) return res.status(400).json({ message: nameError });
 
-        const urlError = validateUrl(url);
-        if (urlError) return res.status(400).json({ message: urlError });
+        if (!['HTTP', 'TCP', 'DNS'].includes(monitor_type)) {
+            return res.status(400).json({
+                message: 'monitor_type must be HTTP, TCP, or DNS'
+            });
+        }
 
         if (!validateInterval(interval_seconds)) {
             return res.status(400).json({
@@ -86,6 +96,53 @@ const createMonitor = async (req, res) => {
             return res.status(400).json({ message: RENOTIFY_ERROR });
         }
 
+        let storedUrl;
+        let storedTcpHost = null;
+        let storedTcpPort = null;
+        let storedDnsHost = null;
+        let storedDnsRecordType = 'A';
+
+        if (monitor_type === 'HTTP') {
+            const urlError = validateUrl(url);
+            if (urlError) return res.status(400).json({ message: urlError });
+            storedUrl = url.trim();
+        } else if (monitor_type === 'TCP') {
+            let target;
+            try {
+                target = await validatePublicTcpTarget(tcp_host, tcp_port);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid TCP target'
+                });
+            }
+
+            storedTcpHost = target.hostname;
+            storedTcpPort = target.port;
+
+            const displayHost = storedTcpHost.includes(':')
+                ? `[${storedTcpHost}]`
+                : storedTcpHost;
+
+            // url is NOT NULL for legacy schema compatibility.
+            // TCP checks use tcp_host/tcp_port, never this display value.
+            storedUrl = `tcp://${displayHost}:${storedTcpPort}`;
+        } else {
+            let target;
+            try {
+                target = validateDnsTarget(dns_hostname, dns_record_type);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid DNS target'
+                });
+            }
+
+            storedDnsHost = target.hostname;
+            storedDnsRecordType = target.recordType;
+
+            // url is NOT NULL for legacy schema compatibility.
+            // DNS checks use dns_hostname/dns_record_type, never this display value.
+            storedUrl = `dns://${storedDnsHost}/${storedDnsRecordType}`;
+        }
         let normalizedTags;
         try {
             normalizedTags = normalizeTags(tags);
@@ -95,29 +152,34 @@ const createMonitor = async (req, res) => {
 
         const result = await db.query(
             `INSERT INTO monitors
-                (name, url, user_id, tags, interval_seconds, renotify_minutes)
-             VALUES ($1, $2, $3, $4, $5, $6)
+                (name, url, user_id, tags, interval_seconds,
+                 renotify_minutes, monitor_type, tcp_host, tcp_port,
+                 dns_hostname, dns_record_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              RETURNING *`,
             [
-                name,
-                url,
+                name.trim(),
+                storedUrl,
                 req.user.id,
                 normalizedTags,
                 interval_seconds,
-                renotify_minutes
+                renotify_minutes,
+                monitor_type,
+                storedTcpHost,
+                storedTcpPort,
+                storedDnsHost,
+                storedDnsRecordType
             ]
         );
 
-        res.status(201).json(result.rows[0]);
-
+        return res.status(201).json(result.rows[0]);
     } catch (error) {
         console.error(error);
-        res.status(500).json({
+        return res.status(500).json({
             message: 'Failed to create monitor'
         });
     }
 };
-
 const getMonitors = async (req, res) => {
     try {
 
@@ -163,13 +225,15 @@ const getMonitorById = async (req, res) => {
         return res.status(500).json({ message: 'Failed to fetch monitor' });
     }
 };
+
 const getMonitorStatus = async (req, res) => {
     try {
-
         const { tag } = req.query;
 
+        // One index lookup per monitor for its latest result, instead of
+        // joining and sorting every monitor_results row (F2).
         const result = await db.query(`
-            SELECT DISTINCT ON (m.id)
+            SELECT
                 m.id,
                 m.name,
                 m.url,
@@ -182,23 +246,30 @@ const getMonitorStatus = async (req, res) => {
                 mr.status_code,
                 mr.checked_at
             FROM monitors m
-            LEFT JOIN monitor_results mr
-                ON m.id = mr.monitor_id
+            LEFT JOIN LATERAL (
+                SELECT
+                    status,
+                    response_time_ms,
+                    status_code,
+                    checked_at
+                FROM monitor_results
+                WHERE monitor_id = m.id
+                ORDER BY checked_at DESC, id DESC
+                LIMIT 1
+            ) mr ON TRUE
             WHERE m.user_id = $1
               AND ($2::text IS NULL OR m.tags @> ARRAY[$2::text])
-            ORDER BY m.id, mr.checked_at DESC
+            ORDER BY m.id
         `, [req.user.id, tag || null]);
 
         res.json(result.rows);
 
     } catch (error) {
-
         console.error(error);
 
         res.status(500).json({
             message: 'Failed to fetch monitor status'
         });
-
     }
 };
 
@@ -236,6 +307,10 @@ if (!Object.hasOwn(windows, range)) {
         mr.tls_time_ms,
         mr.ttfb_time_ms,
         mr.download_time_ms,
+        mr.error_type,
+        mr.error_message,
+        mr.certificate_expires_at,
+        mr.certificate_days_remaining,
         mr.checked_at,
         ROW_NUMBER() OVER (
             PARTITION BY FLOOR(
@@ -261,6 +336,10 @@ SELECT
     tls_time_ms,
     ttfb_time_ms,
     download_time_ms,
+    error_type,
+    error_message,
+    certificate_expires_at,
+    certificate_days_remaining,
     checked_at
 FROM ranked_results
 WHERE bucket_rank = 1
@@ -390,14 +469,14 @@ const selectedRangeCoverageResult = await db.query(
         FROM (
             SELECT unnest(
                 range_agg(
-                    tsrange(
+                    tstzrange(
                         GREATEST(
-                            w.starts_at::timestamp,
+                            w.starts_at,
                             lc.checked_at
                         ),
                         LEAST(
-                            w.ends_at::timestamp,
-                            b.window_end::timestamp
+                            w.ends_at,
+                            b.window_end
                         ),
                         '[)'
                     )
@@ -437,13 +516,13 @@ const selectedRangeCoverageResult = await db.query(
                         )
                         FROM unnest((
                             SELECT range_agg(
-                                tsrange(
+                                tstzrange(
                                     GREATEST(
-                                        w.starts_at::timestamp,
+                                        w.starts_at,
                                         ordered_checks.previous_check
                                     ),
                                     LEAST(
-                                        w.ends_at::timestamp,
+                                        w.ends_at,
                                         ordered_checks.checked_at
                                     ),
                                     '[)'
@@ -482,18 +561,18 @@ const selectedRangeCoverageResult = await db.query(
                     )
                     FROM unnest((
                         SELECT range_agg(
-                            tsrange(
+                            tstzrange(
                                 GREATEST(
-                                    w.starts_at::timestamp,
-                                    b.window_start::timestamp
+                                    w.starts_at,
+                                    b.window_start
                                 ),
                                 LEAST(
-                                    w.ends_at::timestamp,
+                                    w.ends_at,
                                     (
                                         SELECT MIN(oc.checked_at)
                                         FROM ordered_checks oc
                                         WHERE oc.in_window
-                                    )::timestamp
+                                    )
                                 ),
                                 '[)'
                             )
@@ -606,14 +685,14 @@ const coverageResult = await db.query(
         FROM (
             SELECT unnest(
                 range_agg(
-                    tsrange(
+                    tstzrange(
                         GREATEST(
-                            w.starts_at::timestamp,
+                            w.starts_at,
                             lc.checked_at
                         ),
                         LEAST(
-                            w.ends_at::timestamp,
-                            b.window_end::timestamp
+                            w.ends_at,
+                            b.window_end
                         ),
                         '[)'
                     )
@@ -652,13 +731,13 @@ const coverageResult = await db.query(
                         )
                         FROM unnest((
                             SELECT range_agg(
-                                tsrange(
+                                tstzrange(
                                     GREATEST(
-                                        w.starts_at::timestamp,
+                                        w.starts_at,
                                         ordered_checks.previous_check
                                     ),
                                     LEAST(
-                                        w.ends_at::timestamp,
+                                        w.ends_at,
                                         ordered_checks.checked_at
                                     ),
                                     '[)'
@@ -709,18 +788,18 @@ const coverageResult = await db.query(
                     )
                     FROM unnest((
                         SELECT range_agg(
-                            tsrange(
+                            tstzrange(
                                 GREATEST(
-                                    w.starts_at::timestamp,
-                                    b.window_start::timestamp
+                                    w.starts_at,
+                                    b.window_start
                                 ),
                                 LEAST(
-                                    w.ends_at::timestamp,
+                                    w.ends_at,
                                     (
                                         SELECT MIN(oc.checked_at)
                                         FROM ordered_checks oc
                                         WHERE oc.in_window
-                                    )::timestamp
+                                    )
                                 ),
                                 '[)'
                             )
@@ -756,6 +835,7 @@ const {
     is_stale,
     has_initial_gap
 } = coverageResult.rows[0];
+
 
 
 const monitoringCoverageInsufficient =
@@ -886,18 +966,22 @@ const getMonitorEvents = async (req, res) => {
 
 const updateMonitor = async (req, res) => {
     const { id } = req.params;
-    if (!validateMonitorId(id)) return res.status(400).json({ message: 'Invalid monitor ID' });
+    if (!validateMonitorId(id)) {
+        return res.status(400).json({ message: 'Invalid monitor ID' });
+    }
 
     try {
         const body = req.body || {};
         const allowed = [
-            'name', 'url', 'tags', 'interval_seconds', 'renotify_minutes'
+            'name', 'url', 'tcp_host', 'tcp_port',
+            'dns_hostname', 'dns_record_type', 'tags',
+            'interval_seconds', 'renotify_minutes'
         ];
         const keys = Object.keys(body);
 
         if (!keys.length || keys.some(key => !allowed.includes(key))) {
             return res.status(400).json({
-                message: 'Provide supported fields: name, url, tags, interval_seconds, renotify_minutes'
+                message: 'Provide supported monitor fields'
             });
         }
 
@@ -905,21 +989,55 @@ const updateMonitor = async (req, res) => {
             'SELECT * FROM monitors WHERE id = $1 AND user_id = $2',
             [Number(id), req.user.id]
         );
-        if (!current.rows.length) return res.status(404).json({ message: 'Monitor not found' });
+
+        if (!current.rows.length) {
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
 
         const monitor = current.rows[0];
+        const type = monitor.monitor_type || 'HTTP';
+
+        const hasTcpFields =
+            Object.hasOwn(body, 'tcp_host') ||
+            Object.hasOwn(body, 'tcp_port');
+        const hasDnsFields =
+            Object.hasOwn(body, 'dns_hostname') ||
+            Object.hasOwn(body, 'dns_record_type');
+
+        if (type === 'HTTP' && (hasTcpFields || hasDnsFields)) {
+            return res.status(400).json({
+                message: 'TCP and DNS fields cannot be changed on an HTTP monitor'
+            });
+        }
+
+        if (type === 'TCP' && Object.hasOwn(body, 'url')) {
+            return res.status(400).json({
+                message: 'The URL cannot be changed on a TCP monitor; update tcp_host and tcp_port instead'
+            });
+        }
+
+        if (type === 'TCP' && hasDnsFields) {
+            return res.status(400).json({
+                message: 'DNS fields cannot be changed on a TCP monitor'
+            });
+        }
+
+        if (type === 'DNS' && (Object.hasOwn(body, 'url') || hasTcpFields)) {
+            return res.status(400).json({
+                message: 'Update dns_hostname and dns_record_type on a DNS monitor; URL and TCP fields are not supported'
+            });
+        }
+
         const name = Object.hasOwn(body, 'name') ? body.name : monitor.name;
-        const url = Object.hasOwn(body, 'url') ? body.url : monitor.url;
         const interval = Object.hasOwn(body, 'interval_seconds')
             ? body.interval_seconds : monitor.interval_seconds;
         const renotify = Object.hasOwn(body, 'renotify_minutes')
             ? body.renotify_minutes : monitor.renotify_minutes;
 
         const nameError = validateName(name);
-        if (nameError) return res.status(400).json({ message: nameError });
-
-        const urlError = validateUrl(url);
-        if (urlError) return res.status(400).json({ message: urlError });
+        if (nameError) {
+            return res.status(400).json({ message: nameError });
+        }
 
         if (!validateInterval(interval)) {
             return res.status(400).json({
@@ -929,6 +1047,62 @@ const updateMonitor = async (req, res) => {
 
         if (!validateRenotify(renotify)) {
             return res.status(400).json({ message: RENOTIFY_ERROR });
+        }
+
+        let url;
+        let tcpHost = null;
+        let tcpPort = null;
+        let dnsHostname = null;
+        let dnsRecordType = 'A';
+
+        if (type === 'TCP') {
+            const requestedHost = Object.hasOwn(body, 'tcp_host')
+                ? body.tcp_host : monitor.tcp_host;
+            const requestedPort = Object.hasOwn(body, 'tcp_port')
+                ? body.tcp_port : monitor.tcp_port;
+
+            let target;
+            try {
+                target = await validatePublicTcpTarget(requestedHost, requestedPort);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid TCP target'
+                });
+            }
+
+            tcpHost = target.hostname;
+            tcpPort = target.port;
+
+            const displayHost = tcpHost.includes(':')
+                ? `[${tcpHost}]`
+                : tcpHost;
+
+            url = `tcp://${displayHost}:${tcpPort}`;
+        } else if (type === 'DNS') {
+            const requestedHost = Object.hasOwn(body, 'dns_hostname')
+                ? body.dns_hostname : monitor.dns_hostname;
+            const requestedRecordType = Object.hasOwn(body, 'dns_record_type')
+                ? body.dns_record_type : (monitor.dns_record_type || 'A');
+
+            let target;
+            try {
+                target = validateDnsTarget(requestedHost, requestedRecordType);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid DNS target'
+                });
+            }
+
+            dnsHostname = target.hostname;
+            dnsRecordType = target.recordType;
+            url = `dns://${dnsHostname}/${dnsRecordType}`;
+        } else {
+            url = Object.hasOwn(body, 'url') ? body.url : monitor.url;
+            const urlError = validateUrl(url);
+            if (urlError) {
+                return res.status(400).json({ message: urlError });
+            }
+            url = url.trim();
         }
 
         let tags = monitor.tags || [];
@@ -943,25 +1117,33 @@ const updateMonitor = async (req, res) => {
         const result = await db.query(
             `UPDATE monitors
              SET name = $1, url = $2, tags = $3, interval_seconds = $4,
-                 renotify_minutes = $5
-             WHERE id = $6 AND user_id = $7 RETURNING *`,
+                 renotify_minutes = $5, tcp_host = $6, tcp_port = $7,
+                 dns_hostname = $8, dns_record_type = $9
+             WHERE id = $10 AND user_id = $11
+             RETURNING *`,
             [
                 name.trim(),
-                url.trim(),
+                url,
                 tags,
                 interval,
                 renotify,
+                tcpHost,
+                tcpPort,
+                dnsHostname,
+                dnsRecordType,
                 Number(id),
                 req.user.id
             ]
         );
+
         return res.json(result.rows[0]);
     } catch (error) {
         console.error('Update monitor failed:', error);
-        return res.status(500).json({ message: 'Failed to update monitor' });
+        return res.status(500).json({
+            message: 'Failed to update monitor'
+        });
     }
 };
-
 const deleteMonitor = async (req, res) => {
     const { id } = req.params;
     if (!validateMonitorId(id)) return res.status(400).json({ message: 'Invalid monitor ID' });

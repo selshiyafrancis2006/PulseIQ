@@ -2,7 +2,7 @@ CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS metrics (
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS metrics (
   disk_usage FLOAT,
   network_in FLOAT,
   network_out FLOAT,
-  timestamp TIMESTAMP DEFAULT NOW()
+  timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Hosts must exist before tables that reference hosts(id).
@@ -21,8 +21,8 @@ CREATE TABLE IF NOT EXISTS hosts (
   name VARCHAR(255) NOT NULL,
   api_key_hash VARCHAR(64) NOT NULL,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-  created_at TIMESTAMP DEFAULT NOW(),
-  last_seen_at TIMESTAMP
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ
 );
 
 CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   average_value FLOAT,
   severity VARCHAR(20) NOT NULL DEFAULT 'Warning',
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
-  timestamp TIMESTAMP DEFAULT NOW()
+  timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_alerts_host_timestamp
@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS alert_rules (
   threshold FLOAT NOT NULL,
   duration INTEGER DEFAULT 1,
   is_active BOOLEAN DEFAULT true,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS alert_rule_states (
     rule_id INTEGER NOT NULL REFERENCES alert_rules(id) ON DELETE CASCADE,
     consecutive_breaches INTEGER NOT NULL DEFAULT 0,
     is_breaching BOOLEAN NOT NULL DEFAULT false,
-    updated_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (host_id, rule_id)
 );
 
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS monitors (
   url VARCHAR(500) NOT NULL,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   is_active BOOLEAN DEFAULT true,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
@@ -93,9 +93,11 @@ CREATE TABLE IF NOT EXISTS monitor_results (
 dns_time_ms DOUBLE PRECISION,
 connect_time_ms DOUBLE PRECISION,
 tls_time_ms DOUBLE PRECISION,
+certificate_expires_at TIMESTAMPTZ,
+certificate_days_remaining INTEGER,
 ttfb_time_ms DOUBLE PRECISION,
 download_time_ms DOUBLE PRECISION,
-checked_at TIMESTAMP DEFAULT NOW()
+checked_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_results_monitor_checked
@@ -112,7 +114,7 @@ CREATE TABLE IF NOT EXISTS logs (
   response_time_ms INTEGER,
   ip_address VARCHAR(50),
   message TEXT,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_created_at
@@ -124,7 +126,7 @@ CREATE TABLE IF NOT EXISTS monitor_events (
   type VARCHAR(10) NOT NULL,
   message TEXT,
   response_time_ms INTEGER,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created
@@ -140,7 +142,7 @@ CREATE INDEX IF NOT EXISTS idx_metrics_host_timestamp
 CREATE TABLE IF NOT EXISTS metric_rollups_5m (
   id SERIAL PRIMARY KEY,
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
-  bucket_start TIMESTAMP NOT NULL,
+  bucket_start TIMESTAMPTZ NOT NULL,
   cpu_usage_avg FLOAT,
   cpu_usage_min FLOAT,
   cpu_usage_max FLOAT,
@@ -157,7 +159,7 @@ CREATE TABLE IF NOT EXISTS metric_rollups_5m (
   network_out_min FLOAT,
   network_out_max FLOAT,
   sample_count INTEGER,
-  created_at TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (host_id, bucket_start)
 );
 
@@ -167,7 +169,7 @@ CREATE INDEX IF NOT EXISTS idx_rollup5m_host_bucket
 CREATE TABLE IF NOT EXISTS metric_rollups_1h (
   id SERIAL PRIMARY KEY,
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
-  bucket_start TIMESTAMP NOT NULL,
+  bucket_start TIMESTAMPTZ NOT NULL,
   cpu_usage_avg FLOAT,
   cpu_usage_min FLOAT,
   cpu_usage_max FLOAT,
@@ -184,7 +186,7 @@ CREATE TABLE IF NOT EXISTS metric_rollups_1h (
   network_out_min FLOAT,
   network_out_max FLOAT,
   sample_count INTEGER,
-  created_at TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (host_id, bucket_start)
 );
 
@@ -214,6 +216,44 @@ ALTER TABLE monitors
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30;
 
+-- HTTP, TCP, and DNS monitor support.
+-- Existing monitors remain HTTP.
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS monitor_type VARCHAR(10) NOT NULL DEFAULT 'HTTP';
+
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS tcp_host VARCHAR(253);
+
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS tcp_port INTEGER;
+
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS dns_hostname VARCHAR(253);
+
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS dns_record_type VARCHAR(10) NOT NULL DEFAULT 'A';
+
+-- Replace the existing constraint so DNS monitors are permitted.
+ALTER TABLE monitors
+  DROP CONSTRAINT IF EXISTS monitors_monitor_type_check;
+
+ALTER TABLE monitors
+  ADD CONSTRAINT monitors_monitor_type_check
+  CHECK (monitor_type IN ('HTTP', 'TCP', 'DNS'));
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'monitors_tcp_port_check'
+      AND conrelid = 'monitors'::regclass
+  ) THEN
+    ALTER TABLE monitors
+      ADD CONSTRAINT monitors_tcp_port_check
+      CHECK (tcp_port IS NULL OR tcp_port BETWEEN 1 AND 65535);
+  END IF;
+END $$;
+
 CREATE INDEX IF NOT EXISTS idx_monitors_user ON monitors (user_id);
 
 ALTER TABLE alert_rules
@@ -235,7 +275,7 @@ CREATE TABLE IF NOT EXISTS traces (
   route VARCHAR(255) NOT NULL,
   status_code INTEGER,
   duration_ms INTEGER,
-  timestamp TIMESTAMP DEFAULT NOW()
+  timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_traces_host_timestamp
@@ -248,7 +288,7 @@ CREATE TABLE IF NOT EXISTS metric_baselines (
   mean FLOAT NOT NULL,
   stddev FLOAT NOT NULL,
   sample_count INTEGER NOT NULL,
-  updated_at TIMESTAMP DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE (host_id, metric_name)
 );
 
@@ -260,7 +300,7 @@ CREATE TABLE IF NOT EXISTS anomalies (
   baseline_mean FLOAT NOT NULL,
   baseline_stddev FLOAT NOT NULL,
   deviation_score FLOAT NOT NULL,
-  timestamp TIMESTAMP DEFAULT NOW()
+  timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp
@@ -277,8 +317,8 @@ CREATE TABLE IF NOT EXISTS dashboards (
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name VARCHAR(255) NOT NULL,
   layout JSONB NOT NULL DEFAULT '[]',
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_dashboards_user_id
@@ -335,7 +375,7 @@ CREATE TABLE IF NOT EXISTS notification_channels (
   name VARCHAR(100) NOT NULL,
   url TEXT NOT NULL,
   is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMP DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_notification_channels_user
@@ -345,10 +385,10 @@ CREATE INDEX IF NOT EXISTS idx_notification_channels_user
 CREATE TABLE IF NOT EXISTS monitor_alert_state (
   monitor_id INTEGER PRIMARY KEY REFERENCES monitors(id) ON DELETE CASCADE,
   notified_status VARCHAR(10),
-  last_notified_at TIMESTAMP,
+  last_notified_at TIMESTAMPTZ,
   is_flapping BOOLEAN NOT NULL DEFAULT false,
-  flapping_since TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT NOW()
+  flapping_since TIMESTAMPTZ,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Re-notify interval for monitors that stay down (0 = disabled).
@@ -363,7 +403,7 @@ CREATE TABLE IF NOT EXISTS maintenance_windows (
   reason VARCHAR(200),
   starts_at TIMESTAMPTZ NOT NULL,
   ends_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMP DEFAULT NOW(),
+  created_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (ends_at > starts_at)
 );
 
@@ -385,4 +425,27 @@ ALTER TABLE monitor_results
   ADD COLUMN IF NOT EXISTS connect_time_ms DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS tls_time_ms DOUBLE PRECISION,
   ADD COLUMN IF NOT EXISTS ttfb_time_ms DOUBLE PRECISION,
-  ADD COLUMN IF NOT EXISTS download_time_ms DOUBLE PRECISION;
+  ADD COLUMN IF NOT EXISTS download_time_ms DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS certificate_expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS certificate_days_remaining INTEGER;
+
+-- ===== F1: monitor_results retention + hourly rollups =====
+CREATE TABLE IF NOT EXISTS monitor_rollups_1h (
+  monitor_id INTEGER NOT NULL REFERENCES monitors(id) ON DELETE CASCADE,
+  bucket_start TIMESTAMPTZ NOT NULL,
+  total_checks INTEGER NOT NULL,        -- non-maintenance checks only
+  up_checks INTEGER NOT NULL,           -- non-maintenance UP checks
+  maintenance_checks INTEGER NOT NULL DEFAULT 0,
+  avg_response_ms DOUBLE PRECISION,
+  min_response_ms INTEGER,
+  max_response_ms INTEGER,
+  p95_response_ms DOUBLE PRECISION,
+  PRIMARY KEY (monitor_id, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_rollups_1h_bucket
+  ON monitor_rollups_1h (bucket_start);
+
+-- Lets the retention DELETE find old rows without a full table scan.
+CREATE INDEX IF NOT EXISTS idx_monitor_results_checked_at
+  ON monitor_results (checked_at);

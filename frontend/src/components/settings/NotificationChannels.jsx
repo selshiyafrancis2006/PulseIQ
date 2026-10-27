@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+﻿import { useEffect, useRef, useState } from "react";
 import useNotificationChannels, {
   getErrorMessage,
 } from "../../hooks/useNotificationChannels";
@@ -36,8 +36,9 @@ export default function NotificationChannels() {
   const resultTimeouts = useRef({});
 
 useEffect(() => {
+  const timeouts = resultTimeouts.current;
   return () => {
-    Object.values(resultTimeouts.current).forEach(clearTimeout);
+    Object.values(timeouts).forEach(clearTimeout);
   };
 }, []);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -116,6 +117,19 @@ const handleTest = async (id) => {
   }
 };
 
+  const handleToggle = async (channel) => {
+    setBusyId(channel.id);
+    setActionError("");
+
+    try {
+      await setChannelActive(channel.id, !channel.is_active);
+    } catch (err) {
+      console.error("Failed to update notification channel:", err);
+      setActionError(getErrorMessage(err, "Failed to update channel status"));
+    } finally {
+      setBusyId(null);
+    }
+  };
   const handleDelete = async (id) => {
     setBusyId(id);
     setActionError("");

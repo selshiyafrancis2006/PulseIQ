@@ -1,7 +1,8 @@
-
+﻿
 const {
     isPublicIp,
-    validatePublicHttpUrl
+    validatePublicHttpUrl,
+    validatePublicTcpTarget
 } = require('../src/services/urlSecurity.service');
 
 describe('urlSecurity.service', () => {
@@ -84,6 +85,121 @@ describe('urlSecurity.service', () => {
                 validatePublicHttpUrl(url)
             ).rejects.toThrow(
                 'Monitor URL resolves to a non-public IP address'
+            );
+        });
+    });
+    describe('validatePublicTcpTarget', () => {
+        const dns = require('node:dns').promises;
+
+        afterEach(() => {
+            jest.restoreAllMocks();
+        });
+
+        test.each([0, -1, 65536, 1.5, '443', null])(
+            'rejects invalid port %s',
+            async port => {
+                await expect(
+                    validatePublicTcpTarget('example.com', port)
+                ).rejects.toThrow('Invalid TCP monitor port');
+            }
+        );
+
+        test.each([
+            '',
+            'bad host',
+            'host/path',
+            'host@example.com',
+            '-bad.example.com',
+            'bad-.example.com',
+            'bad..example.com',
+            'localhost',
+            'service.local',
+            'service.internal',
+            'service.test',
+            'service.invalid',
+            'service.example'
+        ])('rejects invalid or blocked hostname %s', async host => {
+            await expect(
+                validatePublicTcpTarget(host, 443)
+            ).rejects.toThrow();
+        });
+
+        test.each([
+            '127.0.0.1',
+            '10.0.0.1',
+            '192.168.1.1',
+            '169.254.169.254',
+            '::1',
+            '[::1]',
+            'fc00::1',
+            '2001:db8::1'
+        ])('rejects non-public IP %s', async host => {
+            await expect(
+                validatePublicTcpTarget(host, 443)
+            ).rejects.toThrow(
+                'TCP monitor hostname resolves to a non-public IP address'
+            );
+        });
+
+        test.each([
+            ['8.8.8.8', '8.8.8.8'],
+            ['[2606:4700:4700::1111]', '2606:4700:4700::1111']
+        ])('accepts public IP literal %s', async (host, expected) => {
+            const result = await validatePublicTcpTarget(host, 443);
+
+            expect(result.hostname).toBe(expected);
+            expect(result.port).toBe(443);
+            expect(result.addresses).toEqual([{ address: expected }]);
+        });
+
+        test('accepts hostname resolving to a public address', async () => {
+            jest.spyOn(dns, 'lookup').mockResolvedValue([
+                { address: '93.184.216.34', family: 4 }
+            ]);
+
+            const result = await validatePublicTcpTarget('example.com', 443);
+
+            expect(result.hostname).toBe('example.com');
+            expect(result.port).toBe(443);
+            expect(result.addresses).toHaveLength(1);
+            expect(dns.lookup).toHaveBeenCalledWith('example.com', {
+                all: true,
+                verbatim: true
+            });
+        });
+
+        test('rejects hostname if DNS returns any private address', async () => {
+            jest.spyOn(dns, 'lookup').mockResolvedValue([
+                { address: '93.184.216.34', family: 4 },
+                { address: '127.0.0.1', family: 4 }
+            ]);
+
+            await expect(
+                validatePublicTcpTarget('example.com', 443)
+            ).rejects.toThrow(
+                'TCP monitor hostname resolves to a non-public IP address'
+            );
+        });
+
+        test('rejects hostname when DNS resolution fails', async () => {
+            jest.spyOn(dns, 'lookup').mockRejectedValue(
+                new Error('DNS lookup failed')
+            );
+
+            await expect(
+                validatePublicTcpTarget('unresolvable.example.net', 443)
+            ).rejects.toThrow(
+                'TCP monitor hostname could not be resolved'
+            );
+        });
+
+        test('rejects hostname when DNS returns no addresses', async () => {
+            jest.spyOn(dns, 'lookup').mockResolvedValue([]);
+
+            await expect(
+                validatePublicTcpTarget('example.com', 443)
+            ).rejects.toThrow(
+                'TCP monitor hostname resolves to a non-public IP address'
             );
         });
     });

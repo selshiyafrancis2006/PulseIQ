@@ -8,7 +8,7 @@ const MAX_TIMEOUT_MS = 30_000;
 const MAX_RESPONSE_BYTES = 1_000_000;
 const MAX_REDIRECTS = 3;
 
-function createPinnedAgent(url, validatedAddress, timings) {
+function createPinnedAgent(url, validatedAddress, timings, tlsOptions = {}) {
 
     const lookup = (hostname, options, callback) => {
         if (typeof options === 'function') {
@@ -40,10 +40,13 @@ function createPinnedAgent(url, validatedAddress, timings) {
 
     const Agent = url.protocol === 'https:' ? https.Agent : http.Agent;
 
-    const agent = new Agent({
-        keepAlive: false,
-        lookup
-    });
+const agent = new Agent({
+    keepAlive: false,
+    lookup,
+    ...(url.protocol === 'https:' && tlsOptions.ca
+        ? { ca: tlsOptions.ca }
+        : {})
+});
 
     const originalAddRequest = agent.addRequest;
 
@@ -68,6 +71,23 @@ function createPinnedAgent(url, validatedAddress, timings) {
                     timings.tlsTimeMs = connectedAt === null
                         ? null
                         : Number(tlsCompletedAt - connectedAt) / 1e6;
+
+                    // Capture expiry only after the normal, verified TLS
+                    // handshake succeeds. Never disable certificate checks.
+                    const certificate = socket.getPeerCertificate();
+
+                    if (certificate?.valid_to) {
+                        const expiryMs = Date.parse(certificate.valid_to);
+
+                        if (Number.isFinite(expiryMs)) {
+                            timings.certificateExpiresAt =
+                                new Date(expiryMs).toISOString();
+
+                            timings.certificateDaysRemaining = Math.floor(
+                                (expiryMs - Date.now()) / 86_400_000
+                            );
+                        }
+                    }
                 });
             }
 
@@ -125,6 +145,8 @@ async function checkHttp(monitor, options = {}) {
         dnsTimeMs: 0,
         connectTimeMs: null,
         tlsTimeMs: null,
+        certificateExpiresAt: null,
+        certificateDaysRemaining: null,
         ttfbTimeMs: null,
         downloadTimeMs: null
     };
@@ -138,17 +160,20 @@ async function checkHttp(monitor, options = {}) {
             dnsTimeMs: validated.dnsTimeMs ?? 0,
             connectTimeMs: null,
             tlsTimeMs: null,
+            certificateExpiresAt: null,
+            certificateDaysRemaining: null,
             ttfbTimeMs: null,
             downloadTimeMs: null
         };
 
         totalTimings.dnsTimeMs += timings.dnsTimeMs;
 
-        const agent = createPinnedAgent(
-            currentUrl,
-            validatedAddress,
-            timings
-        );
+const agent = createPinnedAgent(
+    currentUrl,
+    validatedAddress,
+    timings,
+    options.tlsCa ? { ca: options.tlsCa } : {}
+);
 
         let response;
 
@@ -177,6 +202,13 @@ async function checkHttp(monitor, options = {}) {
             });
         } finally {
             agent.destroy();
+
+            if (timings.certificateExpiresAt !== null) {
+                totalTimings.certificateExpiresAt =
+                    timings.certificateExpiresAt;
+                totalTimings.certificateDaysRemaining =
+                    timings.certificateDaysRemaining;
+            }
 
             for (const key of [
                 'connectTimeMs',
@@ -221,6 +253,11 @@ async function checkHttp(monitor, options = {}) {
             }
 
             currentUrl = nextUrl;
+
+            // Keep certificate metadata tied to the final redirect destination.
+            totalTimings.certificateExpiresAt = null;
+            totalTimings.certificateDaysRemaining = null;
+
             continue;
         }
 

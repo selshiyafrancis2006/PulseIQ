@@ -289,7 +289,13 @@ useEffect(() => {
             <h1 className="text-3xl font-bold">{monitor.name}</h1>
             <StatusPill status={status} />
           </div>
-          <p className="mt-2 break-all text-sm text-gray-400">{monitor.url}</p>
+          <p className="mt-2 break-all text-sm text-gray-400">
+  {monitor.monitor_type === 'DNS'
+    ? `DNS - ${monitor.dns_hostname} - ${monitor.dns_record_type}`
+    : monitor.monitor_type === 'TCP'
+      ? `TCP - ${monitor.tcp_host?.includes(':') && !monitor.tcp_host.startsWith('[') ? `[${monitor.tcp_host}]` : monitor.tcp_host}:${monitor.tcp_port}`
+      : monitor.url}
+</p>
           {Array.isArray(monitor.tags) && monitor.tags.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {monitor.tags.map((tag) => (
@@ -377,6 +383,78 @@ useEffect(() => {
           }
         />
       </div>
+
+
+      <Panel
+        title="SSL Certificate"
+        subtitle="TLS certificate expiry information from the latest monitor check."
+      >
+        {monitor.url?.toLowerCase().startsWith('https://') ? (
+          (() => {
+            const expiry = monitor.certificate_expires_at;
+            const daysRemaining = monitor.certificate_days_remaining;
+           const days = Number(daysRemaining);
+const hasCertificateData =
+  expiry != null &&
+  daysRemaining != null &&
+  Number.isFinite(days);
+            const expired = hasCertificateData && days < 0;
+            const urgent = hasCertificateData && days <= 14;
+            const warning = hasCertificateData && days <= 30;
+
+            const statusLabel = !hasCertificateData
+              ? 'Awaiting certificate data'
+              : expired
+                ? 'Expired'
+                : urgent
+                  ? 'Expiring soon'
+                  : warning
+                    ? 'Renewal approaching'
+                    : 'Valid';
+
+            const statusColor = !hasCertificateData
+              ? 'text-gray-400'
+              : expired || urgent
+                ? 'text-red-400'
+                : warning
+                  ? 'text-amber-400'
+                  : 'text-emerald-400';
+
+            return (
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="rounded-lg border border-[#252525] bg-[#0c0c0c] p-4">
+                  <p className="text-sm text-gray-400">Certificate status</p>
+                  <p className={`mt-2 text-lg font-semibold ${statusColor}`}>
+                    {statusLabel}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-[#252525] bg-[#0c0c0c] p-4">
+                  <p className="text-sm text-gray-400">Expires on</p>
+                  <p className="mt-2 text-lg font-semibold text-white">
+                    {expiry ? formatDateTime(expiry) : '—'}
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-[#252525] bg-[#0c0c0c] p-4">
+                  <p className="text-sm text-gray-400">Days remaining</p>
+                  <p className={`mt-2 text-lg font-semibold ${statusColor}`}>
+                    {hasCertificateData
+                      ? expired
+                        ? `${Math.abs(days)} days overdue`
+                        : `${days} days`
+                      : '—'}
+                  </p>
+                </div>
+              </div>
+            );
+          })()
+        ) : (
+          <p className="py-2 text-sm text-gray-400">
+            SSL certificate tracking applies to HTTPS monitors.
+          </p>
+        )}
+      </Panel>
 
       <Panel
         title="Availability timeline"

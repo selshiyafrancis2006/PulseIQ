@@ -1,0 +1,67 @@
+const { Client } = require('pg');
+
+module.exports = async function globalSetup() {
+    const database = process.env.TEST_DB_NAME || 'pulseiq_test';
+
+    if (!database.endsWith('_test')) {
+        throw new Error(
+            `Refusing schema setup for "${database}": database name must end with "_test".`
+        );
+    }
+
+    const dotenv = require('dotenv');
+    const path = require('path');
+
+    dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
+    const client = new Client({
+        host: process.env.TEST_DB_HOST || 'localhost',
+        port: process.env.TEST_DB_PORT || '5433',
+        user: process.env.TEST_DB_USER || 'postgres',
+        password:
+            process.env.TEST_DB_PASSWORD ||
+            process.env.POSTGRES_PASSWORD ||
+            process.env.DB_PASSWORD,
+        database,
+    });
+
+    try {
+        await client.connect();
+        await client.query(`
+            ALTER TABLE monitor_results
+                ADD COLUMN IF NOT EXISTS certificate_expires_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS certificate_days_remaining INTEGER;
+        `);
+
+        await client.query(`
+ALTER TABLE monitors
+    ADD COLUMN IF NOT EXISTS monitor_type VARCHAR(10) NOT NULL DEFAULT 'HTTP',
+    ADD COLUMN IF NOT EXISTS tcp_host VARCHAR(253),
+    ADD COLUMN IF NOT EXISTS tcp_port INTEGER,
+    ADD COLUMN IF NOT EXISTS dns_hostname VARCHAR(253),
+    ADD COLUMN IF NOT EXISTS dns_record_type VARCHAR(10) NOT NULL DEFAULT 'A';
+
+ALTER TABLE monitors
+    DROP CONSTRAINT IF EXISTS monitors_monitor_type_check;
+
+ALTER TABLE monitors
+    ADD CONSTRAINT monitors_monitor_type_check
+    CHECK (monitor_type IN ('HTTP', 'TCP', 'DNS'));
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitors_tcp_port_check'
+          AND conrelid = 'monitors'::regclass
+    ) THEN
+        ALTER TABLE monitors
+            ADD CONSTRAINT monitors_tcp_port_check
+            CHECK (tcp_port IS NULL OR tcp_port BETWEEN 1 AND 65535);
+    END IF;
+END $$;
+        `);
+    } finally {
+        await client.end();
+    }
+};

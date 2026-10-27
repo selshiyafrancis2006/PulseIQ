@@ -15,11 +15,12 @@ function classifyCheckError(error) {
         };
     }
 
-    if (
-        code === 'ENOTFOUND' ||
-        code === 'EAI_AGAIN' ||
-        /hostname could not be resolved/i.test(message)
-    ) {
+if (
+    code === 'ENOTFOUND' ||
+    code === 'ENODATA' ||
+    code === 'EAI_AGAIN' ||
+    /hostname could not be resolved|DNS record was not found/i.test(message)
+) {
         return {
             errorType: 'DNS',
             errorMessage: 'The hostname could not be resolved'

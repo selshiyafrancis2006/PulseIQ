@@ -6,6 +6,7 @@ describe('classifyCheckError', () => {
         [{ code: 'ECONNABORTED' }, 'TIMEOUT'],
         [{ code: 'ETIMEDOUT' }, 'TIMEOUT'],
         [{ code: 'ENOTFOUND' }, 'DNS'],
+        [{ code: 'ENODATA' }, 'DNS'],
         [{ code: 'EAI_AGAIN' }, 'DNS'],
         [{ code: 'ECONNREFUSED' }, 'CONNECTION_REFUSED'],
         [{ code: 'CERT_HAS_EXPIRED' }, 'TLS'],

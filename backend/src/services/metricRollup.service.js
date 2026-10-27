@@ -1,8 +1,8 @@
-const pool = require('../config/db');
+﻿const pool = require('../config/db');
 
 // Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
 // buckets. Uses ON CONFLICT to upsert, so it's safe to re-run every 5
-// minutes — the current (partial) bucket gets refined until it's complete,
+// minutes â€” the current (partial) bucket gets refined until it's complete,
 // and re-processing already-complete buckets is a no-op.
 async function rollup5Minute() {
     await pool.query(`
@@ -63,7 +63,7 @@ async function rollup1Hour() {
         )
         SELECT
             host_id,
-            date_trunc('hour', bucket_start) AS bucket_start,
+            date_trunc('hour', bucket_start, 'UTC') AS bucket_start,
             SUM(cpu_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
             MIN(cpu_usage_min), MAX(cpu_usage_max),
             SUM(memory_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
@@ -77,7 +77,7 @@ async function rollup1Hour() {
             SUM(sample_count)
         FROM metric_rollups_5m
         WHERE bucket_start >= NOW() - INTERVAL '7 days'
-        GROUP BY host_id, date_trunc('hour', bucket_start)
+        GROUP BY host_id, date_trunc('hour', bucket_start, 'UTC')
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
             cpu_usage_avg = EXCLUDED.cpu_usage_avg,
             cpu_usage_min = EXCLUDED.cpu_usage_min,
@@ -99,7 +99,7 @@ async function rollup1Hour() {
 }
 
 // Deletes raw high-resolution metric rows older than the retention window.
-// The data isn't lost — it already lives on in the 5m/1h rollups.
+// The data isn't lost â€” it already lives on in the 5m/1h rollups.
 async function cleanupRawMetrics() {
     const result = await pool.query(
         `DELETE FROM metrics WHERE timestamp < NOW() - INTERVAL '3 days'`

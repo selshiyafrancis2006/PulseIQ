@@ -37,6 +37,8 @@ describe('checkHttp', () => {
         expect(result.body).toBe('OK');
         expect(result.responseTimeMs).toEqual(expect.any(Number));
         expect(result.responseTimeMs).toBeGreaterThanOrEqual(0);
+        expect(result.certificateExpiresAt).toBeNull();
+        expect(result.certificateDaysRemaining).toBeNull();
     });
 
     test('returns non-2xx status codes instead of throwing', async () => {

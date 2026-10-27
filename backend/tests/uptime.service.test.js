@@ -7,12 +7,22 @@ jest.mock('../src/services/httpCheck.service', () => ({
     checkHttp: jest.fn()
 }));
 
+jest.mock('../src/services/tcpCheck.service', () => ({
+    checkTcp: jest.fn()
+}));
+
+jest.mock('../src/services/dnsCheck.service', () => ({
+    checkDns: jest.fn()
+}));
+
 jest.mock('../src/services/checkError.service', () => ({
     classifyCheckError: jest.fn()
 }));
 
 const db = require('../src/config/db');
 const { checkHttp } = require('../src/services/httpCheck.service');
+const { checkTcp } = require('../src/services/tcpCheck.service');
+const { checkDns } = require('../src/services/dnsCheck.service');
 const { classifyCheckError } = require('../src/services/checkError.service');
 const { checkMonitor } = require('../src/services/uptime.service');
 
@@ -31,7 +41,9 @@ checkHttp.mockResolvedValue({
     connectTimeMs: 8.25,
     tlsTimeMs: 12.75,
     ttfbTimeMs: 30.5,
-    downloadTimeMs: 1.25
+    downloadTimeMs: 1.25,
+    certificateExpiresAt: '2027-01-15T12:00:00.000Z',
+    certificateDaysRemaining: 82
 });
 
         const result = await checkMonitor({
@@ -58,7 +70,9 @@ expect(result).toEqual({
     8.25,
     12.75,
     30.5,
-    1.25
+    1.25,
+    '2027-01-15T12:00:00.000Z',
+    82
 ]
         );
     });
@@ -79,7 +93,14 @@ expect(result).toEqual({
                 75,
                 503,
                 'BAD_STATUS',
-                'Monitor returned HTTP 503'
+                'Monitor returned HTTP 503',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
             ]
         );
     });
@@ -113,7 +134,14 @@ expect(result).toEqual({
                 null,
                 null,
                 'CONNECTION_REFUSED',
-                'The target server refused the connection'
+                'The target server refused the connection',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
             ]
         );
     });
@@ -215,4 +243,198 @@ expect(result).toEqual({
         );
     });
     
+    test('stores a successful TCP check without HTTP-only fields', async () => {
+        checkTcp.mockResolvedValue({
+            responseTimeMs: 18,
+            connectTimeMs: 16.25,
+            dnsTimeMs: 2
+        });
+
+        const result = await checkMonitor({
+            id: 10,
+            monitor_type: 'TCP',
+            tcp_host: 'example.com',
+            tcp_port: 443
+        });
+
+        expect(checkTcp).toHaveBeenCalledWith({
+            id: 10,
+            monitor_type: 'TCP',
+            tcp_host: 'example.com',
+            tcp_port: 443
+        });
+        expect(checkHttp).not.toHaveBeenCalled();
+
+        expect(result).toEqual({
+            status: 'UP',
+            responseTime: 18,
+            statusCode: null
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            [
+                10,
+                'UP',
+                18,
+                null,
+                null,
+                null,
+                2,
+                16.25,
+                null,
+                null,
+                null,
+                null,
+                null
+            ]
+        );
+    });
+
+    test('stores a classified TCP connection failure as DOWN', async () => {
+        checkTcp.mockRejectedValue(
+            Object.assign(new Error('Connection refused'), {
+                code: 'ECONNREFUSED'
+            })
+        );
+
+        classifyCheckError.mockReturnValue({
+            errorType: 'CONNECTION_REFUSED',
+            errorMessage: 'The target server refused the connection'
+        });
+
+        const result = await checkMonitor({
+            id: 11,
+            monitor_type: 'TCP',
+            tcp_host: 'example.com',
+            tcp_port: 443
+        });
+
+        expect(checkHttp).not.toHaveBeenCalled();
+        expect(classifyCheckError).toHaveBeenCalledWith(
+            expect.objectContaining({ code: 'ECONNREFUSED' })
+        );
+
+        expect(result).toEqual({
+            status: 'DOWN',
+            responseTime: null,
+            statusCode: null
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            [
+                11,
+                'DOWN',
+                null,
+                null,
+                'CONNECTION_REFUSED',
+                'The target server refused the connection',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            ]
+        );
+    });
+
+    test('stores a successful DNS check without HTTP or TCP fields', async () => {
+        checkDns.mockResolvedValue({
+            hostname: 'example.com',
+            recordType: 'A',
+            records: ['192.0.2.10'],
+            responseTimeMs: 12,
+            dnsTimeMs: 12
+        });
+
+        const monitor = {
+            id: 12,
+            monitor_type: 'DNS',
+            dns_hostname: 'example.com',
+            dns_record_type: 'A'
+        };
+
+        const result = await checkMonitor(monitor);
+
+        expect(checkDns).toHaveBeenCalledWith(monitor);
+        expect(checkHttp).not.toHaveBeenCalled();
+        expect(checkTcp).not.toHaveBeenCalled();
+
+        expect(result).toEqual({
+            status: 'UP',
+            responseTime: 12,
+            statusCode: null
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            [
+                12,
+                'UP',
+                12,
+                null,
+                null,
+                null,
+                12,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            ]
+        );
+    });
+
+    test('stores a classified DNS lookup failure as DOWN', async () => {
+        const dnsError = Object.assign(
+            new Error('The requested DNS record was not found'),
+            { code: 'ENODATA' }
+        );
+
+        checkDns.mockRejectedValue(dnsError);
+        classifyCheckError.mockReturnValue({
+            errorType: 'DNS',
+            errorMessage: 'The requested DNS record could not be resolved'
+        });
+
+        const result = await checkMonitor({
+            id: 13,
+            monitor_type: 'DNS',
+            dns_hostname: 'example.com',
+            dns_record_type: 'MX'
+        });
+
+        expect(checkHttp).not.toHaveBeenCalled();
+        expect(checkTcp).not.toHaveBeenCalled();
+        expect(classifyCheckError).toHaveBeenCalledWith(dnsError);
+
+        expect(result).toEqual({
+            status: 'DOWN',
+            responseTime: null,
+            statusCode: null
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            [
+                13,
+                'DOWN',
+                null,
+                null,
+                'DNS',
+                'The requested DNS record could not be resolved',
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+            ]
+        );
+    });
 });

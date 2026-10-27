@@ -141,7 +141,120 @@ async function validatePublicHttpUrl(input) {
     };
 }
 
+
+function isValidDnsLabel(label) {
+    if (!label || label.length > 63) return false;
+
+    const isAlphaNumeric = code =>
+        (code >= 97 && code <= 122) ||
+        (code >= 48 && code <= 57);
+
+    if (
+        !isAlphaNumeric(label.charCodeAt(0)) ||
+        !isAlphaNumeric(label.charCodeAt(label.length - 1))
+    ) {
+        return false;
+    }
+
+    for (const character of label) {
+        const code = character.charCodeAt(0);
+        if (!isAlphaNumeric(code) && code !== 45) return false;
+    }
+
+    return true;
+}
+
+async function validatePublicTcpTarget(inputHost, inputPort) {
+    if (
+        typeof inputHost !== 'string' ||
+        inputHost.length === 0 ||
+        inputHost.length > 253
+    ) {
+        throw new Error('Invalid TCP monitor hostname');
+    }
+
+    for (const character of inputHost) {
+        const code = character.charCodeAt(0);
+
+        if (
+            code <= 32 ||
+            code === 127 ||
+            '/@?#\\'.includes(character)
+        ) {
+            throw new Error('Invalid TCP monitor hostname');
+        }
+    }
+
+    if (
+        !Number.isInteger(inputPort) ||
+        inputPort < 1 ||
+        inputPort > 65535
+    ) {
+        throw new Error('Invalid TCP monitor port');
+    }
+
+    let hostname = inputHost.toLowerCase();
+
+    if (hostname.startsWith('[') && hostname.endsWith(']')) {
+        hostname = hostname.slice(1, -1);
+    } else if (hostname.includes('[') || hostname.includes(']')) {
+        throw new Error('Invalid TCP monitor hostname');
+    }
+
+    if (
+        !hostname ||
+        hostname.includes('%') ||
+        hostname === 'localhost' ||
+        BLOCKED_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix))
+    ) {
+        throw new Error('TCP monitor hostname is not allowed');
+    }
+
+    if (net.isIP(hostname) === 0) {
+        if (
+            hostname.includes(':') ||
+            hostname.startsWith('.') ||
+            hostname.endsWith('.') ||
+            hostname.split('.').some(label => !isValidDnsLabel(label))
+        ) {
+            throw new Error('Invalid TCP monitor hostname');
+        }
+    }
+
+    let dnsTimeMs = 0;
+    let addresses;
+
+    if (net.isIP(hostname)) {
+        addresses = [{ address: hostname }];
+    } else {
+        const dnsStartedAt = Date.now();
+
+        try {
+            addresses = await dns.lookup(hostname, {
+                all: true,
+                verbatim: true
+            });
+        } catch {
+            throw new Error('TCP monitor hostname could not be resolved');
+        } finally {
+            dnsTimeMs = Date.now() - dnsStartedAt;
+        }
+    }
+
+    if (
+        !addresses.length ||
+        addresses.some(({ address }) => !isPublicIp(address))
+    ) {
+        throw new Error(
+            'TCP monitor hostname resolves to a non-public IP address'
+        );
+    }
+
+    return { hostname, port: inputPort, addresses, dnsTimeMs };
+}
+
 module.exports = {
     validatePublicHttpUrl,
+    validatePublicTcpTarget,
     isPublicIp
 };

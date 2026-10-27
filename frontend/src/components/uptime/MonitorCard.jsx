@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../utils/apiFetch';
 import { API_BASE_URL } from '../../config/api';
 import ResponseTimeChart from './ResponseTimeChart';
@@ -51,21 +51,21 @@ function MonitorCard({
       .filter((value) => Number.isFinite(value));
 
     if (validMeasurements.length < 2) {
-      return { icon: '—', color: 'text-gray-500' };
+      return { icon: '-', color: 'text-gray-500' };
     }
 
     const latest = validMeasurements[validMeasurements.length - 1];
     const previous = validMeasurements[validMeasurements.length - 2];
 
     if (latest > previous) {
-      return { icon: '↑', color: 'text-gray-400' };
+      return { icon: '\u2191', color: 'text-gray-400' };
     }
 
     if (latest < previous) {
-      return { icon: '↓', color: 'text-emerald-400' };
+      return { icon: '\u2193', color: 'text-emerald-400' };
     }
 
-    return { icon: '→', color: 'text-gray-500' };
+    return { icon: '\u2192', color: 'text-gray-500' };
   };
 
   useEffect(() => {
@@ -119,11 +119,15 @@ function MonitorCard({
     to={`/uptime/${monitor.id}`}
     className="text-sm text-emerald-400 hover:text-emerald-300"
   >
-    View details →
+    View details ?
   </Link>
 </div>
           <p className="text-gray-500 text-sm">
-            {monitor.url}
+            {monitor.monitor_type === 'DNS'
+              ? `DNS - ${monitor.dns_hostname} - ${monitor.dns_record_type}`
+              : monitor.monitor_type === 'TCP'
+                ? `TCP - ${monitor.tcp_host?.includes(':') && !monitor.tcp_host.startsWith('[') ? `[${monitor.tcp_host}]` : monitor.tcp_host}:${monitor.tcp_port}`
+                : monitor.url}
           </p>
           {monitor.tags && monitor.tags.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mt-0.5">
@@ -222,7 +226,7 @@ function MonitorCard({
               liveStatus === 'LIVE' ? 'text-emerald-400' : 'text-gray-500'
             }`}
           >
-            {liveStatus === 'LIVE' ? '●' : liveStatus === 'PAUSED' ? 'Ⅱ' : '○'} {liveStatus}
+            {liveStatus === 'LIVE' ? '?' : liveStatus === 'PAUSED' ? '?' : '?'} {liveStatus}
           </span>
         </div>
       </div>
@@ -243,7 +247,7 @@ function MonitorCard({
                 className="flex justify-between text-xs"
               >
                 <span className={getEventColor(event.type)}>
-                  {event.type === 'DOWN' ? '●' : event.type === 'UP' ? '✓' : '○'} {event.type}
+                  {event.type === 'DOWN' ? '?' : event.type === 'UP' ? '?' : '?'} {event.type}
                 </span>
                 <span className="text-gray-500">
                   {event.message}

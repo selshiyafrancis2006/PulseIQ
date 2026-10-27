@@ -5,6 +5,11 @@ const {
     cleanupRawMetrics,
     cleanupHistoricalData
 } = require('../services/metricRollup.service');
+// F1: monitor_results rollups + retention
+const {
+    rollupRecentMonitorResults,
+    cleanupMonitorResults
+} = require('../services/monitorRollup.service');
 
 // 5-minute rollup — runs every 5 minutes
 cron.schedule('*/5 * * * *', async () => {
@@ -26,7 +31,17 @@ cron.schedule('0 * * * *', async () => {
     }
 });
 
- // Daily retention cleanup — runs at 3 AM
+// F1: hourly monitor_results rollup — runs at minute 5 of every hour
+cron.schedule('5 * * * *', async () => {
+    try {
+        const buckets = await rollupRecentMonitorResults(3);
+        console.log(`Monitor rollup complete: ${buckets} hourly buckets upserted`);
+    } catch (err) {
+        console.error('Monitor rollup error:', err);
+    }
+});
+
+// Daily retention cleanup — runs at 3 AM
 cron.schedule('0 3 * * *', async () => {
     try {
         const deletedRawMetrics = await cleanupRawMetrics();
@@ -42,5 +57,13 @@ cron.schedule('0 3 * * *', async () => {
         console.log('Historical retention cleanup complete:', deletedCounts);
     } catch (err) {
         console.error('Historical retention cleanup error:', err);
+    }
+
+    // F1: monitor_results retention
+    try {
+        const summary = await cleanupMonitorResults();
+        console.log('Monitor results retention complete:', summary);
+    } catch (err) {
+        console.error('Monitor results retention error:', err);
     }
 });
