@@ -22,14 +22,19 @@ afterAll(async () => {
     await pool.end();
 });
 
-async function createMonitor(token, name = 'maintenance-test-monitor') {
+async function createMonitor(
+    token,
+    name = 'maintenance-test-monitor',
+    failureThreshold = 3
+) {
     const response = await request(app)
         .post('/api/monitors')
         .set(authHeader(token))
         .send({
             name,
             url: 'https://example.com',
-            interval_seconds: 30
+            interval_seconds: 30,
+            failure_threshold: failureThreshold
         });
 
     expect(response.status).toBe(201);
@@ -263,7 +268,11 @@ test('a window for all monitors covers every monitor the user owns', async () =>
 
 test('state changes are recorded again once the window has ended', async () => {
     const user = await createUser();
-    const monitor = await createMonitor(user.token);
+    const monitor = await createMonitor(
+    user.token,
+    'maintenance-test-monitor',
+    1
+);
 
     const created = await createWindow(user.token, {
         monitor_id: monitor.id,

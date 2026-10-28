@@ -33,6 +33,37 @@ describe('checkMonitor', () => {
         db.query.mockResolvedValue({ rows: [] });
     });
 
+
+    test('forwards configured HTTP settings to checkHttp unchanged', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 200,
+            responseTimeMs: 25,
+            dnsTimeMs: 2,
+            connectTimeMs: 4,
+            tlsTimeMs: 5,
+            ttfbTimeMs: 10,
+            downloadTimeMs: 1
+        });
+
+        const monitor = {
+            id: 101,
+            url: 'https://example.com/api/health',
+            monitor_type: 'HTTP',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Monitor-Test': 'pulseiq'
+            },
+            body: '{"check":true}',
+            timeout_ms: 7500
+        };
+
+        await checkMonitor(monitor);
+
+        expect(checkHttp).toHaveBeenCalledTimes(1);
+        expect(checkHttp).toHaveBeenCalledWith(monitor);
+    });
+
     test('stores a successful HTTP check', async () => {
 checkHttp.mockResolvedValue({
     statusCode: 200,
@@ -242,7 +273,7 @@ expect(result).toEqual({
             expect.anything()
         );
     });
-    
+
     test('stores a successful TCP check without HTTP-only fields', async () => {
         checkTcp.mockResolvedValue({
             responseTimeMs: 18,
@@ -435,6 +466,159 @@ expect(result).toEqual({
                 null,
                 null
             ]
+        );
+    });
+
+
+    test('does not confirm DOWN before the configured failure threshold', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        db.query.mockImplementation(async (sql) => {
+            if (sql.includes('INSERT INTO monitor_results')) {
+                return { rows: [{ in_maintenance: false }] };
+            }
+            if (sql.includes('FROM monitor_check_state')) {
+                return {
+                    rows: [{
+                        confirmed_status: 'UP',
+                        consecutive_failures: 1
+                    }]
+                };
+            }
+            return { rows: [] };
+        });
+
+        await checkMonitor({
+            id: 20,
+            url: 'https://example.com',
+            failure_threshold: 3
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_check_state'),
+            [20, 'UP', 2]
+        );
+
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            expect.anything()
+        );
+    });
+
+    test('does not initialize a confirmed outage from raw DOWN history when threshold is greater than one', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        db.query.mockImplementation(async (sql) => {
+            if (sql.includes('FROM monitor_results')) {
+                return { rows: [{ status: 'DOWN' }] };
+            }
+            if (sql.includes('INSERT INTO monitor_results')) {
+                return { rows: [{ in_maintenance: false }] };
+            }
+            if (sql.includes('FROM monitor_check_state')) {
+                return { rows: [] };
+            }
+            if (sql.includes('FROM monitor_events')) {
+                return { rows: [] };
+            }
+            return { rows: [] };
+        });
+
+        await checkMonitor({
+            id: 23,
+            url: 'https://example.com',
+            failure_threshold: 3
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_check_state'),
+            [23, 'UP', 1]
+        );
+
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            expect.anything()
+        );
+    });
+    test('confirms DOWN when consecutive failures reach the threshold', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        db.query.mockImplementation(async (sql) => {
+            if (sql.includes('INSERT INTO monitor_results')) {
+                return { rows: [{ in_maintenance: false }] };
+            }
+            if (sql.includes('FROM monitor_check_state')) {
+                return {
+                    rows: [{
+                        confirmed_status: 'UP',
+                        consecutive_failures: 2
+                    }]
+                };
+            }
+            return { rows: [] };
+        });
+
+        await checkMonitor({
+            id: 21,
+            url: 'https://example.com',
+            failure_threshold: 3
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_check_state'),
+            [21, 'DOWN', 3]
+        );
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            [21, 'DOWN', 'Service is down']
+        );
+    });
+
+    test('resets consecutive failures after a successful check', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 200,
+            responseTimeMs: 25
+        });
+
+        db.query.mockImplementation(async (sql) => {
+            if (sql.includes('INSERT INTO monitor_results')) {
+                return { rows: [{ in_maintenance: false }] };
+            }
+            if (sql.includes('FROM monitor_check_state')) {
+                return {
+                    rows: [{
+                        confirmed_status: 'UP',
+                        consecutive_failures: 2
+                    }]
+                };
+            }
+            return { rows: [] };
+        });
+
+        await checkMonitor({
+            id: 22,
+            url: 'https://example.com',
+            failure_threshold: 3
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_check_state'),
+            [22, 'UP', 0]
+        );
+
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            expect.anything()
         );
     });
 });

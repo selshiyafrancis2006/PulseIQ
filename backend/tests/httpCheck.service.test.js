@@ -41,6 +41,39 @@ describe('checkHttp', () => {
         expect(result.certificateDaysRemaining).toBeNull();
     });
 
+    test('passes configured HTTP method, headers, body, and timeout to Axios', async () => {
+        axios.request.mockResolvedValue({
+            status: 200,
+            data: 'created',
+            headers: {}
+        });
+
+        await checkHttp({
+            url: 'https://example.com/api/check',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Monitor-Test': 'pulseiq'
+            },
+            body: '{"check":true}',
+            timeout_ms: 7500
+        });
+
+        expect(axios.request).toHaveBeenCalledWith(
+            expect.objectContaining({
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Monitor-Test': 'pulseiq'
+                },
+                data: '{"check":true}',
+                timeout: 7500,
+                maxRedirects: 0,
+                proxy: false
+            })
+        );
+    });
+
     test('returns non-2xx status codes instead of throwing', async () => {
         axios.request.mockResolvedValue({
             status: 503,

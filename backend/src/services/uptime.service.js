@@ -5,23 +5,22 @@ const { checkDns } = require('./dnsCheck.service');
 const { classifyCheckError } = require('./checkError.service');
 const { processCheckOutcome } = require('./monitorAlert.service');
 
+
 async function saveCheckResult(monitor, result) {
-    // Compare against the last result taken OUTSIDE maintenance, so a
-    // window never creates or hides a state change.
+    // Keep raw check history independent of the confirmed monitor state.
     const previous = await db.query(
         `SELECT status
          FROM monitor_results
          WHERE monitor_id = $1
            AND NOT in_maintenance
-         ORDER BY checked_at DESC
+         ORDER BY checked_at DESC, id DESC
          LIMIT 1`,
         [monitor.id]
     );
 
     const previousStatus = previous.rows[0]?.status;
 
-    // in_maintenance is decided in SQL with the database clock, using the
-    // same rule the maintenance API uses to report a window as "active".
+    // Store every actual check, including checks during maintenance.
     const inserted = await db.query(
         `INSERT INTO monitor_results
          (monitor_id, status, response_time_ms, status_code,
@@ -61,64 +60,143 @@ async function saveCheckResult(monitor, result) {
         ]
     );
 
-    const inMaintenance = inserted?.rows?.[0]?.in_maintenance === true;
+    const inMaintenance =
+        inserted?.rows?.[0]?.in_maintenance === true;
 
-    // During maintenance: no state-change events, no alerts, no reminders.
-    if (!inMaintenance) {
-        let transition = null;
+    // Maintenance checks must not change the failure streak or alerts.
+    if (inMaintenance) {
+        return {
+            status: result.status,
+            responseTime: result.responseTime,
+            statusCode: result.statusCode
+        };
+    }
 
-        // Record events only when the monitor changes state.
-        if (previousStatus !== result.status) {
-            if (result.status === 'UP' && previousStatus === 'DOWN') {
-                await db.query(
-                    `INSERT INTO monitor_events
-                     (monitor_id, type, message, response_time_ms)
-                     VALUES ($1, $2, $3, $4)`,
-                    [
-                        monitor.id,
-                        'UP',
-                        'Service recovered',
-                        result.responseTime
-                    ]
-                );
-                transition = 'UP';
-            } else if (
-                result.status === 'DOWN' &&
-                previousStatus !== 'DOWN'
-            ) {
-                await db.query(
-                    `INSERT INTO monitor_events
-                     (monitor_id, type, message)
-                     VALUES ($1, $2, $3)`,
-                    [
-                        monitor.id,
-                        'DOWN',
-                        'Service is down'
-                    ]
-                );
-                transition = 'DOWN';
-            }
+    // Read persistent state so the failure streak survives restarts.
+    const stateResult = await db.query(
+        `SELECT confirmed_status, consecutive_failures
+         FROM monitor_check_state
+         WHERE monitor_id = $1`,
+        [monitor.id]
+    );
+
+    const savedState = stateResult.rows[0];
+
+    const threshold = Number.isInteger(Number(monitor.failure_threshold))
+        && Number(monitor.failure_threshold) >= 1
+        && Number(monitor.failure_threshold) <= 10
+        ? Number(monitor.failure_threshold)
+        : 1;
+
+    let confirmedStatus = savedState?.confirmed_status || null;
+
+    // If no confirmed state is saved, prefer the latest confirmed event.
+    if (!confirmedStatus) {
+        const eventResult = await db.query(
+            `SELECT type
+             FROM monitor_events
+             WHERE monitor_id = $1
+               AND type IN ('UP', 'DOWN')
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1`,
+            [monitor.id]
+        );
+
+        confirmedStatus = eventResult.rows[0]?.type || null;
+    }
+
+    // Raw history must not bypass a higher failure threshold.
+    if (!confirmedStatus) {
+        confirmedStatus = threshold === 1
+            ? (previousStatus || 'UP')
+            : 'UP';
+    }
+
+    let consecutiveFailures =
+        Number(savedState?.consecutive_failures ?? 0);
+    let transition = null;
+
+    if (result.status === 'DOWN') {
+        consecutiveFailures += 1;
+
+        if (
+            confirmedStatus !== 'DOWN' &&
+            consecutiveFailures >= threshold
+        ) {
+            confirmedStatus = 'DOWN';
+            transition = 'DOWN';
         }
+    } else {
+        consecutiveFailures = 0;
 
-        // Notification logic must never invalidate a check that is
-        // already saved.
-        try {
-            await processCheckOutcome(monitor, result, transition);
-        } catch (error) {
-            console.error(
-                `Alert processing failed (monitor_id: ${monitor.id}):`,
-                error
-            );
+        if (confirmedStatus === 'DOWN') {
+            confirmedStatus = 'UP';
+            transition = 'UP';
         }
     }
 
-    // Preserve the return shape used by the API route and scheduler.
+    // Persist confirmed state and failure streak across restarts.
+    await db.query(
+        `INSERT INTO monitor_check_state
+             (monitor_id, confirmed_status, consecutive_failures, updated_at)
+         VALUES ($1, $2, $3, NOW())
+         ON CONFLICT (monitor_id)
+         DO UPDATE SET
+             confirmed_status = EXCLUDED.confirmed_status,
+             consecutive_failures = EXCLUDED.consecutive_failures,
+             updated_at = NOW()`,
+        [monitor.id, confirmedStatus, consecutiveFailures]
+    );
+
+    // Only confirmed state transitions create monitor events.
+    if (transition === 'DOWN') {
+        await db.query(
+            `INSERT INTO monitor_events (monitor_id, type, message)
+             VALUES ($1, $2, $3)`,
+            [monitor.id, 'DOWN', 'Service is down']
+        );
+    } else if (transition === 'UP') {
+        await db.query(
+            `INSERT INTO monitor_events
+                 (monitor_id, type, message, response_time_ms)
+             VALUES ($1, $2, $3, $4)`,
+            [
+                monitor.id,
+                'UP',
+                'Service recovered',
+                result.responseTime
+            ]
+        );
+    }
+
+    // Use the confirmed status for alert decisions. This prevents a
+    // single unconfirmed failure from being treated as an outage.
+    const effectiveResult = {
+        ...result,
+        status: confirmedStatus
+    };
+
+    try {
+        await processCheckOutcome(
+            monitor,
+            effectiveResult,
+            transition
+        );
+    } catch (error) {
+        console.error(
+            `Alert processing failed (monitor_id: ${monitor.id}):`,
+            error
+        );
+    }
+
+    // Preserve the existing return shape.
     return {
         status: result.status,
         responseTime: result.responseTime,
         statusCode: result.statusCode
     };
 }
+
 
 async function checkMonitor(monitor) {
     let result;

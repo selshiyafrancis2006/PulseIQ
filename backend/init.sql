@@ -216,6 +216,27 @@ ALTER TABLE monitors
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS interval_seconds INTEGER NOT NULL DEFAULT 30;
 
+-- Configurable HTTP request settings.
+-- Defaults preserve existing monitor behaviour.
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'GET',
+  ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ADD COLUMN IF NOT EXISTS body TEXT,
+  ADD COLUMN IF NOT EXISTS timeout_ms INTEGER NOT NULL DEFAULT 10000;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'monitors_timeout_ms_check'
+      AND conrelid = 'monitors'::regclass
+  ) THEN
+    ALTER TABLE monitors
+      ADD CONSTRAINT monitors_timeout_ms_check
+      CHECK (timeout_ms BETWEEN 1 AND 30000);
+  END IF;
+END $$;
+
 -- HTTP, TCP, and DNS monitor support.
 -- Existing monitors remain HTTP.
 ALTER TABLE monitors
@@ -413,6 +434,20 @@ BEGIN
       CHECK (failure_threshold BETWEEN 1 AND 10);
   END IF;
 END $$;
+
+
+-- Confirmed uptime state and consecutive failures for each monitor.
+-- A NULL confirmed_status is initialized from existing monitor history
+-- when the monitor is checked for the first time after this migration.
+CREATE TABLE IF NOT EXISTS monitor_check_state (
+  monitor_id INTEGER PRIMARY KEY
+    REFERENCES monitors(id) ON DELETE CASCADE,
+  confirmed_status VARCHAR(10)
+    CHECK (confirmed_status IN ('UP', 'DOWN')),
+  consecutive_failures INTEGER NOT NULL DEFAULT 0
+    CHECK (consecutive_failures >= 0),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 -- Planned maintenance / muting. monitor_id NULL = all of the user's monitors.
 CREATE TABLE IF NOT EXISTS maintenance_windows (

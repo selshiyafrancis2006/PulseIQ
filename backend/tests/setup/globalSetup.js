@@ -1,4 +1,4 @@
-﻿const { Client } = require('pg');
+const { Client } = require('pg');
 
 module.exports = async function globalSetup() {
     const database = process.env.TEST_DB_NAME || 'pulseiq_test';
@@ -34,12 +34,19 @@ module.exports = async function globalSetup() {
         `);
 
         await client.query(`
+
 ALTER TABLE monitors
+    ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 1,
     ADD COLUMN IF NOT EXISTS monitor_type VARCHAR(10) NOT NULL DEFAULT 'HTTP',
     ADD COLUMN IF NOT EXISTS tcp_host VARCHAR(253),
     ADD COLUMN IF NOT EXISTS tcp_port INTEGER,
     ADD COLUMN IF NOT EXISTS dns_hostname VARCHAR(253),
-    ADD COLUMN IF NOT EXISTS dns_record_type VARCHAR(10) NOT NULL DEFAULT 'A';
+    ADD COLUMN IF NOT EXISTS dns_record_type VARCHAR(10) NOT NULL DEFAULT 'A',
+    ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'GET',
+    ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}'::jsonb,
+    ADD COLUMN IF NOT EXISTS body TEXT,
+    ADD COLUMN IF NOT EXISTS timeout_ms INTEGER NOT NULL DEFAULT 10000;
+
 
 ALTER TABLE monitors
     DROP CONSTRAINT IF EXISTS monitors_monitor_type_check;
@@ -60,7 +67,23 @@ BEGIN
             CHECK (tcp_port IS NULL OR tcp_port BETWEEN 1 AND 65535);
     END IF;
 END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitors_timeout_ms_check'
+          AND conrelid = 'monitors'::regclass
+    ) THEN
+        ALTER TABLE monitors
+            ADD CONSTRAINT monitors_timeout_ms_check
+            CHECK (timeout_ms BETWEEN 1 AND 30000);
+    END IF;
+END $$;
+
         `);
+
+
 
         await client.query(`
 CREATE TABLE IF NOT EXISTS status_pages (
@@ -82,6 +105,16 @@ CREATE TABLE IF NOT EXISTS status_page_monitors (
 
 CREATE INDEX IF NOT EXISTS idx_status_page_monitors_monitor
     ON status_page_monitors (monitor_id);
+
+CREATE TABLE IF NOT EXISTS monitor_check_state (
+    monitor_id INTEGER PRIMARY KEY
+        REFERENCES monitors(id) ON DELETE CASCADE,
+    confirmed_status VARCHAR(10)
+        CHECK (confirmed_status IN ('UP', 'DOWN')),
+    consecutive_failures INTEGER NOT NULL DEFAULT 0
+        CHECK (consecutive_failures >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
         `);
         await client.query(`
 CREATE TABLE IF NOT EXISTS api_tests (

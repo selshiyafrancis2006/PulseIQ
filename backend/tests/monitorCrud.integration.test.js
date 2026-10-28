@@ -30,6 +30,136 @@ async function createMonitor(token, name = 'crud-test-monitor') {
     return response.body;
 }
 
+
+test('HTTP monitor creation stores default request settings', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token);
+
+    expect(monitor).toMatchObject({
+        method: 'GET',
+        headers: {},
+        body: null,
+        timeout_ms: 10000
+    });
+});
+
+test('HTTP monitor creation stores custom request settings', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'custom-http-settings',
+            url: 'https://example.com',
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Monitor-Test': 'pulseiq'
+            },
+            body: '{"check":true}',
+            timeout_ms: 5000
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'X-Monitor-Test': 'pulseiq'
+        },
+        body: '{"check":true}',
+        timeout_ms: 5000
+    });
+});
+
+test('HTTP monitor partial update preserves other request settings', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'partial-http-settings',
+            url: 'https://example.com',
+            method: 'POST',
+            headers: { 'X-Monitor-Test': 'original' },
+            body: '{"original":true}',
+            timeout_ms: 5000
+        });
+
+    expect(created.status).toBe(201);
+
+    const updated = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ timeout_ms: 8000 });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+        method: 'POST',
+        headers: { 'X-Monitor-Test': 'original' },
+        body: '{"original":true}',
+        timeout_ms: 8000
+    });
+});
+
+
+test.each([
+    ['unsupported method', { method: 'TRACE' }],
+    ['non-string method', { method: 123 }],
+    ['array headers', { headers: [] }],
+    ['non-string header value', { headers: { 'X-Test': 123 } }],
+    ['newline in header value', { headers: { 'X-Test': 'safe\r\nInjected: yes' } }],
+    ['forbidden Host header', { headers: { Host: 'example.com' } }],
+    ['non-string body', { body: { check: true } }],
+    ['body larger than 1 MB', { body: 'x'.repeat(1_000_001) }],
+    ['timeout below minimum', { timeout_ms: 0 }],
+    ['timeout above maximum', { timeout_ms: 30001 }],
+    ['fractional timeout', { timeout_ms: 1500.5 }],
+    ['string timeout', { timeout_ms: '5000' }]
+])('rejects invalid HTTP settings: %s', async (_description, settings) => {
+    const user = await createUser();
+    const token = authHeader(user.token);
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(token)
+        .send({
+            name: 'invalid-http-settings',
+            url: 'https://example.com',
+            ...settings
+        });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['TCP', {
+        monitor_type: 'TCP',
+        tcp_host: '8.8.8.8',
+        tcp_port: 443
+    }],
+    ['DNS', {
+        monitor_type: 'DNS',
+        dns_hostname: 'example.com',
+        dns_record_type: 'A'
+    }]
+])('rejects HTTP settings when creating a %s monitor', async (_type, monitorFields) => {
+    const user = await createUser();
+    const token = authHeader(user.token);
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(token)
+        .send({
+            name: 'non-http-with-http-settings',
+            ...monitorFields,
+            method: 'POST'
+        });
+
+    expect(response.status).toBe(400);
+});
+
 test('owner can update monitor fields', async () => {
     const user = await createUser();
     const monitor = await createMonitor(user.token);

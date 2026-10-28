@@ -64,6 +64,68 @@ function validateFailureThreshold(value) {
 const FAILURE_THRESHOLD_ERROR =
     'failure_threshold must be an integer between 1 and 10';
 
+
+const HTTP_METHODS = new Set([
+    'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'
+]);
+
+const HTTP_SETTINGS_ERROR =
+    'HTTP request settings are only supported for HTTP monitors';
+
+function validateHttpMethod(value) {
+    return typeof value === 'string' &&
+        HTTP_METHODS.has(value.trim().toUpperCase());
+}
+
+function validateHttpHeaders(value) {
+    if (
+        value === null ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        Object.getPrototypeOf(value) !== Object.prototype
+    ) {
+        return false;
+    }
+
+    const entries = Object.entries(value);
+
+    if (entries.length > 50) return false;
+
+    const forbiddenHeaders = new Set([
+        'host',
+        'content-length',
+        'connection',
+        'transfer-encoding',
+        'proxy-authorization',
+        'proxy-connection',
+        'upgrade'
+    ]);
+
+    return entries.every(([key, headerValue]) => {
+        return (
+            /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) &&
+            key.length <= 100 &&
+            !forbiddenHeaders.has(key.toLowerCase()) &&
+            typeof headerValue === 'string' &&
+            headerValue.length <= 8192 &&
+            !/[\r\n]/.test(headerValue)
+        );
+    });
+}
+
+function validateHttpBody(value) {
+    return value === null ||
+        (
+            typeof value === 'string' &&
+            Buffer.byteLength(value, 'utf8') <= 1_000_000
+        );
+}
+
+function validateTimeout(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 30000;
+}
+
+
 function validateMonitorId(value) {
     return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) &&
         Number(value) > 0;
@@ -71,19 +133,25 @@ function validateMonitorId(value) {
 const createMonitor = async (req, res) => {
     try {
         const body = req.body || {};
-        const {
-            name,
-            url,
-            monitor_type = 'HTTP',
-            tcp_host,
-            tcp_port,
-            dns_hostname,
-            dns_record_type = 'A',
-            tags,
-            interval_seconds = 30,
-            renotify_minutes = 60,
-            failure_threshold = 3
-        } = body;
+
+const {
+    name,
+    url,
+    monitor_type = 'HTTP',
+    tcp_host,
+    tcp_port,
+    dns_hostname,
+    dns_record_type = 'A',
+    tags,
+    interval_seconds = 30,
+    renotify_minutes = 60,
+    failure_threshold = 3,
+    method = 'GET',
+    headers = {},
+    body: requestBody = null,
+    timeout_ms = 10000
+} = body;
+
 
         const nameError = validateName(name);
         if (nameError) return res.status(400).json({ message: nameError });
@@ -103,6 +171,50 @@ const createMonitor = async (req, res) => {
         if (!validateRenotify(renotify_minutes)) {
             return res.status(400).json({ message: RENOTIFY_ERROR });
         }
+
+        if (!validateFailureThreshold(failure_threshold)) {
+            return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
+        }
+
+
+if (monitor_type !== 'HTTP') {
+    const hasHttpSettings = [
+        'method', 'headers', 'body', 'timeout_ms'
+    ].some(key => Object.hasOwn(body, key));
+
+    if (hasHttpSettings) {
+        return res.status(400).json({
+            message: HTTP_SETTINGS_ERROR
+        });
+    }
+}
+
+if (monitor_type === 'HTTP') {
+    if (!validateHttpMethod(method)) {
+        return res.status(400).json({
+            message: 'method must be a supported HTTP method'
+        });
+    }
+
+    if (!validateHttpHeaders(headers)) {
+        return res.status(400).json({
+            message: 'headers must be an object with valid string header names and values'
+        });
+    }
+
+    if (!validateHttpBody(requestBody)) {
+        return res.status(400).json({
+            message: 'body must be a string or null and cannot exceed 1 MB'
+        });
+    }
+
+    if (!validateTimeout(timeout_ms)) {
+        return res.status(400).json({
+            message: 'timeout_ms must be an integer between 1 and 30000'
+        });
+    }
+}
+
 
         let storedUrl;
         let storedTcpHost = null;
@@ -159,26 +271,34 @@ const createMonitor = async (req, res) => {
         }
 
         const result = await db.query(
-            `INSERT INTO monitors
-                (name, url, user_id, tags, interval_seconds,
-                 renotify_minutes, failure_threshold, monitor_type,
-                 tcp_host, tcp_port, dns_hostname, dns_record_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-             RETURNING *`,
-            [
-                name.trim(),
-                storedUrl,
-                req.user.id,
-                normalizedTags,
-                interval_seconds,
-                renotify_minutes,
-                failure_threshold,
-                monitor_type,
-                storedTcpHost,
-                storedTcpPort,
-                storedDnsHost,
-                storedDnsRecordType
-            ]
+
+`INSERT INTO monitors
+    (name, url, user_id, tags, interval_seconds,
+     renotify_minutes, failure_threshold, monitor_type,
+     tcp_host, tcp_port, dns_hostname, dns_record_type,
+     method, headers, body, timeout_ms)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13, $14, $15, $16)
+ RETURNING *`,
+[
+    name.trim(),
+    storedUrl,
+    req.user.id,
+    normalizedTags,
+    interval_seconds,
+    renotify_minutes,
+    failure_threshold,
+    monitor_type,
+    storedTcpHost,
+    storedTcpPort,
+    storedDnsHost,
+    storedDnsRecordType,
+    monitor_type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
+    monitor_type === 'HTTP' ? headers : {},
+    monitor_type === 'HTTP' ? requestBody : null,
+    monitor_type === 'HTTP' ? timeout_ms : 10000
+]
+
         );
 
         return res.status(201).json(result.rows[0]);
@@ -251,7 +371,10 @@ const getMonitorStatus = async (req, res) => {
                 m.renotify_minutes,
                 m.failure_threshold,
                 m.is_active,
-                mr.status,
+                CASE
+                    WHEN mr.status IS NULL THEN NULL
+                    ELSE COALESCE(mcs.confirmed_status, mr.status)
+                END AS status,
                 mr.response_time_ms,
                 mr.status_code,
                 mr.certificate_expires_at,
@@ -271,6 +394,8 @@ const getMonitorStatus = async (req, res) => {
                 ORDER BY checked_at DESC, id DESC
                 LIMIT 1
             ) mr ON TRUE
+            LEFT JOIN monitor_check_state mcs
+                ON mcs.monitor_id = m.id
             WHERE m.user_id = $1
               AND ($2::text IS NULL OR m.tags @> ARRAY[$2::text])
             ORDER BY m.id
@@ -986,11 +1111,12 @@ const updateMonitor = async (req, res) => {
 
     try {
         const body = req.body || {};
-        const allowed = [
-            'name', 'url', 'tcp_host', 'tcp_port',
-            'dns_hostname', 'dns_record_type', 'tags',
-            'interval_seconds', 'renotify_minutes', 'failure_threshold'
-        ];
+const allowed = [
+    'name', 'url', 'tcp_host', 'tcp_port',
+    'dns_hostname', 'dns_record_type', 'tags',
+    'interval_seconds', 'renotify_minutes', 'failure_threshold',
+    'method', 'headers', 'body', 'timeout_ms'
+];
         const keys = Object.keys(body);
 
         if (!keys.length || keys.some(key => !allowed.includes(key))) {
@@ -1017,6 +1143,16 @@ const updateMonitor = async (req, res) => {
         const hasDnsFields =
             Object.hasOwn(body, 'dns_hostname') ||
             Object.hasOwn(body, 'dns_record_type');
+
+        const hasHttpSettings = [
+    'method', 'headers', 'body', 'timeout_ms'
+].some(key => Object.hasOwn(body, key));
+
+if (type !== 'HTTP' && hasHttpSettings) {
+    return res.status(400).json({
+        message: HTTP_SETTINGS_ERROR
+    });
+}
 
         if (type === 'HTTP' && (hasTcpFields || hasDnsFields)) {
             return res.status(400).json({
@@ -1050,6 +1186,41 @@ const updateMonitor = async (req, res) => {
         const failureThreshold = Object.hasOwn(body, 'failure_threshold')
             ? body.failure_threshold : monitor.failure_threshold;
 
+        const method = Object.hasOwn(body, 'method')
+    ? body.method : (monitor.method || 'GET');
+const headers = Object.hasOwn(body, 'headers')
+    ? body.headers : (monitor.headers || {});
+const requestBody = Object.hasOwn(body, 'body')
+    ? body.body : (monitor.body ?? null);
+const timeoutMs = Object.hasOwn(body, 'timeout_ms')
+    ? body.timeout_ms : (monitor.timeout_ms ?? 10000);
+
+if (type === 'HTTP') {
+    if (!validateHttpMethod(method)) {
+        return res.status(400).json({
+            message: 'method must be a supported HTTP method'
+        });
+    }
+
+    if (!validateHttpHeaders(headers)) {
+        return res.status(400).json({
+            message: 'headers must be an object with valid string header names and values'
+        });
+    }
+
+    if (!validateHttpBody(requestBody)) {
+        return res.status(400).json({
+            message: 'body must be a string or null and cannot exceed 1 MB'
+        });
+    }
+
+    if (!validateTimeout(timeoutMs)) {
+        return res.status(400).json({
+            message: 'timeout_ms must be an integer between 1 and 30000'
+        });
+    }
+}
+
         const nameError = validateName(name);
         if (nameError) {
             return res.status(400).json({ message: nameError });
@@ -1066,10 +1237,6 @@ const updateMonitor = async (req, res) => {
         }
 
                 if (!validateFailureThreshold(failureThreshold)) {
-            return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
-        }
-
-        if (!validateFailureThreshold(failure_threshold)) {
             return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
         }
 
@@ -1138,13 +1305,15 @@ const updateMonitor = async (req, res) => {
             }
         }
 
+
         const result = await db.query(
             `UPDATE monitors
              SET name = $1, url = $2, tags = $3, interval_seconds = $4,
                  renotify_minutes = $5, failure_threshold = $6,
                  tcp_host = $7, tcp_port = $8,
-                 dns_hostname = $9, dns_record_type = $10
-             WHERE id = $11 AND user_id = $12
+                 dns_hostname = $9, dns_record_type = $10,
+                 method = $11, headers = $12, body = $13, timeout_ms = $14
+             WHERE id = $15 AND user_id = $16
              RETURNING *`,
             [
                 name.trim(),
@@ -1157,10 +1326,15 @@ const updateMonitor = async (req, res) => {
                 tcpPort,
                 dnsHostname,
                 dnsRecordType,
+                type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
+                type === 'HTTP' ? headers : {},
+                type === 'HTTP' ? requestBody : null,
+                type === 'HTTP' ? timeoutMs : 10000,
                 Number(id),
                 req.user.id
             ]
         );
+
 
         return res.json(result.rows[0]);
     } catch (error) {

@@ -1,4 +1,4 @@
-﻿const crypto = require('crypto');
+const crypto = require('crypto');
 const db = require('../config/db');
 
 function makeSlug() {
@@ -130,7 +130,10 @@ async function getPublicPage(req, res) {
                 sp.slug,
                 m.id AS monitor_id,
                 m.name AS monitor_name,
-                mr.status,
+                CASE
+                    WHEN mr.status IS NULL THEN NULL
+                    ELSE COALESCE(mcs.confirmed_status, mr.status)
+                END AS status,
                 mr.response_time_ms,
                 mr.checked_at
              FROM status_pages sp
@@ -142,7 +145,9 @@ async function getPublicPage(req, res) {
                 WHERE monitor_id = m.id
                 ORDER BY checked_at DESC
                 LIMIT 1
-             ) mr ON TRUE
+                          ) mr ON TRUE
+             LEFT JOIN monitor_check_state mcs
+                ON mcs.monitor_id = m.id
              WHERE sp.slug = $1 AND sp.is_public = TRUE
              ORDER BY m.name`,
             [req.params.slug]
