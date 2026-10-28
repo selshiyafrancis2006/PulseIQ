@@ -487,3 +487,65 @@ test('HTTP monitor update rejects DNS-specific fields', async () => {
 
     expect(response.status).toBe(400);
 });
+
+test('new monitors default to a failure threshold of 3', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token);
+
+    expect(monitor.failure_threshold).toBe(3);
+});
+
+test('monitor can be created with an explicit failure threshold', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'threshold-monitor',
+            url: 'https://example.com',
+            failure_threshold: 5
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body.failure_threshold).toBe(5);
+});
+
+test.each([0, 11, 2.5, '3', null])(
+    'create rejects invalid failure_threshold %p',
+    async (value) => {
+        const user = await createUser();
+
+        const response = await request(app)
+            .post('/api/monitors')
+            .set(authHeader(user.token))
+            .send({
+                name: 'bad-threshold',
+                url: 'https://example.com',
+                failure_threshold: value
+            });
+
+        expect(response.status).toBe(400);
+        expect(response.body.message).toMatch(/failure_threshold/);
+    }
+);
+
+test('owner can update failure_threshold and invalid values are rejected', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token);
+
+    const ok = await request(app)
+        .patch(`/api/monitors/${monitor.id}`)
+        .set(authHeader(user.token))
+        .send({ failure_threshold: 2 });
+
+    expect(ok.status).toBe(200);
+    expect(ok.body.failure_threshold).toBe(2);
+
+    const bad = await request(app)
+        .patch(`/api/monitors/${monitor.id}`)
+        .set(authHeader(user.token))
+        .send({ failure_threshold: 0 });
+
+    expect(bad.status).toBe(400);
+});

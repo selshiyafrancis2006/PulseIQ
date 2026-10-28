@@ -395,6 +395,25 @@ CREATE TABLE IF NOT EXISTS monitor_alert_state (
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS renotify_minutes INTEGER NOT NULL DEFAULT 60;
 
+-- Consecutive failed checks required before a monitor counts as DOWN.
+-- Existing monitors stay at 1 (current behaviour); new monitors created
+-- through the API default to 3.
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 1;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'monitors_failure_threshold_check'
+      AND conrelid = 'monitors'::regclass
+  ) THEN
+    ALTER TABLE monitors
+      ADD CONSTRAINT monitors_failure_threshold_check
+      CHECK (failure_threshold BETWEEN 1 AND 10);
+  END IF;
+END $$;
+
 -- Planned maintenance / muting. monitor_id NULL = all of the user's monitors.
 CREATE TABLE IF NOT EXISTS maintenance_windows (
   id SERIAL PRIMARY KEY,

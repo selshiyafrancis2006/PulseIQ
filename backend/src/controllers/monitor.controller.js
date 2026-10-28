@@ -57,6 +57,13 @@ function validateRenotify(value) {
 const RENOTIFY_ERROR =
     'renotify_minutes must be 0 (disabled) or an integer between 5 and 1440';
 
+function validateFailureThreshold(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 10;
+}
+
+const FAILURE_THRESHOLD_ERROR =
+    'failure_threshold must be an integer between 1 and 10';
+
 function validateMonitorId(value) {
     return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) &&
         Number(value) > 0;
@@ -74,7 +81,8 @@ const createMonitor = async (req, res) => {
             dns_record_type = 'A',
             tags,
             interval_seconds = 30,
-            renotify_minutes = 60
+            renotify_minutes = 60,
+            failure_threshold = 3
         } = body;
 
         const nameError = validateName(name);
@@ -153,9 +161,9 @@ const createMonitor = async (req, res) => {
         const result = await db.query(
             `INSERT INTO monitors
                 (name, url, user_id, tags, interval_seconds,
-                 renotify_minutes, monitor_type, tcp_host, tcp_port,
-                 dns_hostname, dns_record_type)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                 renotify_minutes, failure_threshold, monitor_type,
+                 tcp_host, tcp_port, dns_hostname, dns_record_type)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
              RETURNING *`,
             [
                 name.trim(),
@@ -164,6 +172,7 @@ const createMonitor = async (req, res) => {
                 normalizedTags,
                 interval_seconds,
                 renotify_minutes,
+                failure_threshold,
                 monitor_type,
                 storedTcpHost,
                 storedTcpPort,
@@ -240,6 +249,7 @@ const getMonitorStatus = async (req, res) => {
                 m.tags,
                 m.interval_seconds,
                 m.renotify_minutes,
+                m.failure_threshold,
                 m.is_active,
                 mr.status,
                 mr.response_time_ms,
@@ -979,7 +989,7 @@ const updateMonitor = async (req, res) => {
         const allowed = [
             'name', 'url', 'tcp_host', 'tcp_port',
             'dns_hostname', 'dns_record_type', 'tags',
-            'interval_seconds', 'renotify_minutes'
+            'interval_seconds', 'renotify_minutes', 'failure_threshold'
         ];
         const keys = Object.keys(body);
 
@@ -1037,6 +1047,8 @@ const updateMonitor = async (req, res) => {
             ? body.interval_seconds : monitor.interval_seconds;
         const renotify = Object.hasOwn(body, 'renotify_minutes')
             ? body.renotify_minutes : monitor.renotify_minutes;
+        const failureThreshold = Object.hasOwn(body, 'failure_threshold')
+            ? body.failure_threshold : monitor.failure_threshold;
 
         const nameError = validateName(name);
         if (nameError) {
@@ -1051,6 +1063,14 @@ const updateMonitor = async (req, res) => {
 
         if (!validateRenotify(renotify)) {
             return res.status(400).json({ message: RENOTIFY_ERROR });
+        }
+
+                if (!validateFailureThreshold(failureThreshold)) {
+            return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
+        }
+
+        if (!validateFailureThreshold(failure_threshold)) {
+            return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
         }
 
         let url;
@@ -1121,9 +1141,10 @@ const updateMonitor = async (req, res) => {
         const result = await db.query(
             `UPDATE monitors
              SET name = $1, url = $2, tags = $3, interval_seconds = $4,
-                 renotify_minutes = $5, tcp_host = $6, tcp_port = $7,
-                 dns_hostname = $8, dns_record_type = $9
-             WHERE id = $10 AND user_id = $11
+                 renotify_minutes = $5, failure_threshold = $6,
+                 tcp_host = $7, tcp_port = $8,
+                 dns_hostname = $9, dns_record_type = $10
+             WHERE id = $11 AND user_id = $12
              RETURNING *`,
             [
                 name.trim(),
@@ -1131,6 +1152,7 @@ const updateMonitor = async (req, res) => {
                 tags,
                 interval,
                 renotify,
+                failureThreshold,
                 tcpHost,
                 tcpPort,
                 dnsHostname,
