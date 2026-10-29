@@ -22,6 +22,9 @@ jest.mock('../src/services/checkError.service', () => ({
 jest.mock('../src/services/monitorCertificateAlert.service', () => ({
     processCertificateAlert: jest.fn()
 }));
+jest.mock('../src/services/monitorQuorum.service', () => ({
+    evaluateMonitorQuorum: jest.fn()
+}));
 
 const db = require('../src/config/db');
 const { checkHttp } = require('../src/services/httpCheck.service');
@@ -29,6 +32,7 @@ const { checkTcp } = require('../src/services/tcpCheck.service');
 const { checkDns } = require('../src/services/dnsCheck.service');
 const { classifyCheckError } = require('../src/services/checkError.service');
 const { checkMonitor } = require('../src/services/uptime.service');
+const { evaluateMonitorQuorum } = require('../src/services/monitorQuorum.service');
 const {
     processCertificateAlert
 } = require('../src/services/monitorCertificateAlert.service');
@@ -38,6 +42,7 @@ describe('checkMonitor', () => {
         jest.clearAllMocks();
 
         db.query.mockResolvedValue({ rows: [] });
+        evaluateMonitorQuorum.mockImplementation(async (monitor, result) => result);
     });
 
 
@@ -731,6 +736,85 @@ checkHttp.mockResolvedValue({
             [22, 'UP', 0]
         );
 
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_events'),
+            expect.anything()
+        );
+    });
+    test('sends a decisive quorum result through the existing save pipeline', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        evaluateMonitorQuorum.mockResolvedValueOnce({
+            status: 'DOWN',
+            responseTime: 30,
+            statusCode: 503,
+            errorType: 'QUORUM_DOWN',
+            errorMessage: 'Quorum reached'
+        });
+
+        db.query.mockImplementation(async (sql) => {
+            if (sql.includes('INSERT INTO monitor_results')) {
+                return { rows: [{ in_maintenance: false }] };
+            }
+            if (sql.includes('FROM monitor_check_state')) {
+                return {
+                    rows: [{
+                        confirmed_status: 'UP',
+                        consecutive_failures: 0
+                    }]
+                };
+            }
+            return { rows: [] };
+        });
+
+        const monitor = {
+            id: 501,
+            url: 'https://example.com',
+            quorum: 2,
+            failure_threshold: 1
+        };
+
+        await checkMonitor(monitor);
+
+        expect(evaluateMonitorQuorum).toHaveBeenCalledWith(
+            monitor,
+            expect.objectContaining({ status: 'DOWN' })
+        );
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            expect.any(Array)
+        );
+    });
+
+    test('preserves the confirmed status when quorum is inconclusive', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 503,
+            responseTimeMs: 30
+        });
+
+        evaluateMonitorQuorum.mockResolvedValueOnce(null);
+
+        db.query.mockImplementation(async (sql) => {
+            if (sql.includes('FROM monitor_check_state')) {
+                return { rows: [{ confirmed_status: 'DOWN' }] };
+            }
+            return { rows: [] };
+        });
+
+        const result = await checkMonitor({
+            id: 502,
+            url: 'https://example.com',
+            quorum: 2
+        });
+
+        expect(result.status).toBe('DOWN');
+        expect(db.query).not.toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            expect.anything()
+        );
         expect(db.query).not.toHaveBeenCalledWith(
             expect.stringContaining('INSERT INTO monitor_events'),
             expect.anything()

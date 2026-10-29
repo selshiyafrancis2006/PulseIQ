@@ -1,4 +1,4 @@
-const db = require('../config/db');
+﻿const db = require('../config/db');
 const { calculateSlo } = require('../utils/slo');
 const { validatePublicTcpTarget } = require('../services/urlSecurity.service');
 const { validateDnsTarget } = require('../services/dnsCheck.service');
@@ -190,9 +190,9 @@ const {
         const nameError = validateName(name);
         if (nameError) return res.status(400).json({ message: nameError });
 
-        if (!['HTTP', 'TCP', 'DNS'].includes(monitor_type)) {
+        if (!['HTTP', 'TCP', 'DNS', 'HEARTBEAT'].includes(monitor_type)) {
             return res.status(400).json({
-                message: 'monitor_type must be HTTP, TCP, or DNS'
+                message: 'monitor_type must be HTTP, TCP, DNS, or HEARTBEAT'
             });
         }
 
@@ -291,7 +291,7 @@ if (monitor_type === 'HTTP') {
             // url is NOT NULL for legacy schema compatibility.
             // TCP checks use tcp_host/tcp_port, never this display value.
             storedUrl = `tcp://${displayHost}:${storedTcpPort}`;
-        } else {
+        } else if (monitor_type === 'DNS') {
             let target;
             try {
                 target = validateDnsTarget(dns_hostname, dns_record_type);
@@ -307,6 +307,8 @@ if (monitor_type === 'HTTP') {
             // url is NOT NULL for legacy schema compatibility.
             // DNS checks use dns_hostname/dns_record_type, never this display value.
             storedUrl = `dns://${storedDnsHost}/${storedDnsRecordType}`;
+        } else {
+            storedUrl = 'heartbeat://check-in';
         }
         let normalizedTags;
         try {
@@ -314,6 +316,14 @@ if (monitor_type === 'HTTP') {
         } catch (error) {
             return res.status(400).json({ message: error.message });
         }
+
+        const heartbeatToken = monitor_type === 'HEARTBEAT'
+            ? require('crypto').randomBytes(32).toString('hex')
+            : null;
+        const heartbeatTokenHash = heartbeatToken
+            ? require('crypto').createHash('sha256')
+                .update(heartbeatToken).digest('hex')
+            : null;
 
         const result = await db.query(
 
@@ -353,7 +363,27 @@ if (monitor_type === 'HTTP') {
 
         );
 
-        return res.status(201).json(result.rows[0]);
+        if (heartbeatTokenHash) {
+            try {
+                await db.query(
+                    `INSERT INTO heartbeat_monitor_secrets
+                        (monitor_id, token_hash)
+                     VALUES ($1, $2)`,
+                    [result.rows[0].id, heartbeatTokenHash]
+                );
+            } catch (secretError) {
+                await db.query(
+                    'DELETE FROM monitors WHERE id = $1 AND user_id = $2',
+                    [result.rows[0].id, req.user.id]
+                );
+                throw secretError;
+            }
+        }
+
+        return res.status(201).json({
+            ...result.rows[0],
+            ...(heartbeatToken ? { heartbeat_token: heartbeatToken } : {})
+        });
     } catch (error) {
         console.error(error);
         return res.status(500).json({
@@ -1626,3 +1656,5 @@ module.exports = {
     getMonitorLocations,
     updateMonitorLocations
 };
+
+

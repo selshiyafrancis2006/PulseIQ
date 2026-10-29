@@ -1,10 +1,11 @@
-const db = require('../config/db');
+﻿const db = require('../config/db');
 const { checkHttp } = require('./httpCheck.service');
 const { checkTcp } = require('./tcpCheck.service');
 const { checkDns } = require('./dnsCheck.service');
 const { classifyCheckError } = require('./checkError.service');
 const { processCheckOutcome } = require('./monitorAlert.service');
 const { processCertificateAlert } = require('./monitorCertificateAlert.service');
+const { evaluateMonitorQuorum } = require('./monitorQuorum.service');
 
 
 async function saveCheckResult(monitor, result) {
@@ -213,7 +214,54 @@ async function checkMonitor(monitor) {
     let result;
 
     try {
-        if (monitor.monitor_type === 'DNS') {
+        if (monitor.monitor_type === 'HEARTBEAT') {
+            const heartbeat = await db.query(
+                `SELECT last_seen_at
+                 FROM heartbeat_monitor_secrets
+                 WHERE monitor_id = $1`,
+                [monitor.id]
+            );
+
+            if (!heartbeat.rows.length) {
+                throw new Error('Heartbeat secret is missing');
+            }
+
+            const lastSeenAt = heartbeat.rows[0].last_seen_at;
+            const referenceTime = lastSeenAt || monitor.created_at;
+
+            if (!referenceTime) {
+                throw new Error('Heartbeat monitor creation time is missing');
+            }
+
+            const graceSeconds =
+                Number.isInteger(monitor.heartbeat_grace_seconds) &&
+                monitor.heartbeat_grace_seconds >= 0
+                    ? monitor.heartbeat_grace_seconds
+                    : 60;
+
+            const deadline = new Date(referenceTime).getTime() +
+                (Number(monitor.interval_seconds) + graceSeconds) * 1000;
+
+            if (Date.now() <= deadline) {
+                if (!lastSeenAt) return null;
+
+                result = {
+                    status: 'UP',
+                    responseTime: null,
+                    statusCode: null,
+                    errorType: null,
+                    errorMessage: null
+                };
+            } else {
+                result = {
+                    status: 'DOWN',
+                    responseTime: null,
+                    statusCode: null,
+                    errorType: 'HEARTBEAT_MISSED',
+                    errorMessage: `No heartbeat received within ${monitor.interval_seconds} seconds plus ${graceSeconds} seconds of grace`
+                };
+            }
+        } else if (monitor.monitor_type === 'DNS') {
             const checked = await checkDns(monitor);
 
             result = {
@@ -337,7 +385,67 @@ async function checkMonitor(monitor) {
 
     // Keep database operations outside the checker catch.
     // Database errors must propagate to the caller.
-    return saveCheckResult(monitor, result);
+    const consolidatedResult = await evaluateMonitorQuorum(monitor, result);
+
+    if (consolidatedResult) {
+        return saveCheckResult(monitor, consolidatedResult);
+    }
+
+    // Inconclusive quorum: preserve confirmed state and failure streak.
+    // Do not write a consolidated result or trigger outage/recovery alerts.
+    const maintenanceResult = await db.query(
+        `SELECT EXISTS (
+            SELECT 1
+            FROM maintenance_windows w
+            JOIN monitors m ON m.id = $1
+            WHERE w.user_id = m.user_id
+              AND (w.monitor_id IS NULL OR w.monitor_id = m.id)
+              AND NOW() >= w.starts_at
+              AND NOW() < w.ends_at
+        ) AS in_maintenance`,
+        [monitor.id]
+    );
+
+    if (!maintenanceResult.rows[0]?.in_maintenance) {
+        try {
+            await processCertificateAlert(monitor, result);
+        } catch (error) {
+            console.error(
+                `Certificate alert processing failed (monitor_id: ${monitor.id}):`,
+                error
+            );
+        }
+    }
+
+    const stateResult = await db.query(
+        `SELECT confirmed_status
+         FROM monitor_check_state
+         WHERE monitor_id = $1`,
+        [monitor.id]
+    );
+
+    let confirmedStatus = stateResult.rows[0]?.confirmed_status;
+
+    if (!confirmedStatus) {
+        const eventResult = await db.query(
+            `SELECT type
+             FROM monitor_events
+             WHERE monitor_id = $1
+               AND type IN ('UP', 'DOWN')
+             ORDER BY created_at DESC, id DESC
+             LIMIT 1`,
+            [monitor.id]
+        );
+
+        confirmedStatus = eventResult.rows[0]?.type || 'UP';
+    }
+
+    return {
+        status: confirmedStatus,
+        responseTime: result.responseTime,
+        statusCode: result.statusCode
+    };
 }
 
 module.exports = { checkMonitor };
+

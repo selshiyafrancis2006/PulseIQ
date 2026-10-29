@@ -15,6 +15,7 @@ const {
 
 // Routes
 const monitorRoutes = require('./routes/monitor.routes');
+const heartbeatRoutes = require('./routes/heartbeat.routes');
 const metricsRoutes = require('./routes/metrics.routes');
 const alertsRoutes = require('./routes/alerts.routes');
 const authRoutes = require('./routes/auth.routes');
@@ -59,6 +60,7 @@ app.use(loggerMiddleware);
 // Public â€” no auth required
 app.use('/api/auth', authRoutes);
 app.use('/api/public/status', publicStatusPageRoutes);
+app.use('/api/heartbeat', heartbeatRoutes);
 
 // Protected â€” requires a valid JWT
 app.use('/api/status-pages', authenticate, statusPageRoutes);
@@ -171,6 +173,7 @@ module.exports = {
     app,
     server
 };
+
 
 
 
