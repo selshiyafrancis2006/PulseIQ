@@ -34,6 +34,16 @@ module.exports = async function globalSetup() {
         `);
 
         await client.query(`
+            CREATE TABLE IF NOT EXISTS monitor_certificate_alert_state (
+                monitor_id INTEGER PRIMARY KEY
+                    REFERENCES monitors(id) ON DELETE CASCADE,
+                certificate_expires_at TIMESTAMPTZ,
+                last_alert_level SMALLINT NOT NULL DEFAULT 0
+                    CHECK (last_alert_level BETWEEN 0 AND 4),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        `);
+        await client.query(`
 
 ALTER TABLE monitors
     ADD COLUMN IF NOT EXISTS failure_threshold INTEGER NOT NULL DEFAULT 1,
@@ -45,7 +55,10 @@ ALTER TABLE monitors
     ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'GET',
     ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS body TEXT,
-    ADD COLUMN IF NOT EXISTS timeout_ms INTEGER NOT NULL DEFAULT 10000;
+    ADD COLUMN IF NOT EXISTS timeout_ms INTEGER NOT NULL DEFAULT 10000,
+    ADD COLUMN IF NOT EXISTS expected_status_codes JSONB,
+    ADD COLUMN IF NOT EXISTS expected_keyword VARCHAR(500),
+    ADD COLUMN IF NOT EXISTS max_response_time_ms INTEGER;
 
 
 ALTER TABLE monitors
@@ -81,8 +94,75 @@ BEGIN
     END IF;
 END $$;
 
-        `);
+CREATE OR REPLACE FUNCTION public.is_valid_http_status_codes(value JSONB)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+AS $function$
+DECLARE
+    item JSONB;
+    code NUMERIC;
+    seen_codes INTEGER[] := ARRAY[]::INTEGER[];
+BEGIN
+    IF value IS NULL THEN
+        RETURN TRUE;
+    END IF;
 
+    IF jsonb_typeof(value) <> 'array' THEN
+        RETURN FALSE;
+    END IF;
+
+    IF jsonb_array_length(value) NOT BETWEEN 1 AND 20 THEN
+        RETURN FALSE;
+    END IF;
+
+    FOR item IN SELECT jsonb_array_elements(value)
+    LOOP
+        IF jsonb_typeof(item) <> 'number' THEN
+            RETURN FALSE;
+        END IF;
+
+        code := (item #>> '{}')::NUMERIC;
+
+        IF code <> trunc(code) OR code < 100 OR code > 599 THEN
+            RETURN FALSE;
+        END IF;
+
+        IF code::INTEGER = ANY(seen_codes) THEN
+            RETURN FALSE;
+        END IF;
+
+        seen_codes := array_append(seen_codes, code::INTEGER);
+    END LOOP;
+
+    RETURN TRUE;
+END;
+$function$;
+
+ALTER TABLE monitors
+    DROP CONSTRAINT IF EXISTS monitors_expected_status_codes_check;
+
+ALTER TABLE monitors
+    ADD CONSTRAINT monitors_expected_status_codes_check
+    CHECK (public.is_valid_http_status_codes(expected_status_codes));
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitors_max_response_time_check'
+          AND conrelid = 'monitors'::regclass
+    ) THEN
+        ALTER TABLE monitors
+            ADD CONSTRAINT monitors_max_response_time_check
+            CHECK (
+                max_response_time_ms IS NULL
+                OR max_response_time_ms BETWEEN 1 AND 30000
+            );
+    END IF;
+END $$;
+
+        `);
 
 
         await client.query(`
@@ -161,4 +241,3 @@ CREATE INDEX IF NOT EXISTS idx_api_test_runs_user_started
         await client.end();
     }
 };
-

@@ -19,12 +19,19 @@ jest.mock('../src/services/checkError.service', () => ({
     classifyCheckError: jest.fn()
 }));
 
+jest.mock('../src/services/monitorCertificateAlert.service', () => ({
+    processCertificateAlert: jest.fn()
+}));
+
 const db = require('../src/config/db');
 const { checkHttp } = require('../src/services/httpCheck.service');
 const { checkTcp } = require('../src/services/tcpCheck.service');
 const { checkDns } = require('../src/services/dnsCheck.service');
 const { classifyCheckError } = require('../src/services/checkError.service');
 const { checkMonitor } = require('../src/services/uptime.service');
+const {
+    processCertificateAlert
+} = require('../src/services/monitorCertificateAlert.service');
 
 describe('checkMonitor', () => {
     beforeEach(() => {
@@ -108,6 +115,111 @@ expect(result).toEqual({
         );
     });
 
+    test('uses configured expected status codes', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 202,
+            responseTimeMs: 30,
+            body: 'accepted'
+        });
+
+        const result = await checkMonitor({
+            id: 20,
+            url: 'https://example.com',
+            expected_status_codes: [202]
+        });
+
+        expect(result).toEqual({
+            status: 'UP',
+            responseTime: 30,
+            statusCode: 202
+        });
+    });
+
+    test('marks the check DOWN when the expected keyword is missing', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 200,
+            responseTimeMs: 30,
+            body: 'service unavailable'
+        });
+
+        const result = await checkMonitor({
+            id: 21,
+            url: 'https://example.com',
+            expected_keyword: 'healthy'
+        });
+
+        expect(result).toEqual({
+            status: 'DOWN',
+            responseTime: 30,
+            statusCode: 200
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            expect.arrayContaining([
+                21,
+                'DOWN',
+                30,
+                200,
+                'UNEXPECTED_BODY',
+                'Response body did not contain the expected keyword "healthy"'
+            ])
+        );
+    });
+
+    test('marks the check DOWN when response time exceeds the configured limit', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 200,
+            responseTimeMs: 150,
+            body: 'healthy'
+        });
+
+        const result = await checkMonitor({
+            id: 22,
+            url: 'https://example.com',
+            max_response_time_ms: 100
+        });
+
+        expect(result).toEqual({
+            status: 'DOWN',
+            responseTime: 150,
+            statusCode: 200
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            expect.arrayContaining([
+                22,
+                'DOWN',
+                150,
+                200,
+                'SLOW_RESPONSE',
+                'Response time 150ms exceeded the 100ms limit'
+            ])
+        );
+    });
+
+    test('passes when all configured HTTP expectations are met', async () => {
+        checkHttp.mockResolvedValue({
+            statusCode: 204,
+            responseTimeMs: 80,
+            body: 'Service HEALTHY'
+        });
+
+        const result = await checkMonitor({
+            id: 23,
+            url: 'https://example.com',
+            expected_status_codes: [200, 204],
+            expected_keyword: 'healthy',
+            max_response_time_ms: 100
+        });
+
+        expect(result).toEqual({
+            status: 'UP',
+            responseTime: 80,
+            statusCode: 204
+        });
+    });
     test('stores BAD_STATUS for an HTTP 503 response', async () => {
         checkHttp.mockResolvedValue({
             statusCode: 503,
@@ -248,10 +360,11 @@ expect(result).toEqual({
     });
 
         test('records no events and sends no alerts during maintenance', async () => {
-        checkHttp.mockResolvedValue({
-            statusCode: 503,
-            responseTimeMs: 30
-        });
+checkHttp.mockResolvedValue({
+    statusCode: 503,
+    responseTimeMs: 30,
+    certificateExpiresAt: '2026-11-05T00:00:00.000Z'
+});
 
         db.query
             .mockResolvedValueOnce({ rows: [{ status: 'UP' }] })
@@ -272,6 +385,8 @@ expect(result).toEqual({
             expect.stringContaining('monitor_alert_state'),
             expect.anything()
         );
+
+        expect(processCertificateAlert).not.toHaveBeenCalled();
     });
 
     test('stores a successful TCP check without HTTP-only fields', async () => {

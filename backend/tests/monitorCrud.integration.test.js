@@ -73,6 +73,60 @@ test('HTTP monitor creation stores custom request settings', async () => {
     });
 });
 
+test('stores expected response validation settings', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'expected-response-settings',
+            url: 'https://example.com',
+            expected_status_codes: [200, 204],
+            expected_keyword: 'healthy',
+            max_response_time_ms: 1500
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+        expected_status_codes: [200, 204],
+        expected_keyword: 'healthy',
+        max_response_time_ms: 1500
+    });
+});
+
+test('updates expected response settings and clears them with null', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'expected-response-update',
+            url: 'https://example.com',
+            expected_status_codes: [200, 204],
+            expected_keyword: 'healthy',
+            max_response_time_ms: 1500
+        });
+
+    expect(created.status).toBe(201);
+
+    const updated = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({
+            expected_status_codes: [200],
+            expected_keyword: null,
+            max_response_time_ms: null
+        });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+        expected_status_codes: [200],
+        expected_keyword: null,
+        max_response_time_ms: null
+    });
+});
 test('HTTP monitor partial update preserves other request settings', async () => {
     const user = await createUser();
 
@@ -134,6 +188,44 @@ test.each([
 });
 
 test.each([
+    ['empty array', []],
+    ['status below 100', [99]],
+    ['status above 599', [600]],
+    ['fractional status', [200.5]],
+    ['string status', ['200']],
+    ['duplicate statuses', [200, 200]],
+    ['more than 20 statuses', Array.from({ length: 21 }, (_, i) => 200 + i)]
+])('rejects invalid expected_status_codes on create: %s', async (_caseName, codes) => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'invalid-expected-status-codes',
+            url: 'https://example.com',
+            expected_status_codes: codes
+        });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['expected_status_codes', { expected_status_codes: [200, 200] }],
+    ['expected_keyword', { expected_keyword: '   ' }],
+    ['max_response_time_ms', { max_response_time_ms: 0 }]
+])('rejects invalid %s on update', async (_field, settings) => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token);
+
+    const response = await request(app)
+        .patch(`/api/monitors/${monitor.id}`)
+        .set(authHeader(user.token))
+        .send(settings);
+
+    expect(response.status).toBe(400);
+});
+test.each([
     ['TCP', {
         monitor_type: 'TCP',
         tcp_host: '8.8.8.8',
@@ -160,6 +252,37 @@ test.each([
     expect(response.status).toBe(400);
 });
 
+test.each([
+    ['TCP', {
+        monitor_type: 'TCP',
+        tcp_host: '8.8.8.8',
+        tcp_port: 443
+    }],
+    ['DNS', {
+        monitor_type: 'DNS',
+        dns_hostname: 'example.com',
+        dns_record_type: 'A'
+    }]
+])('rejects expected response settings when updating a %s monitor', async (_type, fields) => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'non-http-update-test',
+            ...fields
+        });
+
+    expect(created.status).toBe(201);
+
+    const response = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ expected_status_codes: [200] });
+
+    expect(response.status).toBe(400);
+});
 test('owner can update monitor fields', async () => {
     const user = await createUser();
     const monitor = await createMonitor(user.token);

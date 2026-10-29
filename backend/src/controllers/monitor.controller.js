@@ -126,6 +126,37 @@ function validateTimeout(value) {
 }
 
 
+function validateExpectedStatusCodes(value) {
+    return value === null || (
+        Array.isArray(value) &&
+        value.length >= 1 &&
+        value.length <= 20 &&
+        value.every(code =>
+            Number.isInteger(code) && code >= 100 && code <= 599
+        ) &&
+        new Set(value).size === value.length
+    );
+}
+
+function validateExpectedKeyword(value) {
+    return value === null || (
+        typeof value === 'string' &&
+        value.trim().length >= 1 &&
+        value.length <= 500
+    );
+}
+
+function validateMaxResponseTime(value) {
+    return value === null ||
+        (Number.isInteger(value) && value >= 1 && value <= 30000);
+}
+
+const EXPECTED_STATUS_CODES_ERROR = 'expected_status_codes must be null or an array of 1 to 20 unique integer HTTP status codes between 100 and 599';
+const EXPECTED_KEYWORD_ERROR =
+    'expected_keyword must be null or a non-empty string of at most 500 characters';
+const MAX_RESPONSE_TIME_ERROR =
+    'max_response_time_ms must be null or an integer between 1 and 30000';
+
 function validateMonitorId(value) {
     return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) &&
         Number(value) > 0;
@@ -149,7 +180,10 @@ const {
     method = 'GET',
     headers = {},
     body: requestBody = null,
-    timeout_ms = 10000
+    timeout_ms = 10000,
+    expected_status_codes = null,
+    expected_keyword = null,
+    max_response_time_ms = null
 } = body;
 
 
@@ -179,7 +213,8 @@ const {
 
 if (monitor_type !== 'HTTP') {
     const hasHttpSettings = [
-        'method', 'headers', 'body', 'timeout_ms'
+        'method', 'headers', 'body', 'timeout_ms',
+        'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
     ].some(key => Object.hasOwn(body, key));
 
     if (hasHttpSettings) {
@@ -212,6 +247,16 @@ if (monitor_type === 'HTTP') {
         return res.status(400).json({
             message: 'timeout_ms must be an integer between 1 and 30000'
         });
+    }
+
+    if (!validateExpectedStatusCodes(expected_status_codes)) {
+        return res.status(400).json({ message: EXPECTED_STATUS_CODES_ERROR });
+    }
+    if (!validateExpectedKeyword(expected_keyword)) {
+        return res.status(400).json({ message: EXPECTED_KEYWORD_ERROR });
+    }
+    if (!validateMaxResponseTime(max_response_time_ms)) {
+        return res.status(400).json({ message: MAX_RESPONSE_TIME_ERROR });
     }
 }
 
@@ -276,9 +321,11 @@ if (monitor_type === 'HTTP') {
     (name, url, user_id, tags, interval_seconds,
      renotify_minutes, failure_threshold, monitor_type,
      tcp_host, tcp_port, dns_hostname, dns_record_type,
-     method, headers, body, timeout_ms)
+     method, headers, body, timeout_ms,
+     expected_status_codes, expected_keyword, max_response_time_ms)
  VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-         $9, $10, $11, $12, $13, $14, $15, $16)
+         $9, $10, $11, $12, $13, $14, $15, $16,
+         $17::jsonb, $18, $19)
  RETURNING *`,
 [
     name.trim(),
@@ -296,7 +343,12 @@ if (monitor_type === 'HTTP') {
     monitor_type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
     monitor_type === 'HTTP' ? headers : {},
     monitor_type === 'HTTP' ? requestBody : null,
-    monitor_type === 'HTTP' ? timeout_ms : 10000
+    monitor_type === 'HTTP' ? timeout_ms : 10000,
+    monitor_type === 'HTTP' && expected_status_codes !== null
+        ? JSON.stringify(expected_status_codes) : null,
+    monitor_type === 'HTTP' && expected_keyword !== null
+        ? expected_keyword.trim() : null,
+    monitor_type === 'HTTP' ? max_response_time_ms : null
 ]
 
         );
@@ -1115,7 +1167,8 @@ const allowed = [
     'name', 'url', 'tcp_host', 'tcp_port',
     'dns_hostname', 'dns_record_type', 'tags',
     'interval_seconds', 'renotify_minutes', 'failure_threshold',
-    'method', 'headers', 'body', 'timeout_ms'
+    'method', 'headers', 'body', 'timeout_ms',
+    'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
 ];
         const keys = Object.keys(body);
 
@@ -1145,7 +1198,8 @@ const allowed = [
             Object.hasOwn(body, 'dns_record_type');
 
         const hasHttpSettings = [
-    'method', 'headers', 'body', 'timeout_ms'
+    'method', 'headers', 'body', 'timeout_ms',
+    'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
 ].some(key => Object.hasOwn(body, key));
 
 if (type !== 'HTTP' && hasHttpSettings) {
@@ -1194,6 +1248,12 @@ const requestBody = Object.hasOwn(body, 'body')
     ? body.body : (monitor.body ?? null);
 const timeoutMs = Object.hasOwn(body, 'timeout_ms')
     ? body.timeout_ms : (monitor.timeout_ms ?? 10000);
+const expectedStatusCodes = Object.hasOwn(body, 'expected_status_codes')
+    ? body.expected_status_codes : (monitor.expected_status_codes ?? null);
+const expectedKeyword = Object.hasOwn(body, 'expected_keyword')
+    ? body.expected_keyword : (monitor.expected_keyword ?? null);
+const maxResponseTimeMs = Object.hasOwn(body, 'max_response_time_ms')
+    ? body.max_response_time_ms : (monitor.max_response_time_ms ?? null);
 
 if (type === 'HTTP') {
     if (!validateHttpMethod(method)) {
@@ -1218,6 +1278,15 @@ if (type === 'HTTP') {
         return res.status(400).json({
             message: 'timeout_ms must be an integer between 1 and 30000'
         });
+    }
+    if (!validateExpectedStatusCodes(expectedStatusCodes)) {
+        return res.status(400).json({ message: EXPECTED_STATUS_CODES_ERROR });
+    }
+    if (!validateExpectedKeyword(expectedKeyword)) {
+        return res.status(400).json({ message: EXPECTED_KEYWORD_ERROR });
+    }
+    if (!validateMaxResponseTime(maxResponseTimeMs)) {
+        return res.status(400).json({ message: MAX_RESPONSE_TIME_ERROR });
     }
 }
 
@@ -1312,8 +1381,10 @@ if (type === 'HTTP') {
                  renotify_minutes = $5, failure_threshold = $6,
                  tcp_host = $7, tcp_port = $8,
                  dns_hostname = $9, dns_record_type = $10,
-                 method = $11, headers = $12, body = $13, timeout_ms = $14
-             WHERE id = $15 AND user_id = $16
+                 method = $11, headers = $12, body = $13, timeout_ms = $14,
+                 expected_status_codes = $15::jsonb,
+                 expected_keyword = $16, max_response_time_ms = $17
+             WHERE id = $18 AND user_id = $19
              RETURNING *`,
             [
                 name.trim(),
@@ -1330,6 +1401,11 @@ if (type === 'HTTP') {
                 type === 'HTTP' ? headers : {},
                 type === 'HTTP' ? requestBody : null,
                 type === 'HTTP' ? timeoutMs : 10000,
+                type === 'HTTP' && expectedStatusCodes !== null
+                    ? JSON.stringify(expectedStatusCodes) : null,
+                type === 'HTTP' && expectedKeyword !== null
+                    ? expectedKeyword.trim() : null,
+                type === 'HTTP' ? maxResponseTimeMs : null,
                 Number(id),
                 req.user.id
             ]
@@ -1381,6 +1457,160 @@ const setMonitorActive = async (req, res, isActive) => {
 
 const pauseMonitor = (req, res) => setMonitorActive(req, res, false);
 const resumeMonitor = (req, res) => setMonitorActive(req, res, true);
+
+const getMonitorLocations = async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+
+        if (!validateMonitorId(req.params.id)) {
+            return res.status(400).json({ message: 'Invalid monitor ID' });
+        }
+
+        const monitor = await db.query(
+            'SELECT id FROM monitors WHERE id = $1 AND user_id = $2',
+            [id, req.user.id]
+        );
+
+        if (!monitor.rows.length) {
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        const result = await db.query(
+            `SELECT
+                h.id AS host_id,
+                h.name AS host_name,
+                h.last_seen_at,
+                ml.created_at AS assigned_at,
+                latest.status AS last_status,
+                latest.checked_at AS last_checked_at
+             FROM monitor_locations ml
+             JOIN hosts h ON h.id = ml.host_id
+             LEFT JOIN LATERAL (
+                SELECT status, checked_at
+                FROM monitor_location_results
+                WHERE monitor_id = ml.monitor_id
+                  AND host_id = ml.host_id
+                ORDER BY checked_at DESC, id DESC
+                LIMIT 1
+             ) latest ON true
+             WHERE ml.monitor_id = $1
+             ORDER BY h.name`,
+            [id]
+        );
+
+        const quorum = await db.query(
+            'SELECT quorum FROM monitors WHERE id = $1',
+            [id]
+        );
+
+        return res.json({
+            quorum: quorum.rows[0].quorum,
+            locations: result.rows
+        });
+    } catch (error) {
+        console.error('Get monitor locations failed:', error);
+        return res.status(500).json({
+            message: 'Failed to fetch monitor locations'
+        });
+    }
+};
+
+const updateMonitorLocations = async (req, res) => {
+    const client = await db.connect();
+
+    try {
+        const id = Number(req.params.id);
+        const { host_ids, quorum = 1 } = req.body || {};
+
+        if (!validateMonitorId(req.params.id)) {
+            return res.status(400).json({ message: 'Invalid monitor ID' });
+        }
+
+        if (
+            !Array.isArray(host_ids) ||
+            host_ids.some(hostId =>
+                !Number.isSafeInteger(hostId) || hostId <= 0
+            ) ||
+            new Set(host_ids).size !== host_ids.length
+        ) {
+            return res.status(400).json({
+                message: 'host_ids must be an array of unique positive integers'
+            });
+        }
+
+        if (
+            !Number.isSafeInteger(quorum) ||
+            quorum < 1 ||
+            quorum > host_ids.length + 1
+        ) {
+            return res.status(400).json({
+                message: 'quorum must be between 1 and the number of assigned agents plus the central checker'
+            });
+        }
+
+        await client.query('BEGIN');
+
+        const monitor = await client.query(
+            'SELECT id FROM monitors WHERE id = $1 AND user_id = $2 FOR UPDATE',
+            [id, req.user.id]
+        );
+
+        if (!monitor.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        if (host_ids.length) {
+            const hosts = await client.query(
+                `SELECT id FROM hosts
+                 WHERE user_id = $1 AND id = ANY($2::int[])`,
+                [req.user.id, host_ids]
+            );
+
+            if (hosts.rows.length !== host_ids.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    message: 'Every host must belong to your account'
+                });
+            }
+        }
+
+        await client.query(
+            'DELETE FROM monitor_locations WHERE monitor_id = $1',
+            [id]
+        );
+
+        for (const hostId of host_ids) {
+            await client.query(
+                `INSERT INTO monitor_locations (monitor_id, host_id)
+                 VALUES ($1, $2)`,
+                [id, hostId]
+            );
+        }
+
+        await client.query(
+            'UPDATE monitors SET quorum = $1 WHERE id = $2',
+            [quorum, id]
+        );
+
+        await client.query('COMMIT');
+
+        return res.json({
+            monitor_id: id,
+            host_ids,
+            quorum
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Update monitor locations failed:', error);
+        return res.status(500).json({
+            message: 'Failed to update monitor locations'
+        });
+    } finally {
+        client.release();
+    }
+};
+
 module.exports = {
     createMonitor,
     updateMonitor,
@@ -1392,5 +1622,7 @@ module.exports = {
     getMonitorStatus,
     getMonitorHistory,
     getMonitorUptime,
-    getMonitorEvents
+    getMonitorEvents,
+    getMonitorLocations,
+    updateMonitorLocations
 };

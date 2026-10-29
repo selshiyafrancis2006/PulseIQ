@@ -57,6 +57,15 @@ function buildSlackPayload(event) {
                     : `:large_green_circle: *${name}* has stabilized and is UP`
             );
             break;
+        case 'CERTIFICATE_EXPIRING':
+            lines.push(`:warning: *${name}* SSL certificate is expiring`);
+            if (event.certificateDaysRemaining != null) {
+                lines.push(`Days remaining: ${event.certificateDaysRemaining}`);
+            }
+            break;
+        case 'CERTIFICATE_EXPIRED':
+            lines.push(`:red_circle: *${name}* SSL certificate has EXPIRED`);
+            break;
         default:
             lines.push(':test_tube: PulseIQ test notification');
     }
@@ -103,6 +112,8 @@ function buildWebhookPayload(event) {
         error_type: event.errorType ?? null,
         error_message: event.errorMessage ?? null,
         response_time_ms: event.responseTimeMs ?? null,
+        certificate_expires_at: event.certificateExpiresAt ?? null,
+        certificate_days_remaining: event.certificateDaysRemaining ?? null,
         status_code: event.statusCode ?? null,
         occurred_at: event.occurredAt ?? new Date().toISOString()
     };

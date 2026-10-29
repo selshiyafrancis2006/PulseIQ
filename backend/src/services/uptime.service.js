@@ -4,6 +4,7 @@ const { checkTcp } = require('./tcpCheck.service');
 const { checkDns } = require('./dnsCheck.service');
 const { classifyCheckError } = require('./checkError.service');
 const { processCheckOutcome } = require('./monitorAlert.service');
+const { processCertificateAlert } = require('./monitorCertificateAlert.service');
 
 
 async function saveCheckResult(monitor, result) {
@@ -72,6 +73,16 @@ async function saveCheckResult(monitor, result) {
         };
     }
 
+    // Certificate alerts are independent of outage alerts.
+    // The maintenance-window return above intentionally suppresses both.
+    try {
+        await processCertificateAlert(monitor, result);
+    } catch (error) {
+        console.error(
+            `Certificate alert processing failed (monitor_id: ${monitor.id}):`,
+            error
+        );
+    }
     // Read persistent state so the failure streak survives restarts.
     const stateResult = await db.query(
         `SELECT confirmed_status, consecutive_failures
@@ -238,9 +249,58 @@ async function checkMonitor(monitor) {
             };
         } else {
             const checked = await checkHttp(monitor);
+
+            const configuredStatusCodes = monitor.expected_status_codes;
+            const statusMatches =
+                Array.isArray(configuredStatusCodes) &&
+                configuredStatusCodes.length > 0
+                    ? configuredStatusCodes.includes(checked.statusCode)
+                    : checked.statusCode >= 200 &&
+                      checked.statusCode < 400;
+
+            const expectedKeyword =
+                typeof monitor.expected_keyword === 'string'
+                    ? monitor.expected_keyword.trim()
+                    : '';
+
+            const keywordMatches =
+                !expectedKeyword ||
+                String(checked.body ?? '')
+                    .toLowerCase()
+                    .includes(expectedKeyword.toLowerCase());
+
+            const maxResponseTimeMs = monitor.max_response_time_ms;
+            const responseTimeMatches =
+                maxResponseTimeMs == null ||
+                checked.responseTimeMs <= maxResponseTimeMs;
+
             const isUp =
-                checked.statusCode >= 200 &&
-                checked.statusCode < 400;
+                statusMatches &&
+                keywordMatches &&
+                responseTimeMatches;
+
+            const failures = [];
+
+            if (!statusMatches) {
+                failures.push(
+                    Array.isArray(configuredStatusCodes) &&
+                    configuredStatusCodes.length > 0
+                        ? `Expected HTTP status ${configuredStatusCodes.join(', ')}, received ${checked.statusCode}`
+                        : `Monitor returned HTTP ${checked.statusCode}`
+                );
+            }
+
+            if (!keywordMatches) {
+                failures.push(
+                    `Response body did not contain the expected keyword "${expectedKeyword}"`
+                );
+            }
+
+            if (!responseTimeMatches) {
+                failures.push(
+                    `Response time ${checked.responseTimeMs}ms exceeded the ${maxResponseTimeMs}ms limit`
+                );
+            }
 
             result = {
                 status: isUp ? 'UP' : 'DOWN',
@@ -253,10 +313,14 @@ async function checkMonitor(monitor) {
                 downloadTimeMs: checked.downloadTimeMs,
                 certificateExpiresAt: checked.certificateExpiresAt ?? null,
                 certificateDaysRemaining: checked.certificateDaysRemaining ?? null,
-                errorType: isUp ? null : 'BAD_STATUS',
-                errorMessage: isUp
+                errorType: isUp
                     ? null
-                    : `Monitor returned HTTP ${checked.statusCode}`
+                    : !statusMatches
+                        ? 'BAD_STATUS'
+                        : !keywordMatches
+                            ? 'UNEXPECTED_BODY'
+                            : 'SLOW_RESPONSE',
+                errorMessage: isUp ? null : failures.join('; ')
             };
         }
     } catch (error) {
