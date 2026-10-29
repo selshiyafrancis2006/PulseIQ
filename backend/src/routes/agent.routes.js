@@ -86,6 +86,7 @@ router.get('/monitors', authenticateAgent, async (req, res) => {
                 m.expected_status_codes,
                 m.expected_keyword,
                 m.max_response_time_ms,
+                m.interval_seconds,
                 m.tcp_host,
                 m.tcp_port,
                 m.dns_hostname,
@@ -111,6 +112,104 @@ router.get('/monitors', authenticateAgent, async (req, res) => {
     }
 });
 
+// ===== G1.3b: agents report probe results for their assigned monitors =====
+router.post('/monitor-results', authenticateAgent, async (req, res) => {
+    try {
+        const body = req.body;
+
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return res.status(400).json({ error: 'Invalid result payload' });
+        }
+
+        const {
+            monitor_id,
+            status,
+            response_time_ms,
+            status_code,
+            error_type,
+            error_message
+        } = body;
+
+        if (!Number.isSafeInteger(monitor_id) || monitor_id < 1) {
+            return res.status(400).json({ error: 'Invalid monitor_id' });
+        }
+
+        if (status !== 'UP' && status !== 'DOWN') {
+            return res.status(400).json({ error: 'status must be UP or DOWN' });
+        }
+
+        if (
+            response_time_ms !== undefined &&
+            response_time_ms !== null &&
+            (!Number.isInteger(response_time_ms) ||
+                response_time_ms < 0 ||
+                response_time_ms > 2147483647)
+        ) {
+            return res.status(400).json({ error: 'Invalid response_time_ms' });
+        }
+
+        if (
+            status_code !== undefined &&
+            status_code !== null &&
+            (!Number.isInteger(status_code) ||
+                status_code < 100 ||
+                status_code > 599)
+        ) {
+            return res.status(400).json({ error: 'Invalid status_code' });
+        }
+
+        for (const [field, value] of [
+            ['error_type', error_type],
+            ['error_message', error_message]
+        ]) {
+            if (value !== undefined && value !== null && typeof value !== 'string') {
+                return res.status(400).json({ error: `Invalid ${field}` });
+            }
+        }
+
+        // Only a host that is assigned to this monitor, and owned by the
+        // same user, may report for it. Anything else looks like "not found".
+        const assigned = await pool.query(
+            `SELECT 1
+               FROM monitor_locations ml
+               JOIN monitors m ON m.id = ml.monitor_id
+               JOIN hosts h ON h.id = ml.host_id AND h.user_id = m.user_id
+              WHERE ml.monitor_id = $1
+                AND ml.host_id = $2
+                AND m.is_active = true`,
+            [monitor_id, req.agentHost.id]
+        );
+
+        if (assigned.rows.length === 0) {
+            return res.status(404).json({ error: 'Monitor not assigned to this agent' });
+        }
+
+        // checked_at is always the server's clock, never the agent's, so a
+        // skewed agent clock cannot reorder or backdate results.
+        const result = await pool.query(
+            `INSERT INTO monitor_location_results
+                (monitor_id, host_id, status, response_time_ms,
+                 status_code, error_type, error_message)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING id, monitor_id, host_id, status, checked_at`,
+            [
+                monitor_id,
+                req.agentHost.id,
+                status,
+                response_time_ms ?? null,
+                status_code ?? null,
+                cleanString(error_type, 50),
+                cleanString(error_message, 1000)
+            ]
+        );
+
+        return res.status(201).json(result.rows[0]);
+    } catch (error) {
+        console.error('Agent monitor result ingestion failed:', error);
+        return res.status(500).json({ error: 'Failed to save monitor result' });
+    }
+});
+// ===== end G1.3b =====
 
 router.post('/metrics', authenticateAgent, async (req, res) => {
     try {

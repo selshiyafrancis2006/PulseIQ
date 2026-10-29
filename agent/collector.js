@@ -225,3 +225,14 @@ if (config.insecureRemote) {
 collectAndSend();
 
 setInterval(collectAndSend, config.intervalMs);
+
+// G1.4: run the monitor checks that PulseIQ assigned to this host
+// (multi-location monitoring). Set MONITOR_CHECKS=false to turn it off.
+if (process.env.MONITOR_CHECKS !== 'false') {
+    const { startMonitorRunner } = require('./monitor-runner');
+
+    startMonitorRunner({
+        baseUrl: config.metricsUrl.replace(/\/api\/agent\/metrics$/, ''),
+        apiKey: config.apiKey
+    });
+}
