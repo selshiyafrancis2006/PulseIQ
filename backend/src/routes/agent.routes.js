@@ -70,6 +70,48 @@ async function saveHostMetadata(hostId, metadata) {
     );
 }
 
+
+router.get('/monitors', authenticateAgent, async (req, res) => {
+    try {
+        const result = await pool.query(
+            `SELECT
+                m.id,
+                m.name,
+                m.monitor_type,
+                m.url,
+                m.method,
+                m.headers,
+                m.body,
+                m.timeout_ms,
+                m.expected_status_codes,
+                m.expected_keyword,
+                m.max_response_time_ms,
+                m.tcp_host,
+                m.tcp_port,
+                m.dns_hostname,
+                m.dns_record_type
+             FROM monitor_locations ml
+             JOIN monitors m
+               ON m.id = ml.monitor_id
+             JOIN hosts h
+               ON h.id = ml.host_id
+              AND h.user_id = m.user_id
+             WHERE ml.host_id = $1
+               AND m.is_active = true
+             ORDER BY m.id`,
+            [req.agentHost.id]
+        );
+
+        return res.json({ monitors: result.rows });
+    } catch (error) {
+        console.error('Agent monitor polling failed:', error);
+        return res.status(500).json({
+            error: 'Failed to fetch assigned monitors'
+        });
+    }
+});
+
+
 router.post('/metrics', authenticateAgent, async (req, res) => {
     try {
         const {

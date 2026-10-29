@@ -18,7 +18,9 @@ const {
     updateMonitor,
     deleteMonitor,
     pauseMonitor,
-    resumeMonitor
+    resumeMonitor,
+    getMonitorLocations,
+    updateMonitorLocations
 } = require('../controllers/monitor.controller');
 
 router.post('/', createMonitor);
@@ -54,6 +56,10 @@ router.get('/test', async (req, res) => {
         });
     }
 });
+
+router.get('/:id/locations', getMonitorLocations);
+
+router.put('/:id/locations', updateMonitorLocations);
 
 router.get('/:id', getMonitorById);
 
