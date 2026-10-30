@@ -26,26 +26,31 @@ describe('validateDnsTarget', () => {
         expect(() => validateDnsTarget(hostname, 'A')).toThrow();
     });
 
-        test('continues rejecting internal hostnames when private monitor targets are enabled', () => {
-        const originalSetting = process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
+            test('allows private hostnames when private monitor targets are enabled', () => {
+        expect(validateDnsTarget('server.local', 'A', true)).toEqual({
+            hostname: 'server.local',
+            recordType: 'A'
+        });
 
-        process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = 'true';
+        expect(validateDnsTarget('server.internal', 'A', true)).toEqual({
+            hostname: 'server.internal',
+            recordType: 'A'
+        });
+    });
 
-        try {
-            expect(() => validateDnsTarget('server.local', 'A')).toThrow(
-                'DNS monitor requires a valid public hostname'
-            );
+    test('rejects private hostnames when private monitor targets are disabled', () => {
+        expect(() => validateDnsTarget('server.local', 'A', false))
+            .toThrow('DNS monitor requires a valid public hostname');
 
-            expect(() => validateDnsTarget('server.internal', 'A')).toThrow(
-                'DNS monitor requires a valid public hostname'
-            );
-        } finally {
-            if (originalSetting === undefined) {
-                delete process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
-            } else {
-                process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = originalSetting;
-            }
-        }
+        expect(() => validateDnsTarget('server.internal', 'A', false))
+            .toThrow('DNS monitor requires a valid public hostname');
+    });
+
+    test('always rejects localhost and loopback IP literals', () => {
+        expect(() => validateDnsTarget('localhost', 'A', true)).toThrow();
+        expect(() => validateDnsTarget('server.localhost', 'A', true)).toThrow();
+        expect(() => validateDnsTarget('127.0.0.1', 'A', true)).toThrow();
+        expect(() => validateDnsTarget('::1', 'AAAA', true)).toThrow();
     });
 
     test('rejects a missing hostname', () => {

@@ -1,4 +1,5 @@
-﻿const dns = require('node:dns').promises;
+﻿
+const dns = require('node:dns').promises;
 const net = require('node:net');
 const { performance } = require('node:perf_hooks');
 
@@ -11,27 +12,45 @@ const DNS_RESOLVERS = Object.freeze({
     NS: 'resolveNs'
 });
 
-const INTERNAL_SUFFIXES = [
+const BLOCKED_SUFFIXES = [
     '.localhost',
-    '.local',
-    '.internal',
     '.test',
     '.invalid'
 ];
 
-function validateDnsTarget(hostname, recordType) {
+const PRIVATE_SUFFIXES = [
+    '.local',
+    '.internal'
+];
+
+function privateTargetsEnabled() {
+    return process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS === 'true';
+}
+
+function validateDnsTarget(
+    hostname,
+    recordType,
+    allowPrivateTargets = privateTargetsEnabled()
+) {
     if (typeof hostname !== 'string' || !hostname.trim()) {
         throw new Error('DNS monitor hostname is required');
     }
 
     const normalizedHostname = hostname.trim().replace(/\.$/, '');
+    const lowerHostname = normalizedHostname.toLowerCase();
 
     if (
         normalizedHostname.length > 253 ||
         net.isIP(normalizedHostname) ||
-        normalizedHostname.toLowerCase() === 'localhost' ||
-        INTERNAL_SUFFIXES.some(suffix =>
-            normalizedHostname.toLowerCase().endsWith(suffix)
+        lowerHostname === 'localhost' ||
+        BLOCKED_SUFFIXES.some(suffix =>
+            lowerHostname.endsWith(suffix)
+        ) ||
+        (
+            !allowPrivateTargets &&
+            PRIVATE_SUFFIXES.some(suffix =>
+                lowerHostname.endsWith(suffix)
+            )
         )
     ) {
         throw new Error('DNS monitor requires a valid public hostname');
@@ -42,12 +61,16 @@ function validateDnsTarget(hostname, recordType) {
         if (label.length < 1 || label.length > 63) return false;
         if (!/[a-zA-Z0-9]/.test(label[0])) return false;
         if (!/[a-zA-Z0-9]/.test(label[label.length - 1])) return false;
+
         for (const char of label) {
             if (!/[a-zA-Z0-9-]/.test(char)) return false;
         }
+
         return true;
     };
-    const validHostname = labels.length >= 2 && labels.every(labelIsValid);
+
+    const validHostname =
+        labels.length >= 2 && labels.every(labelIsValid);
 
     if (!validHostname) {
         throw new Error('DNS monitor requires a valid public hostname');
@@ -55,7 +78,10 @@ function validateDnsTarget(hostname, recordType) {
 
     if (
         typeof recordType !== 'string' ||
-        !Object.prototype.hasOwnProperty.call(DNS_RESOLVERS, recordType.toUpperCase())
+        !Object.prototype.hasOwnProperty.call(
+            DNS_RESOLVERS,
+            recordType.toUpperCase()
+        )
     ) {
         throw new Error('Unsupported DNS record type');
     }
@@ -84,7 +110,10 @@ async function checkDns(monitor, options = {}) {
 
     try {
         const records = await resolve.call(resolver, hostname);
-        const dnsTimeMs = Math.max(0, Math.round(performance.now() - startedAt));
+        const dnsTimeMs = Math.max(
+            0,
+            Math.round(performance.now() - startedAt)
+        );
 
         if (!Array.isArray(records) || records.length === 0) {
             const error = new Error('The requested DNS record was not found');

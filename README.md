@@ -84,6 +84,30 @@ JWT_SECRET=your_jwt_secret
 PORT=5000
 ```
 
+### Private Monitor Targets
+
+By default, PulseIQ only allows monitors to target public IP addresses and public hostnames.
+
+To allow monitoring private network targets, set this backend environment variable:
+
+```env
+PULSEIQ_ALLOW_PRIVATE_TARGETS=true
+```
+
+When enabled, PulseIQ permits:
+- RFC1918 IPv4 private ranges (`10.0.0.0/8`, `172.16.0.0/12`, and `192.168.0.0/16`)
+- IPv6 Unique Local Addresses (`fc00::/7`)
+- Hostnames ending in `.local` or `.internal`
+
+The following remain blocked, even when private targets are enabled:
+- `localhost` and `.localhost` hostnames
+- Loopback IP addresses (`127.0.0.0/8` and `::1`)
+- Reserved and otherwise disallowed IP ranges
+- Blocked hostname suffixes such as `.test` and `.invalid`
+
+**Security warning:** Enabling private targets expands the destinations that monitors can access. Only enable this option in deployments where monitor creation is restricted to trusted users. Keep it disabled for public-facing deployments unless private-network monitoring is specifically required.
+
+
 ## Running Locally
 
 **Backend**
@@ -137,3 +161,4 @@ No external ML library. Pure math.
 ## License
 
 MIT
+

@@ -1,4 +1,3 @@
-
 const cron = require('node-cron');
 const db = require('../config/db');
 const { checkMonitor } = require('../services/uptime.service');
@@ -7,6 +6,9 @@ const { checkHostStatus } = require('../services/hostStatus.service');
 const DEFAULT_MAX_CONCURRENT_MONITORS = 5;
 const MIN_MAX_CONCURRENT_MONITORS = 1;
 const MAX_ALLOWED_CONCURRENT_MONITORS = 50;
+
+const CLAIM_LEASE_SECONDS = 120;
+const CLAIM_RENEW_INTERVAL_MS = 30 * 1000;
 
 const configuredConcurrency = Number(
     process.env.UPTIME_MAX_CONCURRENT_MONITORS
@@ -24,6 +26,7 @@ let hostCheckRunning = false;
 
 cron.schedule('*/10 * * * * *', async () => {
     if (hostCheckRunning) return;
+
     hostCheckRunning = true;
 
     try {
@@ -35,41 +38,67 @@ cron.schedule('*/10 * * * * *', async () => {
     }
 });
 
-// Per-monitor scheduling state.
+// Per-process monitor scheduling state.
 const inFlight = new Set();
 let activeChecks = 0;
 let schedulerRunning = false;
 
 async function scheduleDueMonitors() {
-    // Prevent overlapping scheduler ticks while the database query is pending.
     if (schedulerRunning) return;
+
+    const availableSlots = MAX_CONCURRENT_MONITORS - activeChecks;
+    if (availableSlots <= 0) return;
+
     schedulerRunning = true;
 
     try {
-       const result = await db.query(`
-    SELECT
-        m.*,
-        latest.checked_at AS last_checked_at
-    FROM monitors m
-    LEFT JOIN LATERAL (
-        SELECT checked_at
-        FROM monitor_results
-        WHERE monitor_id = m.id
-        ORDER BY checked_at DESC
-        LIMIT 1
-    ) latest ON true
-    WHERE m.is_active = true
-      AND (
-          latest.checked_at IS NULL
-          OR latest.checked_at <=
-              NOW() - (m.interval_seconds * INTERVAL '1 second')
-      )
-    ORDER BY latest.checked_at ASC NULLS FIRST, m.id ASC
-`);
+        // Atomically claim due monitors. Expired leases can be reclaimed.
+        const result = await db.query(
+            `
+            WITH due AS (
+                SELECT id
+                FROM monitors
+                WHERE is_active = TRUE
+                  AND next_check_at <= NOW()
+                  AND (
+                      check_claimed_until IS NULL
+                      OR check_claimed_until <= NOW()
+                  )
+                ORDER BY next_check_at ASC, id ASC
+                FOR UPDATE SKIP LOCKED
+                LIMIT $1
+            )
+            UPDATE monitors AS m
+            SET next_check_at =
+                    NOW() + make_interval(secs => m.interval_seconds),
+                check_claim_token = gen_random_uuid(),
+                check_claimed_until =
+                    NOW() + make_interval(secs => ${CLAIM_LEASE_SECONDS})
+            FROM due
+            WHERE m.id = due.id
+            RETURNING m.*;
+            `,
+            [availableSlots]
+        );
 
         for (const monitor of result.rows) {
             const monitorId = monitor.id;
+            const claimToken = monitor.check_claim_token;
             const intervalSeconds = Number(monitor.interval_seconds ?? 30);
+
+            // Only the owner of this claim can release it.
+            const releaseClaim = async () => {
+                await db.query(
+                    `
+                    UPDATE monitors
+                    SET check_claim_token = NULL,
+                        check_claimed_until = NULL
+                    WHERE id = $1
+                      AND check_claim_token = $2::uuid
+                    `,
+                    [monitorId, claimToken]
+                );
+            };
 
             if (
                 !Number.isInteger(intervalSeconds) ||
@@ -79,19 +108,78 @@ async function scheduleDueMonitors() {
                 console.error(
                     `Invalid interval_seconds for monitor ${monitorId}; skipping check`
                 );
+
+                try {
+                    await releaseClaim();
+                } catch (error) {
+                    console.error(
+                        `Monitor claim release failed (monitor_id: ${monitorId}):`,
+                        error
+                    );
+                }
+
                 continue;
             }
 
+            // Keep the local guard as an additional safeguard.
             if (
-    inFlight.has(monitorId) ||
-    activeChecks >= MAX_CONCURRENT_MONITORS
-) {
-    continue;
-}
+                inFlight.has(monitorId) ||
+                activeChecks >= MAX_CONCURRENT_MONITORS
+            ) {
+                try {
+                    await releaseClaim();
+                } catch (error) {
+                    console.error(
+                        `Monitor claim release failed (monitor_id: ${monitorId}):`,
+                        error
+                    );
+                }
 
-            // Reserve this monitor before starting asynchronous work.
+                continue;
+            }
+
             inFlight.add(monitorId);
             activeChecks += 1;
+
+            let renewalInProgress = false;
+
+            // Renew the lease while the monitor check is running.
+            const renewalTimer = setInterval(async () => {
+                if (renewalInProgress) return;
+
+                renewalInProgress = true;
+
+                try {
+                    const renewal = await db.query(
+                        `
+                        UPDATE monitors
+                        SET check_claimed_until =
+                            NOW() + make_interval(secs => ${CLAIM_LEASE_SECONDS})
+                        WHERE id = $1
+                          AND check_claim_token = $2::uuid
+                          AND check_claimed_until > NOW()
+                          AND is_active = TRUE
+                        RETURNING id
+                        `,
+                        [monitorId, claimToken]
+                    );
+
+                    if (!renewal.rows.length) {
+                        console.error(
+                            `Monitor claim lease lost (monitor_id: ${monitorId})`
+                        );
+                    }
+                } catch (error) {
+                    console.error(
+                        `Monitor claim renewal failed (monitor_id: ${monitorId}):`,
+                        error
+                    );
+                } finally {
+                    renewalInProgress = false;
+                }
+            }, CLAIM_RENEW_INTERVAL_MS);
+
+            renewalTimer.unref?.();
 
             void checkMonitor(monitor)
                 .catch((error) => {
@@ -100,9 +188,28 @@ async function scheduleDueMonitors() {
                         error
                     );
                 })
-                .finally(() => {
-                    inFlight.delete(monitorId);
-                    activeChecks -= 1;
+                .finally(async () => {
+                    clearInterval(renewalTimer);
+
+                    // Wait for an already-started renewal query to finish
+                    // before releasing this claim.
+                    while (renewalInProgress) {
+                        await new Promise((resolve) =>
+                            setTimeout(resolve, 10)
+                        );
+                    }
+
+                    try {
+                        await releaseClaim();
+                    } catch (error) {
+                        console.error(
+                            `Monitor claim release failed (monitor_id: ${monitorId}):`,
+                            error
+                        );
+                    } finally {
+                        inFlight.delete(monitorId);
+                        activeChecks -= 1;
+                    }
                 });
         }
     } catch (error) {
@@ -112,7 +219,7 @@ async function scheduleDueMonitors() {
     }
 }
 
-// Check every second; individual monitors run according to their intervals.
+// Check every second; individual monitors run according to next_check_at.
 cron.schedule('* * * * * *', () => {
     void scheduleDueMonitors();
 });

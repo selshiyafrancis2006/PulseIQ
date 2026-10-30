@@ -178,6 +178,36 @@ END $$;
 
 
         await client.query(`
+ALTER TABLE monitors
+    ADD COLUMN IF NOT EXISTS next_check_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+
+ALTER TABLE monitors
+    ADD COLUMN IF NOT EXISTS check_claim_token UUID,
+    ADD COLUMN IF NOT EXISTS check_claimed_until TIMESTAMPTZ;
+
+DO $migration$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'monitors_check_claim_pair'
+          AND conrelid = 'public.monitors'::regclass
+    ) THEN
+        ALTER TABLE monitors
+            ADD CONSTRAINT monitors_check_claim_pair
+            CHECK (
+                (check_claim_token IS NULL) =
+                (check_claimed_until IS NULL)
+            );
+    END IF;
+END
+$migration$;
+
+CREATE INDEX IF NOT EXISTS idx_monitors_due
+    ON monitors (next_check_at, id)
+    WHERE is_active = true;
+        `);
+        await client.query(`
 CREATE TABLE IF NOT EXISTS status_pages (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
@@ -253,4 +283,5 @@ CREATE INDEX IF NOT EXISTS idx_api_test_runs_user_started
         await client.end();
     }
 };
+
 
