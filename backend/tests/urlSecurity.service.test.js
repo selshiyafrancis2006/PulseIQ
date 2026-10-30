@@ -1,8 +1,11 @@
 ﻿
 const {
     isPublicIp,
+    isPrivateIp,
     validatePublicHttpUrl,
-    validatePublicTcpTarget
+    validatePublicTcpTarget,
+    validateMonitorHttpUrl,
+    validateMonitorTcpTarget
 } = require('../src/services/urlSecurity.service');
 
 describe('urlSecurity.service', () => {
@@ -203,4 +206,153 @@ describe('urlSecurity.service', () => {
             );
         });
     });
+        describe('private target opt-in', () => {
+        const dns = require('node:dns').promises;
+        let originalPrivateTargets;
+
+        beforeEach(() => {
+            originalPrivateTargets = process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
+            process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = 'true';
+        });
+
+        afterEach(() => {
+            if (originalPrivateTargets === undefined) {
+                delete process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
+            } else {
+                process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = originalPrivateTargets;
+            }
+
+            jest.restoreAllMocks();
+        });
+
+        test.each([
+            '10.0.0.1',
+            '172.16.0.1',
+            '192.168.1.1',
+            'fc00::1'
+        ])('identifies %s as a private address', address => {
+            expect(isPrivateIp(address)).toBe(true);
+        });
+
+        test.each([
+            '8.8.8.8',
+            '127.0.0.1',
+            '169.254.169.254',
+            '::1',
+            'fe80::1',
+            '224.0.0.1'
+        ])('does not classify unsafe or public address %s as private', address => {
+            expect(isPrivateIp(address)).toBe(false);
+        });
+
+        test('allows an RFC1918 HTTP target when opt-in is enabled', async () => {
+            await expect(
+                validateMonitorHttpUrl('http://10.0.0.1')
+            ).resolves.toMatchObject({
+                hostname: '10.0.0.1'
+            });
+        });
+
+        test('allows an IPv6 ULA HTTP target when opt-in is enabled', async () => {
+            await expect(
+                validateMonitorHttpUrl('http://[fc00::1]')
+            ).resolves.toMatchObject({
+                hostname: 'fc00::1'
+            });
+        });
+
+        test('allows an RFC1918 TCP target when opt-in is enabled', async () => {
+            const result = await validateMonitorTcpTarget('10.0.0.1', 443);
+
+            expect(result.addresses).toEqual([{ address: '10.0.0.1' }]);
+        });
+
+        test('allows an IPv6 ULA TCP target when opt-in is enabled', async () => {
+            const result = await validateMonitorTcpTarget('fc00::1', 443);
+
+            expect(result.addresses).toEqual([{ address: 'fc00::1' }]);
+        });
+
+        test.each([
+            '127.0.0.1',
+            '169.254.169.254',
+            '224.0.0.1',
+            '::1',
+            'fe80::1'
+        ])('still rejects unsafe HTTP target %s when enabled', async address => {
+            const url = address.includes(':')
+                ? `http://[${address}]`
+                : `http://${address}`;
+
+            await expect(validateMonitorHttpUrl(url)).rejects.toThrow();
+        });
+
+        test.each([
+            '127.0.0.1',
+            '169.254.169.254',
+            '224.0.0.1',
+            '::1',
+            'fe80::1'
+        ])('still rejects unsafe TCP target %s when enabled', async address => {
+            await expect(
+                validateMonitorTcpTarget(address, 443)
+            ).rejects.toThrow();
+        });
+
+        test('public HTTP validator remains public-only when opt-in is enabled', async () => {
+            await expect(
+                validatePublicHttpUrl('http://10.0.0.1')
+            ).rejects.toThrow();
+        });
+
+        test('public TCP validator remains public-only when opt-in is enabled', async () => {
+            await expect(
+                validatePublicTcpTarget('10.0.0.1', 443)
+            ).rejects.toThrow();
+        });
+
+        test('allows .internal HTTP hostname only with opt-in', async () => {
+            jest.spyOn(dns, 'lookup').mockResolvedValue([
+                { address: '10.0.0.5', family: 4 }
+            ]);
+
+            await expect(
+                validateMonitorHttpUrl('http://api.internal')
+            ).resolves.toMatchObject({
+                hostname: 'api.internal'
+            });
+        });
+
+        test('allows .local TCP hostname only with opt-in', async () => {
+            jest.spyOn(dns, 'lookup').mockResolvedValue([
+                { address: '192.168.1.5', family: 4 }
+            ]);
+
+            const result = await validateMonitorTcpTarget('printer.local', 443);
+
+            expect(result.addresses).toEqual([
+                { address: '192.168.1.5', family: 4 }
+            ]);
+        });
+                test.each([undefined, 'false'])(
+            'rejects private HTTP and TCP targets when setting is %s',
+            async setting => {
+                if (setting === undefined) {
+                    delete process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
+                } else {
+                    process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = setting;
+                }
+
+                await expect(
+                    validateMonitorHttpUrl('http://10.0.0.1')
+                ).rejects.toThrow();
+
+                await expect(
+                    validateMonitorTcpTarget('10.0.0.1', 443)
+                ).rejects.toThrow();
+            }
+        );
+    });
+
+
 });

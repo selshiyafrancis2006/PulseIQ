@@ -1,6 +1,6 @@
-﻿const db = require('../config/db');
+const db = require('../config/db');
 const { calculateSlo } = require('../utils/slo');
-const { validatePublicTcpTarget } = require('../services/urlSecurity.service');
+const { validateMonitorTcpTarget } = require('../services/urlSecurity.service');
 const { validateDnsTarget } = require('../services/dnsCheck.service');
 
 // Same normalization used for host tags: trims, drops empties, de-dupes.
@@ -274,7 +274,7 @@ if (monitor_type === 'HTTP') {
         } else if (monitor_type === 'TCP') {
             let target;
             try {
-                target = await validatePublicTcpTarget(tcp_host, tcp_port);
+                target = await validateMonitorTcpTarget(tcp_host, tcp_port);
             } catch (error) {
                 return res.status(400).json({
                     message: error.message || 'Invalid TCP target'
@@ -448,6 +448,7 @@ const getMonitorStatus = async (req, res) => {
                 m.id,
                 m.name,
                 m.url,
+                m.monitor_type,
                 m.tags,
                 m.interval_seconds,
                 m.renotify_minutes,
@@ -1353,7 +1354,7 @@ if (type === 'HTTP') {
 
             let target;
             try {
-                target = await validatePublicTcpTarget(requestedHost, requestedPort);
+                target = await validateMonitorTcpTarget(requestedHost, requestedPort);
             } catch (error) {
                 return res.status(400).json({
                     message: error.message || 'Invalid TCP target'

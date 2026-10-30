@@ -801,4 +801,140 @@ test('owner can update failure_threshold and invalid values are rejected', async
         .send({ failure_threshold: 0 });
 
     expect(bad.status).toBe(400);
+});test('creates a heartbeat monitor and returns a one-time token', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'heartbeat-integration-test',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({
+        monitor_type: 'HEARTBEAT',
+        interval_seconds: 60
+    });
+    expect(response.body.heartbeat_token).toMatch(/^[a-f0-9]{64}$/);
+
+    const stored = await pool.query(
+        `SELECT token_hash
+         FROM heartbeat_monitor_secrets
+         WHERE monitor_id = $1`,
+        [response.body.id]
+    );
+
+    const crypto = require('crypto');
+    const expectedHash = crypto
+        .createHash('sha256')
+        .update(response.body.heartbeat_token)
+        .digest('hex');
+
+    expect(stored.rows).toHaveLength(1);
+    expect(stored.rows[0].token_hash.trim()).toBe(expectedHash);
+    expect(stored.rows[0].token_hash.trim())
+        .not.toBe(response.body.heartbeat_token);
+});
+
+test('accepts a heartbeat check-in and updates last_seen_at', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'heartbeat-checkin-integration-test',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+
+    expect(created.status).toBe(201);
+    expect(created.body.heartbeat_token).toMatch(/^[a-f0-9]{64}$/);
+
+    const checkin = await request(app)
+        .post(`/api/heartbeat/${created.body.id}`)
+        .set('x-heartbeat-token', created.body.heartbeat_token);
+
+    expect(checkin.status).toBe(202);
+
+    const stored = await pool.query(
+        `SELECT last_seen_at
+         FROM heartbeat_monitor_secrets
+         WHERE monitor_id = $1`,
+        [created.body.id]
+    );
+
+    expect(stored.rows).toHaveLength(1);
+    expect(stored.rows[0].last_seen_at).not.toBeNull();
+});
+
+
+test('heartbeat token rotation replaces the old token', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'heartbeat-rotation-test',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+
+    expect(created.status).toBe(201);
+    expect(created.body.heartbeat_token).toMatch(/^[a-f0-9]{64}$/);
+
+    const oldToken = created.body.heartbeat_token;
+
+    const rotated = await request(app)
+        .post(`/api/monitors/${created.body.id}/heartbeat-token`)
+        .set(authHeader(user.token));
+
+    expect(rotated.status).toBe(200);
+    expect(rotated.body.heartbeat_token).toMatch(/^[a-f0-9]{64}$/);
+    expect(rotated.body.heartbeat_token).not.toBe(oldToken);
+
+    const oldCheckIn = await request(app)
+        .post(`/api/heartbeat/${created.body.id}`)
+        .set('x-heartbeat-token', oldToken);
+
+    expect(oldCheckIn.status).toBe(401);
+
+    const newCheckIn = await request(app)
+        .post(`/api/heartbeat/${created.body.id}`)
+        .set('x-heartbeat-token', rotated.body.heartbeat_token);
+
+    expect(newCheckIn.status).toBe(202);
+});
+
+test('heartbeat token rotation cannot be performed by another user', async () => {
+    const owner = await createUser();
+    const otherUser = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(owner.token))
+        .send({
+            name: 'heartbeat-ownership-test',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+
+    expect(created.status).toBe(201);
+    const originalToken = created.body.heartbeat_token;
+
+    const attempt = await request(app)
+        .post(`/api/monitors/${created.body.id}/heartbeat-token`)
+        .set(authHeader(otherUser.token));
+
+    expect(attempt.status).toBe(404);
+
+    const checkIn = await request(app)
+        .post(`/api/heartbeat/${created.body.id}`)
+        .set('x-heartbeat-token', originalToken);
+
+    expect(checkIn.status).toBe(202);
 });

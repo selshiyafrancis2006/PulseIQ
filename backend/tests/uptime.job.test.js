@@ -50,9 +50,74 @@ describe('uptime scheduler', () => {
         );
     });
 
-    test('limits concurrent monitor checks to five', () => {
+  test('uses five concurrent checks by default', () => {
+    const original = process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+
+    try {
+        delete process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+        jest.resetModules();
+
+        const { MAX_CONCURRENT_MONITORS } =
+            require('../src/jobs/uptime.job');
+
         expect(MAX_CONCURRENT_MONITORS).toBe(5);
-    });
+    } finally {
+        if (original === undefined) {
+            delete process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+        } else {
+            process.env.UPTIME_MAX_CONCURRENT_MONITORS = original;
+        }
+
+        jest.resetModules();
+    }
+});
+
+test('uses a valid custom concurrency setting', () => {
+    const original = process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+
+    try {
+        process.env.UPTIME_MAX_CONCURRENT_MONITORS = '12';
+        jest.resetModules();
+
+        const { MAX_CONCURRENT_MONITORS } =
+            require('../src/jobs/uptime.job');
+
+        expect(MAX_CONCURRENT_MONITORS).toBe(12);
+    } finally {
+        if (original === undefined) {
+            delete process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+        } else {
+            process.env.UPTIME_MAX_CONCURRENT_MONITORS = original;
+        }
+
+        jest.resetModules();
+    }
+});
+
+test.each(['0', '51', '2.5', 'invalid'])(
+    'falls back to five for invalid concurrency setting: %s',
+    (value) => {
+        const original = process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+
+        try {
+            process.env.UPTIME_MAX_CONCURRENT_MONITORS = value;
+            jest.resetModules();
+
+            const { MAX_CONCURRENT_MONITORS } =
+                require('../src/jobs/uptime.job');
+
+            expect(MAX_CONCURRENT_MONITORS).toBe(5);
+        } finally {
+            if (original === undefined) {
+                delete process.env.UPTIME_MAX_CONCURRENT_MONITORS;
+            } else {
+                process.env.UPTIME_MAX_CONCURRENT_MONITORS = original;
+            }
+
+            jest.resetModules();
+        }
+    }
+);
 
     test('runs active monitors immediately and skips invalid intervals', async () => {
         db.query.mockResolvedValue({
@@ -80,33 +145,33 @@ describe('uptime scheduler', () => {
         }
     });
 
-    test('does not rerun a monitor before its interval elapses', async () => {
-        const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1000000);
+    test('checks monitors only when the database returns them as due', async () => {
+    const monitor = {
+        id: 10,
+        interval_seconds: 30,
+        is_active: true
+    };
 
-        try {
-            db.query.mockResolvedValue({
-                rows: [
-                    { id: 10, interval_seconds: 30, is_active: true }
-                ]
-            });
+    db.query
+        .mockResolvedValueOnce({ rows: [monitor] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [monitor] });
 
-            await scheduleDueMonitors();
-            expect(checkMonitor).toHaveBeenCalledTimes(1);
+    await scheduleDueMonitors();
+    expect(checkMonitor).toHaveBeenCalledTimes(1);
 
-            await scheduleDueMonitors();
-            expect(checkMonitor).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
 
-            nowSpy.mockReturnValue(1029999);
-            await scheduleDueMonitors();
-            expect(checkMonitor).toHaveBeenCalledTimes(1);
+    await scheduleDueMonitors();
+    expect(checkMonitor).toHaveBeenCalledTimes(1);
 
-            nowSpy.mockReturnValue(1030000);
-            await scheduleDueMonitors();
-            expect(checkMonitor).toHaveBeenCalledTimes(2);
-        } finally {
-            nowSpy.mockRestore();
-        }
-    });
+    await scheduleDueMonitors();
+    expect(checkMonitor).toHaveBeenCalledTimes(1);
+
+    await scheduleDueMonitors();
+    expect(checkMonitor).toHaveBeenCalledTimes(2);
+});
 
 
     test('limits active checks and schedules a waiting monitor when capacity frees', async () => {
@@ -141,5 +206,61 @@ describe('uptime scheduler', () => {
         expect(checkMonitor).toHaveBeenCalledTimes(6);
         expect(pendingChecks).toHaveLength(6);
     });
+
+    test('runs monitors with no previous check result immediately', async () => {
+    db.query.mockResolvedValue({
+        rows: [
+            { id: 20, interval_seconds: 30, last_checked_at: null }
+        ]
+    });
+
+    await scheduleDueMonitors();
+
+    expect(checkMonitor).toHaveBeenCalledTimes(1);
+    expect(checkMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 20 })
+    );
+});
+
+test('does not run monitors that are not yet due', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+
+    await scheduleDueMonitors();
+
+    expect(checkMonitor).not.toHaveBeenCalled();
+});
+
+test('runs overdue monitors returned by the database', async () => {
+    db.query.mockResolvedValue({
+        rows: [
+            {
+                id: 30,
+                interval_seconds: 30,
+                last_checked_at: new Date(Date.now() - 60000)
+            }
+        ]
+    });
+
+    await scheduleDueMonitors();
+
+    expect(checkMonitor).toHaveBeenCalledTimes(1);
+    expect(checkMonitor).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 30 })
+    );
+});
+
+test('queries only due active monitors using the latest persisted check', async () => {
+    db.query.mockResolvedValue({ rows: [] });
+
+    await scheduleDueMonitors();
+
+    const sql = db.query.mock.calls[0][0];
+
+    expect(sql).toMatch(/LEFT JOIN LATERAL/i);
+    expect(sql).toMatch(/monitor_results/i);
+    expect(sql).toMatch(/checked_at/i);
+    expect(sql).toMatch(/interval_seconds/i);
+    expect(sql).toMatch(/ORDER BY/i);
+});
 
 });

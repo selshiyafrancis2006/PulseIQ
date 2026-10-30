@@ -197,6 +197,7 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
             <option value="HTTP">HTTP / HTTPS</option>
             <option value="TCP">TCP port</option>
             <option value="DNS">DNS lookup</option>
+            <option value="HEARTBEAT">Heartbeat (push check-in)</option>
           </select>
           {monitor && (
             <p className="mt-1 text-xs text-gray-500">
@@ -205,7 +206,11 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
           )}
         </div>
 
-        {form.monitor_type === 'HTTP' ? (
+        {form.monitor_type === 'HEARTBEAT' ? (
+          <div className="rounded-lg border border-[#303030] bg-[#111] p-3 text-sm text-gray-300">
+            Create this monitor, then configure your service or scheduled job to send a check-in using its generated token. If a check-in is missed beyond the configured deadline, the monitor will go DOWN.
+          </div>
+        ) : form.monitor_type === 'HTTP' ? (
           <div>
             <label className={labelClass} htmlFor="monitor-url">URL</label>
             <input

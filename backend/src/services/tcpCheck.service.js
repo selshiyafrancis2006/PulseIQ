@@ -1,7 +1,7 @@
-﻿const net = require('node:net');
+const net = require('node:net');
 const { performance } = require('node:perf_hooks');
 const {
-    validatePublicTcpTarget
+    validateMonitorTcpTarget
 } = require('./urlSecurity.service');
 
 async function checkTcp(monitor, options = {}) {
@@ -18,7 +18,7 @@ async function checkTcp(monitor, options = {}) {
     const startedAt = performance.now();
 
     const validateTarget =
-        options.validateTarget ?? validatePublicTcpTarget;
+        options.validateTarget ?? validateMonitorTcpTarget;
 
     const target = await validateTarget(
         monitor.tcp_host,

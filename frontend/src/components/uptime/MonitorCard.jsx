@@ -1,23 +1,33 @@
-import { useEffect, useRef, useState } from 'react';
+﻿import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../utils/apiFetch';
 import { API_BASE_URL } from '../../config/api';
 import ResponseTimeChart from './ResponseTimeChart';
 import MonitorStatusBadge from './MonitorStatusBadge';
 import { Link } from 'react-router-dom';
-
 function MonitorCard({
+
   monitor,
   timeRange,
   onEdit,
   onTogglePause,
+  onRotateHeartbeatToken,
+  heartbeatRotationPopup,
+onDismissHeartbeatRotationPopup,
   onDelete,
   busy,
 }) {
+
+
   const cardRef = useRef(null);
   const [history, setHistory] = useState([]);
   const [uptime, setUptime] = useState(null);
   const [events, setEvents] = useState([]);
   const [now, setNow] = useState(() => Date.now());
+  const [rotationCopied, setRotationCopied] = useState(false);
+
+  useEffect(() => {
+  setRotationCopied(false);
+}, [heartbeatRotationPopup?.id, heartbeatRotationPopup?.token]);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -150,11 +160,88 @@ function MonitorCard({
           )}
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="relative flex flex-wrap items-center gap-2">
           <MonitorStatusBadge
             status={monitor.status}
             responseTime={monitor.response_time_ms}
           />
+
+                    {monitor.monitor_type === 'HEARTBEAT' && (
+            <button
+              type="button"
+              onClick={() => onRotateHeartbeatToken(monitor)}
+              disabled={busy}
+              className="rounded-md border border-amber-800 px-3 py-1.5 text-sm text-amber-300 hover:bg-[#252525] disabled:opacity-50"
+            >
+              Rotate token
+            </button>
+          )}
+
+          
+{heartbeatRotationPopup?.id === monitor.id && (
+  <div
+    role="dialog"
+    aria-label="Heartbeat token rotated"
+    className="absolute right-0 top-full z-50 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-lg border border-emerald-800 bg-[#101510] p-3 shadow-xl"
+  >
+    <div className="flex items-start justify-between gap-3">
+      <div>
+        <p className="text-sm font-medium text-emerald-300">
+          Heartbeat token rotated successfully
+        </p>
+        <p className="mt-1 text-xs text-gray-400">
+          Update your heartbeat service with this new token.
+          Save it now; it cannot be retrieved again.
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={onDismissHeartbeatRotationPopup}
+        aria-label="Dismiss token popup"
+        className="rounded px-2 text-lg text-gray-400 hover:bg-white/10 hover:text-white"
+      >
+        ×
+      </button>
+    </div>
+
+    <div className="mt-3 flex gap-2">
+      <input
+        readOnly
+        value={heartbeatRotationPopup.token}
+        aria-label="New heartbeat token"
+        className="min-w-0 flex-1 rounded-md border border-gray-700 bg-black/40 px-2 py-2 text-xs text-gray-200"
+      />
+
+      <button
+        type="button"
+        onClick={async () => {
+          try {
+            await navigator.clipboard.writeText(
+              heartbeatRotationPopup.token
+            );
+            setRotationCopied(true);
+setTimeout(() => {
+  setRotationCopied(false);
+}, 3000);
+          } catch {
+            setRotationCopied(false);
+          }
+        }}
+        className="rounded-md bg-emerald-700 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-600"
+      >
+        Copy token
+      </button>
+    </div>
+
+    {rotationCopied && (
+      <p className="mt-2 text-xs text-emerald-300" role="status">
+        Token copied to clipboard.
+      </p>
+    )}
+  </div>
+)}
+
 
           <button
             type="button"

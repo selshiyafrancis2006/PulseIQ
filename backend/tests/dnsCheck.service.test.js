@@ -26,6 +26,28 @@ describe('validateDnsTarget', () => {
         expect(() => validateDnsTarget(hostname, 'A')).toThrow();
     });
 
+        test('continues rejecting internal hostnames when private monitor targets are enabled', () => {
+        const originalSetting = process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
+
+        process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = 'true';
+
+        try {
+            expect(() => validateDnsTarget('server.local', 'A')).toThrow(
+                'DNS monitor requires a valid public hostname'
+            );
+
+            expect(() => validateDnsTarget('server.internal', 'A')).toThrow(
+                'DNS monitor requires a valid public hostname'
+            );
+        } finally {
+            if (originalSetting === undefined) {
+                delete process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS;
+            } else {
+                process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS = originalSetting;
+            }
+        }
+    });
+
     test('rejects a missing hostname', () => {
         expect(() => validateDnsTarget(undefined, 'A'))
             .toThrow('DNS monitor hostname is required');

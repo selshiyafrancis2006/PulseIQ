@@ -7,6 +7,9 @@ function MonitorList({
   timeRange,
   onEdit,
   onTogglePause,
+  onRotateHeartbeatToken,
+  heartbeatRotationPopup,
+onDismissHeartbeatRotationPopup,
   busyMonitorId,
   onDelete,
 
@@ -83,6 +86,9 @@ function MonitorList({
   timeRange={timeRange}
               onEdit={onEdit}
               onTogglePause={onTogglePause}
+              onRotateHeartbeatToken={onRotateHeartbeatToken}
+              heartbeatRotationPopup={heartbeatRotationPopup}
+onDismissHeartbeatRotationPopup={onDismissHeartbeatRotationPopup}
               onDelete={onDelete}
               onConfirmDelete={onConfirmDelete}
               deleteTarget={deleteTarget}

@@ -17,6 +17,9 @@ function Uptime() {
   const [busyMonitorId, setBusyMonitorId] = useState(null);
   const [pageError, setPageError] = useState('');
   const [notice, setNotice] = useState('');
+  const [heartbeatSetup, setHeartbeatSetup] = useState(null);
+  const [heartbeatCopied, setHeartbeatCopied] = useState(false);
+  const [heartbeatRotationPopup, setHeartbeatRotationPopup] = useState(null);
   const formRef = useRef(null);
   const noticeRef = useRef(null);
 
@@ -99,9 +102,25 @@ function Uptime() {
         );
       }
 
+      if (
+        !isEditing &&
+        payload.monitor_type === 'HEARTBEAT' &&
+        data.heartbeat_token &&
+        data.id != null
+      ) {
+        setHeartbeatSetup({
+          id: data.id,
+          name: data.name || payload.name,
+          token: data.heartbeat_token,
+        });
+        setHeartbeatCopied(false);
+        setNotice('Heartbeat monitor created. Copy its token from the setup panel below.');
+      } else {
+        setNotice(isEditing ? 'Monitor updated successfully.' : 'Monitor created successfully.');
+      }
+
       setShowForm(false);
       setEditingMonitor(null);
-      setNotice(isEditing ? 'Monitor updated successfully.' : 'Monitor created successfully.');
       await fetchMonitors(true);
       requestAnimationFrame(() => document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' }));
     } catch (error) {
@@ -140,6 +159,46 @@ function Uptime() {
       setBusyMonitorId(null);
     }
   };
+
+  
+  const handleRotateHeartbeatToken = async (monitor) => {
+    if (monitor.monitor_type !== 'HEARTBEAT') return;
+
+    setBusyMonitorId(monitor.id);
+    setPageError('');
+    setNotice('');
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/monitors/${monitor.id}/heartbeat-token`,
+        { method: 'POST' }
+      );
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data.heartbeat_token) {
+        throw new Error(data.error || 'Failed to rotate heartbeat token.');
+      }
+
+      setHeartbeatSetup({
+        id: monitor.id,
+        name: monitor.name,
+        token: data.heartbeat_token,
+      });
+      setHeartbeatCopied(false);
+      setNotice('');
+setHeartbeatRotationPopup({
+  id: monitor.id,
+  name: monitor.name,
+  token: data.heartbeat_token,
+});
+    } catch (error) {
+      setPageError(error.message || 'Failed to rotate heartbeat token.');
+    } finally {
+      setBusyMonitorId(null);
+    }
+  };
+
 
   const handleDelete = async (monitor) => {
     const target = monitor || deleteTarget;
@@ -245,6 +304,69 @@ function Uptime() {
         </div>
       )}
 
+      {heartbeatSetup && (
+        <section
+          aria-labelledby="heartbeat-setup-title"
+          className="mb-6 rounded-lg border border-emerald-900 bg-emerald-950/20 p-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 id="heartbeat-setup-title" className="font-semibold text-emerald-300">
+                Heartbeat monitor setup
+              </h2>
+              <p className="mt-1 text-sm text-gray-300">
+                {heartbeatSetup.name} — save this token now. It cannot be retrieved again after you leave this page.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setHeartbeatSetup(null);
+                setHeartbeatCopied(false);
+              }}
+              className="rounded-md border border-[#3a3a3a] px-3 py-1.5 text-sm text-gray-300 hover:bg-[#252525]"
+            >
+              Dismiss
+            </button>
+          </div>
+
+          <label htmlFor="heartbeat-token" className="mt-4 block text-sm text-gray-300">
+            One-time heartbeat token
+          </label>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <input
+              id="heartbeat-token"
+              type="text"
+              readOnly
+              value={heartbeatSetup.token}
+              className="min-w-0 flex-1 rounded-md border border-[#3a3a3a] bg-[#0b0b0b] px-3 py-2 font-mono text-sm text-white"
+            />
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(heartbeatSetup.token);
+                  setHeartbeatCopied(true);
+                } catch {
+                  setPageError('Clipboard access failed. Select and copy the token manually.');
+                }
+              }}
+              className="rounded-md border border-emerald-800 px-4 py-2 text-sm text-emerald-300 hover:bg-emerald-950/50"
+            >
+              {heartbeatCopied ? 'Copied' : 'Copy token'}
+            </button>
+          </div>
+
+          <p className="mt-4 text-sm text-gray-300">
+            Send a POST request to <code>/api/heartbeat/{heartbeatSetup.id}</code> with the
+            header <code>x-heartbeat-token: YOUR_TOKEN</code> each time your job or service checks in.
+          </p>
+          <p className="mt-2 text-xs text-gray-400">
+            Keep the token in your service's secret configuration, not in source control or public logs.
+          </p>
+        </section>
+      )}
+
       {showForm && (
         <div ref={formRef}>
           <MonitorForm
@@ -325,6 +447,9 @@ function Uptime() {
   timeRange={timeRange}
         onEdit={handleEdit}
         onTogglePause={handleTogglePause}
+        onRotateHeartbeatToken={handleRotateHeartbeatToken}
+        heartbeatRotationPopup={heartbeatRotationPopup}
+onDismissHeartbeatRotationPopup={() => setHeartbeatRotationPopup(null)}
         onDelete={(monitor) => {
           requestAnimationFrame(() => document.querySelector('main')?.scrollTo({ top: 0, behavior: 'smooth' }));
           setPageError('');

@@ -1,4 +1,5 @@
-const express = require('express');
+﻿const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 
 const db = require('../config/db');
@@ -74,4 +75,46 @@ router.delete('/:id', deleteMonitor);
 router.patch('/:id/pause', pauseMonitor);
 router.patch('/:id/resume', resumeMonitor);
 
+
+router.post('/:id/heartbeat-token', async (req, res) => {
+    const monitorId = Number(req.params.id);
+
+    if (!Number.isSafeInteger(monitorId) || monitorId <= 0) {
+        return res.status(400).json({ error: 'Invalid monitor ID' });
+    }
+
+    try {
+        const token = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+        const result = await db.query(
+            `UPDATE heartbeat_monitor_secrets s
+             SET token_hash = $1
+             FROM monitors m
+             WHERE s.monitor_id = m.id
+               AND m.id = $2
+               AND m.user_id = $3
+               AND m.monitor_type = 'HEARTBEAT'
+             RETURNING s.monitor_id`,
+            [tokenHash, monitorId, req.user.id]
+        );
+
+        if (result.rows.length === 0) {
+            return res.status(404).json({
+                error: 'Heartbeat monitor not found'
+            });
+        }
+
+        return res.json({
+            monitor_id: monitorId,
+            heartbeat_token: token
+        });
+    } catch (error) {
+        console.error('Heartbeat token rotation failed:', error);
+        return res.status(500).json({
+            error: 'Failed to rotate heartbeat token'
+        });
+    }
+});
 module.exports = router;
+

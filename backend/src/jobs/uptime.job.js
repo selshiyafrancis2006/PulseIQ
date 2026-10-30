@@ -4,7 +4,20 @@ const db = require('../config/db');
 const { checkMonitor } = require('../services/uptime.service');
 const { checkHostStatus } = require('../services/hostStatus.service');
 
-const MAX_CONCURRENT_MONITORS = 5;
+const DEFAULT_MAX_CONCURRENT_MONITORS = 5;
+const MIN_MAX_CONCURRENT_MONITORS = 1;
+const MAX_ALLOWED_CONCURRENT_MONITORS = 50;
+
+const configuredConcurrency = Number(
+    process.env.UPTIME_MAX_CONCURRENT_MONITORS
+);
+
+const MAX_CONCURRENT_MONITORS =
+    Number.isInteger(configuredConcurrency) &&
+    configuredConcurrency >= MIN_MAX_CONCURRENT_MONITORS &&
+    configuredConcurrency <= MAX_ALLOWED_CONCURRENT_MONITORS
+        ? configuredConcurrency
+        : DEFAULT_MAX_CONCURRENT_MONITORS;
 
 // Host status: every 10 seconds. Keep this job independent of monitor checks.
 let hostCheckRunning = false;
@@ -23,7 +36,6 @@ cron.schedule('*/10 * * * * *', async () => {
 });
 
 // Per-monitor scheduling state.
-const nextRunAt = new Map();
 const inFlight = new Set();
 let activeChecks = 0;
 let schedulerRunning = false;
@@ -34,14 +46,26 @@ async function scheduleDueMonitors() {
     schedulerRunning = true;
 
     try {
-        const result = await db.query(`
-            SELECT *
-            FROM monitors
-            WHERE is_active = true
-        `);
-
-        const now = Date.now();
-        const activeIds = new Set(result.rows.map((monitor) => monitor.id));
+       const result = await db.query(`
+    SELECT
+        m.*,
+        latest.checked_at AS last_checked_at
+    FROM monitors m
+    LEFT JOIN LATERAL (
+        SELECT checked_at
+        FROM monitor_results
+        WHERE monitor_id = m.id
+        ORDER BY checked_at DESC
+        LIMIT 1
+    ) latest ON true
+    WHERE m.is_active = true
+      AND (
+          latest.checked_at IS NULL
+          OR latest.checked_at <=
+              NOW() - (m.interval_seconds * INTERVAL '1 second')
+      )
+    ORDER BY latest.checked_at ASC NULLS FIRST, m.id ASC
+`);
 
         for (const monitor of result.rows) {
             const monitorId = monitor.id;
@@ -58,23 +82,16 @@ async function scheduleDueMonitors() {
                 continue;
             }
 
-            // Run newly discovered monitors immediately.
-            if (!nextRunAt.has(monitorId)) {
-                nextRunAt.set(monitorId, now);
-            }
-
             if (
-                now < nextRunAt.get(monitorId) ||
-                inFlight.has(monitorId) ||
-                activeChecks >= MAX_CONCURRENT_MONITORS
-            ) {
-                continue;
-            }
+    inFlight.has(monitorId) ||
+    activeChecks >= MAX_CONCURRENT_MONITORS
+) {
+    continue;
+}
 
             // Reserve this monitor before starting asynchronous work.
             inFlight.add(monitorId);
             activeChecks += 1;
-            nextRunAt.set(monitorId, now + intervalSeconds * 1000);
 
             void checkMonitor(monitor)
                 .catch((error) => {
@@ -87,13 +104,6 @@ async function scheduleDueMonitors() {
                     inFlight.delete(monitorId);
                     activeChecks -= 1;
                 });
-        }
-
-        // Remove scheduler state for deleted or inactive monitors.
-        for (const monitorId of nextRunAt.keys()) {
-            if (!activeIds.has(monitorId) && !inFlight.has(monitorId)) {
-                nextRunAt.delete(monitorId);
-            }
         }
     } catch (error) {
         console.error('Uptime scheduler error:', error);

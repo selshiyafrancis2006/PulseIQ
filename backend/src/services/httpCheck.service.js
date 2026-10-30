@@ -1,7 +1,7 @@
 const axios = require('axios');
 const http = require('node:http');
 const https = require('node:https');
-const { validatePublicHttpUrl } = require('./urlSecurity.service');
+const { validateMonitorHttpUrl } = require('./urlSecurity.service');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MAX_TIMEOUT_MS = 30_000;
@@ -116,7 +116,7 @@ const agent = new Agent({
 
 async function checkHttp(monitor, options = {}) {
     const validateUrl =
-        options.validateUrl || validatePublicHttpUrl;
+        options.validateUrl || validateMonitorHttpUrl;
 
     const startedAt = Date.now();
     const timeoutMs = Number(monitor.timeout_ms) || DEFAULT_TIMEOUT_MS;

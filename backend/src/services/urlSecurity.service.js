@@ -74,7 +74,55 @@ function isPublicIp(address) {
     }
 }
 
-async function validatePublicHttpUrl(input) {
+function isPrivateIp(address) {
+    if (!net.isIP(address)) return false;
+
+    try {
+        const parsed = ipaddr.parse(address);
+
+        if (
+            parsed.kind() === 'ipv6' &&
+            parsed.isIPv4MappedAddress()
+        ) {
+            return isPrivateIp(parsed.toIPv4Address().toString());
+        }
+
+        if (parsed.kind() === 'ipv6') {
+            const bytes = parsed.toByteArray();
+
+            if (
+                NAT64_PREFIX.every(
+                    (byte, index) => bytes[index] === byte
+                )
+            ) {
+                return isPrivateIp(bytes.slice(12).join('.'));
+            }
+
+            return parsed.match(ipaddr.parse('fc00::'), 7);
+        }
+
+        return [
+            ['10.0.0.0', 8],
+            ['172.16.0.0', 12],
+            ['192.168.0.0', 16]
+        ].some(([base, prefix]) =>
+            parsed.match(ipaddr.parse(base), prefix)
+        );
+    } catch {
+        return false;
+    }
+}
+
+function isAllowedMonitorIp(address, allowPrivateTargets) {
+    return isPublicIp(address) ||
+        (allowPrivateTargets && isPrivateIp(address));
+}
+
+function privateTargetsEnabled() {
+    return process.env.PULSEIQ_ALLOW_PRIVATE_TARGETS === 'true';
+}
+
+async function validateHttpUrl(input, allowPrivateTargets = false) {
     let url;
 
     try {
@@ -98,7 +146,10 @@ async function validatePublicHttpUrl(input) {
     if (
         !hostname ||
         hostname === 'localhost' ||
-        BLOCKED_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix)) ||
+        BLOCKED_HOST_SUFFIXES.some(suffix =>
+    hostname.endsWith(suffix) &&
+    !(allowPrivateTargets && ['.local', '.internal'].includes(suffix))
+) ||
         hostname.includes('%')
     ) {
         throw new Error('Monitor hostname is not allowed');
@@ -126,7 +177,9 @@ async function validatePublicHttpUrl(input) {
 
     if (
         addresses.length === 0 ||
-        addresses.some(({ address }) => !isPublicIp(address))
+      addresses.some(({ address }) =>
+    !isAllowedMonitorIp(address, allowPrivateTargets)
+)
     ) {
         throw new Error(
             'Monitor URL resolves to a non-public IP address'
@@ -164,7 +217,11 @@ function isValidDnsLabel(label) {
     return true;
 }
 
-async function validatePublicTcpTarget(inputHost, inputPort) {
+async function validateTcpTarget(
+    inputHost,
+    inputPort,
+    allowPrivateTargets = false
+) {
     if (
         typeof inputHost !== 'string' ||
         inputHost.length === 0 ||
@@ -205,7 +262,13 @@ async function validatePublicTcpTarget(inputHost, inputPort) {
         !hostname ||
         hostname.includes('%') ||
         hostname === 'localhost' ||
-        BLOCKED_HOST_SUFFIXES.some(suffix => hostname.endsWith(suffix))
+        BLOCKED_HOST_SUFFIXES.some(suffix =>
+    hostname.endsWith(suffix) &&
+    !(
+        allowPrivateTargets &&
+        (suffix === '.local' || suffix === '.internal')
+    )
+)
     ) {
         throw new Error('TCP monitor hostname is not allowed');
     }
@@ -243,7 +306,7 @@ async function validatePublicTcpTarget(inputHost, inputPort) {
 
     if (
         !addresses.length ||
-        addresses.some(({ address }) => !isPublicIp(address))
+        addresses.some(({ address }) => !isAllowedMonitorIp(address, allowPrivateTargets))
     ) {
         throw new Error(
             'TCP monitor hostname resolves to a non-public IP address'
@@ -253,8 +316,31 @@ async function validatePublicTcpTarget(inputHost, inputPort) {
     return { hostname, port: inputPort, addresses, dnsTimeMs };
 }
 
+async function validatePublicHttpUrl(input) {
+    return validateHttpUrl(input, false);
+}
+
+async function validateMonitorHttpUrl(input) {
+    return validateHttpUrl(input, privateTargetsEnabled());
+}
+
+async function validatePublicTcpTarget(inputHost, inputPort) {
+    return validateTcpTarget(inputHost, inputPort, false);
+}
+
+async function validateMonitorTcpTarget(inputHost, inputPort) {
+    return validateTcpTarget(
+        inputHost,
+        inputPort,
+        privateTargetsEnabled()
+    );
+}
+
 module.exports = {
     validatePublicHttpUrl,
     validatePublicTcpTarget,
-    isPublicIp
+    validateMonitorHttpUrl,
+    validateMonitorTcpTarget,
+    isPublicIp,
+    isPrivateIp
 };
