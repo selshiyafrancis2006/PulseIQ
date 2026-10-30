@@ -131,10 +131,23 @@ async function getPublicPage(req, res) {
                 m.id AS monitor_id,
                 m.name AS monitor_name,
                 CASE
-                    WHEN mr.status IS NULL THEN NULL
+                    WHEN mr.status IS NULL OR mr.checked_at <
+                        NOW() - (
+                            GREATEST(60, COALESCE(m.interval_seconds, 30) * 2)
+                            * INTERVAL '1 second'
+                        )
+                    THEN NULL
                     ELSE COALESCE(mcs.confirmed_status, mr.status)
                 END AS status,
-                mr.response_time_ms,
+                CASE
+                    WHEN mr.checked_at >=
+                        NOW() - (
+                            GREATEST(60, COALESCE(m.interval_seconds, 30) * 2)
+                            * INTERVAL '1 second'
+                        )
+                    THEN mr.response_time_ms
+                    ELSE NULL
+                END AS response_time_ms,
                 mr.checked_at
              FROM status_pages sp
              LEFT JOIN status_page_monitors spm ON spm.status_page_id = sp.id

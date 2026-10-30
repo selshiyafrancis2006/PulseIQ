@@ -26,6 +26,18 @@ async function createHost(userId, name) {
     return rows[0].id;
 }
 
+async function createHeartbeatMonitor(authToken) {
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(authToken))
+        .send({
+            name: 'heartbeat-location-test',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+    expect(response.status).toBe(201);
+    return response.body.id;
+}
 beforeEach(async () => {
     await resetDb();
 
@@ -174,7 +186,7 @@ test('returns assigned locations and latest result', async () => {
     });
 });
 
-test('does not expose another user’s monitor locations', async () => {
+test('does not expose another user's monitor locations', async () => {
     const response = await request(app)
         .get(`/api/monitors/${monitorId}/locations`)
         .set(authHeader(otherUserToken));
@@ -245,4 +257,62 @@ test('agent receives only its assigned active monitors', async () => {
     });
     expect(response.body.monitors.map(monitor => monitor.id))
         .not.toContain(inactiveMonitor.body.id);
+});
+
+test('rejects assigning hosts to a heartbeat monitor', async () => {
+    const heartbeatMonitorId = await createHeartbeatMonitor(token);
+
+    const response = await request(app)
+        .put(`/api/monitors/${heartbeatMonitorId}/locations`)
+        .set(authHeader(token))
+        .send({
+            host_ids: [hostA],
+            quorum: 1
+        });
+
+    expect(response.status).toBe(400);
+    expect(response.body.message)
+        .toBe('Heartbeat monitors cannot use agent locations');
+
+    const saved = await pool.query(
+        `SELECT host_id FROM monitor_locations
+         WHERE monitor_id = $1`,
+        [heartbeatMonitorId]
+    );
+
+    expect(saved.rows).toHaveLength(0);
+});
+
+test('preserves existing assignments when heartbeat assignment is rejected', async () => {
+    await request(app)
+        .put(`/api/monitors/${monitorId}/locations`)
+        .set(authHeader(token))
+        .send({
+            host_ids: [hostA],
+            quorum: 1
+        });
+
+    await pool.query(
+        `UPDATE monitors SET monitor_type = 'HEARTBEAT'
+         WHERE id = $1`,
+        [monitorId]
+    );
+
+    const response = await request(app)
+        .put(`/api/monitors/${monitorId}/locations`)
+        .set(authHeader(token))
+        .send({
+            host_ids: [hostB],
+            quorum: 1
+        });
+
+    expect(response.status).toBe(400);
+
+    const saved = await pool.query(
+        `SELECT host_id FROM monitor_locations
+         WHERE monitor_id = $1`,
+        [monitorId]
+    );
+
+    expect(saved.rows.map(row => row.host_id)).toEqual([hostA]);
 });

@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../utils/apiFetch';
 import { API_BASE_URL } from '../../config/api';
 import ResponseTimeChart from './ResponseTimeChart';
@@ -23,11 +23,7 @@ onDismissHeartbeatRotationPopup,
   const [uptime, setUptime] = useState(null);
   const [events, setEvents] = useState([]);
   const [now, setNow] = useState(() => Date.now());
-  const [rotationCopied, setRotationCopied] = useState(false);
-
-  useEffect(() => {
-  setRotationCopied(false);
-}, [heartbeatRotationPopup?.id, heartbeatRotationPopup?.token]);
+  const [copiedToken, setCopiedToken] = useState(null);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -201,7 +197,7 @@ onDismissHeartbeatRotationPopup,
         aria-label="Dismiss token popup"
         className="rounded px-2 text-lg text-gray-400 hover:bg-white/10 hover:text-white"
       >
-        ×
+        x
       </button>
     </div>
 
@@ -217,15 +213,16 @@ onDismissHeartbeatRotationPopup,
         type="button"
         onClick={async () => {
           try {
-            await navigator.clipboard.writeText(
-              heartbeatRotationPopup.token
-            );
-            setRotationCopied(true);
-setTimeout(() => {
-  setRotationCopied(false);
-}, 3000);
+            const tokenToCopy = heartbeatRotationPopup.token;
+            await navigator.clipboard.writeText(tokenToCopy);
+            setCopiedToken(tokenToCopy);
+            setTimeout(() => {
+              setCopiedToken((current) =>
+                current === tokenToCopy ? null : current
+              );
+            }, 3000);
           } catch {
-            setRotationCopied(false);
+            setCopiedToken(null);
           }
         }}
         className="rounded-md bg-emerald-700 px-3 py-2 text-xs font-medium text-white hover:bg-emerald-600"
@@ -234,7 +231,7 @@ setTimeout(() => {
       </button>
     </div>
 
-    {rotationCopied && (
+    {copiedToken === heartbeatRotationPopup.token && (
       <p className="mt-2 text-xs text-emerald-300" role="status">
         Token copied to clipboard.
       </p>

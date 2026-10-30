@@ -1,4 +1,4 @@
-﻿const {
+const {
     app,
     pool,
     request,
@@ -92,7 +92,7 @@ test('publishes a page containing only the selected owned monitors', async () =>
     expect(publicPage.body.monitors.some(m => m.id === otherMonitor)).toBe(false);
 });
 
-test('rejects attempts to publish another user’s monitor', async () => {
+test('rejects attempts to publish another user's monitor', async () => {
     const saved = await request(app)
         .put('/api/status-pages')
         .set(authHeader(owner.token))
@@ -138,4 +138,53 @@ test('returns the saved page configuration to its owner only', async () => {
 
     expect(otherConfig.status).toBe(200);
     expect(otherConfig.body.page).toBeNull();
+});
+
+test('treats stale monitor results as UNKNOWN on public status pages', async () => {
+    const saved = await request(app)
+        .put('/api/status-pages')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Stale result test',
+            is_public: true,
+            monitor_ids: [ownedMonitor]
+        });
+
+    expect(saved.status).toBe(200);
+
+    const original = await pool.query(
+        `SELECT checked_at FROM monitor_results
+         WHERE monitor_id = $1 ORDER BY checked_at DESC LIMIT 1`,
+        [ownedMonitor]
+    );
+
+    const originalCheckedAt = original.rows[0].checked_at;
+
+    try {
+        await pool.query(
+            `UPDATE monitor_results
+             SET checked_at = NOW() - INTERVAL '5 minutes'
+             WHERE monitor_id = $1`,
+            [ownedMonitor]
+        );
+
+        const publicPage = await request(app)
+            .get(`/api/public/status/${saved.body.page.slug}`);
+
+        expect(publicPage.status).toBe(200);
+        expect(publicPage.body.overall_status).toBe('UNKNOWN');
+        expect(publicPage.body.monitors).toHaveLength(1);
+        expect(publicPage.body.monitors[0]).toMatchObject({
+            id: ownedMonitor,
+            status: 'UNKNOWN',
+            response_time_ms: null
+        });
+        expect(publicPage.body.monitors[0].checked_at).not.toBeNull();
+    } finally {
+        await pool.query(
+            `UPDATE monitor_results SET checked_at = $1
+             WHERE monitor_id = $2`,
+            [originalCheckedAt, ownedMonitor]
+        );
+    }
 });

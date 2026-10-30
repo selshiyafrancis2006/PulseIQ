@@ -2,6 +2,7 @@ const db = require('../config/db');
 const { calculateSlo } = require('../utils/slo');
 const { validateMonitorTcpTarget } = require('../services/urlSecurity.service');
 const { validateDnsTarget } = require('../services/dnsCheck.service');
+const { OFFLINE_THRESHOLD_SECONDS } = require('../utils/hostStatus');
 
 // Same normalization used for host tags: trims, drops empties, de-dupes.
 // Validate and normalize monitor tags.
@@ -1498,7 +1499,7 @@ const getMonitorLocations = async (req, res) => {
         }
 
         const monitor = await db.query(
-            'SELECT id FROM monitors WHERE id = $1 AND user_id = $2',
+            'SELECT id, interval_seconds FROM monitors WHERE id = $1 AND user_id = $2',
             [id, req.user.id]
         );
 
@@ -1511,9 +1512,21 @@ const getMonitorLocations = async (req, res) => {
                 h.id AS host_id,
                 h.name AS host_name,
                 h.last_seen_at,
+                CASE
+                    WHEN h.last_seen_at IS NULL THEN 'pending'
+                    WHEN h.last_seen_at < NOW() -
+                        ($2::int * INTERVAL '1 second') THEN 'offline'
+                    ELSE 'online'
+                END AS agent_status,
                 ml.created_at AS assigned_at,
                 latest.status AS last_status,
-                latest.checked_at AS last_checked_at
+                latest.checked_at AS last_checked_at,
+                COALESCE(
+                    latest.checked_at >= NOW() - (
+                        GREATEST(60, $3::int * 2) * INTERVAL '1 second'
+                    ),
+                    FALSE
+                ) AS result_is_fresh
              FROM monitor_locations ml
              JOIN hosts h ON h.id = ml.host_id
              LEFT JOIN LATERAL (
@@ -1526,7 +1539,7 @@ const getMonitorLocations = async (req, res) => {
              ) latest ON true
              WHERE ml.monitor_id = $1
              ORDER BY h.name`,
-            [id]
+            [id, OFFLINE_THRESHOLD_SECONDS, monitor.rows[0].interval_seconds]
         );
 
         const quorum = await db.query(
@@ -1582,13 +1595,24 @@ const updateMonitorLocations = async (req, res) => {
         await client.query('BEGIN');
 
         const monitor = await client.query(
-            'SELECT id FROM monitors WHERE id = $1 AND user_id = $2 FOR UPDATE',
+            `SELECT id, monitor_type
+             FROM monitors
+             WHERE id = $1 AND user_id = $2
+             FOR UPDATE`,
             [id, req.user.id]
         );
 
         if (!monitor.rows.length) {
             await client.query('ROLLBACK');
             return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        // A heartbeat monitor has no target to probe, so agents cannot check it.
+        if (monitor.rows[0].monitor_type === 'HEARTBEAT' && host_ids.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                message: 'Heartbeat monitors cannot use agent locations'
+            });
         }
 
         if (host_ids.length) {

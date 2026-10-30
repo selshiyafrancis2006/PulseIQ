@@ -99,6 +99,7 @@ router.get('/monitors', authenticateAgent, async (req, res) => {
               AND h.user_id = m.user_id
              WHERE ml.host_id = $1
                AND m.is_active = true
+               AND m.monitor_type <> 'HEARTBEAT'
              ORDER BY m.id`,
             [req.agentHost.id]
         );

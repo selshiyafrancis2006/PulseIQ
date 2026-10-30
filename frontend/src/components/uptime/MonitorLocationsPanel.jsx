@@ -248,15 +248,25 @@ export default function MonitorLocationsPanel({ monitorId }) {
                           {location.host_name || `Host ${location.host_id}`}
                         </span>
                         <span className="text-xs text-gray-400">
-                          Latest result:{' '}
+                          {location.agent_status === 'offline' || location.agent_status === 'pending' ? 'Agent status: ' : 'Latest result: '}
                           <span className={
-                            location.last_status === 'UP'
-                              ? 'text-emerald-400'
-                              : location.last_status === 'DOWN'
-                                ? 'text-red-400'
-                                : 'text-gray-500'
+                            location.agent_status === 'offline' || (location.agent_status === 'online' && location.result_is_fresh && location.last_status === 'DOWN')
+                              ? 'text-red-400'
+                              : location.agent_status === 'pending' || (location.agent_status === 'online' && !location.last_status)
+                                ? 'text-gray-500'
+                                : location.agent_status === 'online' && !location.result_is_fresh
+                                  ? 'text-amber-400'
+                                  : 'text-emerald-400'
                           }>
-                            {location.last_status || 'No result'}
+                            {location.agent_status === 'offline'
+                              ? 'Agent offline'
+                              : location.agent_status === 'pending'
+                                ? 'Awaiting heartbeat'
+                                : !location.last_status
+                                  ? 'No result'
+                                  : !location.result_is_fresh
+                                    ? 'Stale - not counted'
+                                    : location.last_status}
                           </span>
                         </span>
                       </div>

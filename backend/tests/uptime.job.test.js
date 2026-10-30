@@ -1,4 +1,4 @@
-const CLAIM_TOKEN_1 = '11111111-1111-4111-8111-111111111111';
+﻿const CLAIM_TOKEN_1 = '11111111-1111-4111-8111-111111111111';
 const CLAIM_TOKEN_2 = '22222222-2222-4222-8222-222222222222';
 const CLAIM_TOKEN_3 = '33333333-3333-4333-8333-333333333333';
 const CLAIM_TOKEN_4 = '44444444-4444-4444-8444-444444444444';
@@ -259,16 +259,26 @@ describe('uptime scheduler', () => {
         );
 
         pendingChecks[0]({});
-        await Promise.resolve();
-        await Promise.resolve();
+
+        // The slot is only freed after the claim has been released, so wait
+        // for that async chain to finish rather than a fixed number of ticks.
+        await new Promise((resolve) => setImmediate(resolve));
 
         await scheduleDueMonitors();
 
         expect(checkMonitor).toHaveBeenCalledTimes(6);
         expect(pendingChecks).toHaveLength(6);
+
+        // Call 2 is the finished monitor releasing its claim; call 3 claims
+        // exactly one new monitor for the single free slot.
         expect(db.query).toHaveBeenNthCalledWith(
             2,
-            expect.any(String),
+            expect.stringMatching(/check_claim_token\s*=\s*NULL/i),
+            [1, CLAIM_TOKEN_1]
+        );
+        expect(db.query).toHaveBeenNthCalledWith(
+            3,
+            expect.stringMatching(/WITH due AS/i),
             [1]
         );
     });
