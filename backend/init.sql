@@ -439,15 +439,32 @@ CREATE TABLE IF NOT EXISTS monitor_certificate_alert_state (
         CHECK (last_alert_level BETWEEN 0 AND 4),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
--- Outbound notification channels (Slack / generic webhook), per user.
+-- Outbound notification channels (Slack / generic webhook / email), per user.
 CREATE TABLE IF NOT EXISTS notification_channels (
   id SERIAL PRIMARY KEY,
   user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  type VARCHAR(20) NOT NULL CHECK (type IN ('slack', 'webhook')),
+  type VARCHAR(20) NOT NULL CHECK (type IN ('slack', 'webhook', 'email')),
   name VARCHAR(100) NOT NULL,
-  url TEXT NOT NULL,
+  url TEXT,
+  email TEXT,
   is_active BOOLEAN NOT NULL DEFAULT true,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT notification_channels_destination_check
+    CHECK (
+      (
+        type IN ('slack', 'webhook')
+        AND url IS NOT NULL
+        AND length(trim(url)) > 0
+        AND email IS NULL
+      )
+      OR
+      (
+        type = 'email'
+        AND url IS NULL
+        AND email IS NOT NULL
+        AND length(trim(email)) > 0
+      )
+    )
 );
 
 CREATE INDEX IF NOT EXISTS idx_notification_channels_user

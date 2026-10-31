@@ -31,11 +31,12 @@ export default function useNotificationChannels() {
     fetchChannels();
   }, [fetchChannels]);
 
-  const createChannel = async ({ type, name, url }) => {
+  const createChannel = async ({ type, name, url, email }) => {
     const { data } = await api.post("/notification-channels", {
       type,
       name,
-      url,
+      url: url || null,
+      email: email || null,
     });
     setChannels((prev) => [...prev, data]);
     return data;

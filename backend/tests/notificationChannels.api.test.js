@@ -108,11 +108,61 @@ describe('notification channel API', () => {
 
         test('rejects unsupported channel types', async () => {
             const response = await createChannel(token, {
-                type: 'email'
+                type: 'sms'
             });
 
             expect(response.status).toBe(400);
-            expect(response.body.message).toContain('slack, webhook');
+            expect(response.body.message).toContain('slack, webhook, email');
+        });
+
+        test('creates an email channel and masks its recipient', async () => {
+            const recipient = 'alerts@example.com';
+
+            const response = await createChannel(token, {
+                type: 'email',
+                name: 'Email alerts',
+                url: null,
+                email: recipient
+            });
+
+            expect(response.status).toBe(201);
+            expect(response.body).toMatchObject({
+                type: 'email',
+                name: 'Email alerts',
+                email_hint: 'a***@example.com',
+                url_hint: null
+            });
+            expect(JSON.stringify(response.body)).not.toContain(recipient);
+
+            const saved = await pool.query(
+                'SELECT type, name, url, email FROM notification_channels WHERE id = $1',
+                [response.body.id]
+            );
+
+            expect(saved.rows[0]).toMatchObject({
+                type: 'email',
+                name: 'Email alerts',
+                url: null,
+                email: recipient
+            });
+            expect(validatePublicHttpUrl).not.toHaveBeenCalled();
+        });
+
+        test.each([
+            ['missing email', undefined],
+            ['malformed email', 'not-an-email'],
+            ['email without a domain suffix', 'alerts@example'],
+            ['email containing whitespace', 'alerts @example.com'],
+            ['email longer than 254 characters', `${'a'.repeat(245)}@example.com`]
+        ])('rejects a %s', async (_description, email) => {
+            const response = await createChannel(token, {
+                type: 'email',
+                url: null,
+                email
+            });
+
+            expect(response.status).toBe(400);
+            expect(response.body.message).toContain('email');
         });
 
         test('rejects an empty or invalid channel name', async () => {
@@ -333,4 +383,116 @@ describe('notification channel API', () => {
             expect(sendToChannel).not.toHaveBeenCalled();
         });
     });
+
+    describe('additional validation and error handling', () => {
+        test('returns 500 when listing channels fails at the database', async () => {
+            const querySpy = jest.spyOn(pool, 'query')
+                .mockRejectedValueOnce(new Error('Database unavailable'));
+            const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+            try {
+                const response = await request(app)
+                    .get(baseUrl)
+                    .set(authHeader(token));
+
+                expect(response.status).toBe(500);
+                expect(response.body.message).toBe('Failed to fetch channels');
+            } finally {
+                querySpy.mockRestore();
+                errorSpy.mockRestore();
+            }
+        });
+
+        test.each([
+            ['missing URL', undefined],
+            ['malformed URL', 'not-a-valid-url'],
+            ['URL longer than 500 characters', `https://example.com/${'a'.repeat(500)}`]
+        ])('rejects a %s during creation', async (_description, url) => {
+            const response = await createChannel(token, { url });
+
+            expect(response.status).toBe(400);
+            expect(response.body.message).toContain('url');
+        });
+
+        test('rejects an HTTP Slack URL', async () => {
+            const response = await createChannel(token, {
+                type: 'slack',
+                url: 'http://hooks.slack.com/services/test-token'
+            });
+
+            expect(response.status).toBe(400);
+            expect(response.body.message).toContain('Slack URL');
+        });
+
+        test('rejects an empty update body', async () => {
+            const created = await createChannel(token);
+
+            const response = await request(app)
+                .patch(`${baseUrl}/${created.body.id}`)
+                .set(authHeader(token))
+                .send({});
+
+            expect(response.status).toBe(400);
+            expect(response.body.message).toContain('supported fields');
+        });
+
+        test.each([
+            ['blank name', '   '],
+            ['name longer than 100 characters', 'a'.repeat(101)]
+        ])('rejects an update with a %s', async (_description, name) => {
+            const created = await createChannel(token);
+
+            const response = await request(app)
+                .patch(`${baseUrl}/${created.body.id}`)
+                .set(authHeader(token))
+                .send({ name });
+
+            expect(response.status).toBe(400);
+            expect(response.body.message).toContain('name');
+        });
+
+        test('returns 404 when updating a channel that does not exist', async () => {
+            const response = await request(app)
+                .patch(`${baseUrl}/999999`)
+                .set(authHeader(token))
+                .send({ name: 'Updated channel' });
+
+            expect(response.status).toBe(404);
+        });
+
+        test('rejects an invalid channel ID during deletion', async () => {
+            const response = await request(app)
+                .delete(`${baseUrl}/0`)
+                .set(authHeader(token));
+
+            expect(response.status).toBe(400);
+        });
+
+        test('returns 404 when deleting a channel that does not exist', async () => {
+            const response = await request(app)
+                .delete(`${baseUrl}/999999`)
+                .set(authHeader(token));
+
+            expect(response.status).toBe(404);
+        });
+
+        test('rejects an invalid channel ID during test delivery', async () => {
+            const response = await request(app)
+                .post(`${baseUrl}/abc/test`)
+                .set(authHeader(token));
+
+            expect(response.status).toBe(400);
+            expect(sendToChannel).not.toHaveBeenCalled();
+        });
+
+        test('returns 404 when testing a channel that does not exist', async () => {
+            const response = await request(app)
+                .post(`${baseUrl}/999999/test`)
+                .set(authHeader(token));
+
+            expect(response.status).toBe(404);
+            expect(sendToChannel).not.toHaveBeenCalled();
+        });
+    });
 });
+

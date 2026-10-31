@@ -188,3 +188,211 @@ test('treats stale monitor results as UNKNOWN on public status pages', async () 
         );
     }
 });
+
+async function publishOwnerStatusPage(isPublic = true) {
+    const saved = await request(app)
+        .put('/api/status-pages')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Incident Test Status',
+            description: 'Incident integration tests',
+            is_public: isPublic,
+            monitor_ids: [ownedMonitor]
+        });
+
+    expect(saved.status).toBe(200);
+    return saved.body.page;
+}
+
+test('creates incidents with initial history and exposes their lifecycle publicly', async () => {
+    const page = await publishOwnerStatusPage(true);
+
+    const created = await request(app)
+        .post('/api/status-pages/incidents')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Database connectivity issue',
+            impact: 'major',
+            message: 'We are investigating database connectivity.',
+            monitor_ids: [ownedMonitor]
+        });
+
+    expect(created.status).toBe(201);
+    expect(created.body.incident).toMatchObject({
+        title: 'Database connectivity issue',
+        impact: 'major',
+        status: 'investigating'
+    });
+
+    const incidentId = created.body.incident.id;
+
+    const identified = await request(app)
+        .post(`/api/status-pages/incidents/${incidentId}/updates`)
+        .set(authHeader(owner.token))
+        .send({
+            status: 'identified',
+            message: 'The database connection pool is saturated.'
+        });
+
+    expect(identified.status).toBe(201);
+    expect(identified.body.incident.status).toBe('identified');
+
+    const resolved = await request(app)
+        .post(`/api/status-pages/incidents/${incidentId}/updates`)
+        .set(authHeader(owner.token))
+        .send({
+            status: 'resolved',
+            message: 'Database connectivity has been restored.'
+        });
+
+    expect(resolved.status).toBe(201);
+    expect(resolved.body.incident.status).toBe('resolved');
+    expect(resolved.body.incident.resolved_at).not.toBeNull();
+
+    const publicIncidents = await request(app)
+        .get(`/api/public/status/${page.slug}/incidents`);
+
+    expect(publicIncidents.status).toBe(200);
+    expect(publicIncidents.headers['cache-control']).toBe('no-store');
+
+    const incident = publicIncidents.body.incidents.find(
+        item => item.id === incidentId
+    );
+
+    expect(incident).toBeDefined();
+    expect(incident.status).toBe('resolved');
+    expect(incident.affected_monitors).toEqual(
+        expect.arrayContaining([
+            expect.objectContaining({ id: ownedMonitor })
+        ])
+    );
+    expect(incident.updates.map(update => update.status)).toEqual([
+        'investigating',
+        'identified',
+        'resolved'
+    ]);
+});
+
+test('only allows resolved incidents to reopen as investigating', async () => {
+    await publishOwnerStatusPage(true);
+
+    const created = await request(app)
+        .post('/api/status-pages/incidents')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Reopening lifecycle test',
+            impact: 'minor',
+            message: 'Investigating an initial issue.'
+        });
+
+    expect(created.status).toBe(201);
+    const incidentId = created.body.incident.id;
+
+    const resolved = await request(app)
+        .post(`/api/status-pages/incidents/${incidentId}/updates`)
+        .set(authHeader(owner.token))
+        .send({
+            status: 'resolved',
+            message: 'The issue has been resolved.'
+        });
+
+    expect(resolved.status).toBe(201);
+    expect(resolved.body.incident.resolved_at).not.toBeNull();
+
+    const invalidReopen = await request(app)
+        .post(`/api/status-pages/incidents/${incidentId}/updates`)
+        .set(authHeader(owner.token))
+        .send({
+            status: 'identified',
+            message: 'Attempting an invalid reopening.'
+        });
+
+    expect(invalidReopen.status).toBe(409);
+
+    const reopened = await request(app)
+        .post(`/api/status-pages/incidents/${incidentId}/updates`)
+        .set(authHeader(owner.token))
+        .send({
+            status: 'investigating',
+            message: 'The issue has returned and is being investigated.'
+        });
+
+    expect(reopened.status).toBe(201);
+    expect(reopened.body.incident.status).toBe('investigating');
+    expect(reopened.body.incident.resolved_at).toBeNull();
+});
+test('rejects foreign monitor links and prevents another user updating an incident', async () => {
+    await publishOwnerStatusPage(true);
+
+    const invalid = await request(app)
+        .post('/api/status-pages/incidents')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Invalid monitor incident',
+            impact: 'minor',
+            message: 'This must be rejected.',
+            monitor_ids: [otherMonitor]
+        });
+
+    expect(invalid.status).toBe(400);
+
+    const created = await request(app)
+        .post('/api/status-pages/incidents')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Owner-only incident',
+            impact: 'minor',
+            message: 'This incident belongs to the owner.'
+        });
+
+    expect(created.status).toBe(201);
+
+    const incidentId = created.body.incident.id;
+
+    const otherUpdate = await request(app)
+        .post(`/api/status-pages/incidents/${incidentId}/updates`)
+        .set(authHeader(other.token))
+        .send({
+            status: 'resolved',
+            message: 'Unauthorized update attempt.'
+        });
+
+    expect(otherUpdate.status).toBe(404);
+
+    const ownerIncidents = await request(app)
+        .get('/api/status-pages/incidents')
+        .set(authHeader(owner.token));
+
+    expect(ownerIncidents.status).toBe(200);
+    expect(ownerIncidents.body.incidents.some(
+        incident => incident.id === incidentId
+    )).toBe(true);
+
+    const otherIncidents = await request(app)
+        .get('/api/status-pages/incidents')
+        .set(authHeader(other.token));
+
+    expect(otherIncidents.status).toBe(200);
+    expect(otherIncidents.body.incidents).toEqual([]);
+});
+
+test('does not expose incidents belonging to an unpublished status page', async () => {
+    const page = await publishOwnerStatusPage(false);
+
+    const created = await request(app)
+        .post('/api/status-pages/incidents')
+        .set(authHeader(owner.token))
+        .send({
+            title: 'Private incident',
+            impact: 'minor',
+            message: 'This announcement is private.'
+        });
+
+    expect(created.status).toBe(201);
+
+    const publicIncidents = await request(app)
+        .get(`/api/public/status/${page.slug}/incidents`);
+
+    expect(publicIncidents.status).toBe(404);
+});
+

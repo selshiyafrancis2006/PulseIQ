@@ -1,8 +1,8 @@
-const db = require('../config/db');
+﻿const db = require('../config/db');
 const { validatePublicHttpUrl } = require('../services/urlSecurity.service');
 const { sendToChannel } = require('../services/notification.service');
 
-const CHANNEL_TYPES = ['slack', 'webhook'];
+const CHANNEL_TYPES = ['slack', 'webhook', 'email'];
 const MAX_CHANNELS_PER_USER = 10;
 
 function validateId(value) {
@@ -10,8 +10,17 @@ function validateId(value) {
         Number(value) > 0;
 }
 
-// Webhook URLs are secrets (anyone holding one can post to the channel),
-// so the API never returns the full URL after creation.
+function maskEmail(value) {
+    if (typeof value !== 'string') return null;
+
+    const [local, domain] = value.split('@');
+    if (!local || !domain) return null;
+
+    return `${local[0]}***@${domain}`;
+}
+
+// Webhook URLs and email recipients are sensitive.
+// Never return their full values from the API.
 function toPublic(row) {
     const url = row.url || '';
     let host = '';
@@ -28,7 +37,10 @@ function toPublic(row) {
         name: row.name,
         is_active: row.is_active,
         created_at: row.created_at,
-        url_hint: host ? `${host}/…${url.slice(-4)}` : null
+        url_hint: row.type !== 'email' && host
+            ? `${host}/…${url.slice(-4)}`
+            : null,
+        email_hint: row.type === 'email' ? maskEmail(row.email) : null
     };
 }
 
@@ -58,6 +70,18 @@ async function validateChannelUrl(type, value) {
     return null;
 }
 
+function validateEmail(value) {
+    if (
+        typeof value !== 'string' ||
+        value.length > 254 ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim())
+    ) {
+        return 'email must be a valid email address of at most 254 characters';
+    }
+
+    return null;
+}
+
 const listChannels = async (req, res) => {
     try {
         const result = await db.query(
@@ -74,7 +98,7 @@ const listChannels = async (req, res) => {
 
 const createChannel = async (req, res) => {
     try {
-        const { type, name, url } = req.body || {};
+        const { type, name, url, email } = req.body || {};
 
         if (!CHANNEL_TYPES.includes(type)) {
             return res.status(400).json({
@@ -88,8 +112,20 @@ const createChannel = async (req, res) => {
             });
         }
 
-        const urlError = await validateChannelUrl(type, url);
-        if (urlError) return res.status(400).json({ message: urlError });
+        let channelUrl = null;
+        let channelEmail = null;
+
+        if (type === 'email') {
+            const emailError = validateEmail(email);
+            if (emailError) {
+                return res.status(400).json({ message: emailError });
+            }
+            channelEmail = email.trim().toLowerCase();
+        } else {
+            const urlError = await validateChannelUrl(type, url);
+            if (urlError) return res.status(400).json({ message: urlError });
+            channelUrl = url.trim();
+        }
 
         const count = await db.query(
             'SELECT COUNT(*)::int AS n FROM notification_channels WHERE user_id = $1',
@@ -102,9 +138,9 @@ const createChannel = async (req, res) => {
         }
 
         const result = await db.query(
-            `INSERT INTO notification_channels (user_id, type, name, url)
-             VALUES ($1, $2, $3, $4) RETURNING *`,
-            [req.user.id, type, name.trim(), url.trim()]
+            `INSERT INTO notification_channels (user_id, type, name, url, email)
+             VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+            [req.user.id, type, name.trim(), channelUrl, channelEmail]
         );
 
         res.status(201).json(toPublic(result.rows[0]));
@@ -220,3 +256,4 @@ module.exports = {
     deleteChannel,
     testChannel
 };
+

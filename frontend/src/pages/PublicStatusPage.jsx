@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { API_BASE_URL } from '../config/api';
 
@@ -42,6 +42,7 @@ function statusLabel(status) {
 export default function PublicStatusPage() {
   const { slug } = useParams();
   const [data, setData] = useState(null);
+  const [incidents, setIncidents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -61,6 +62,22 @@ export default function PublicStatusPage() {
 
         if (active) {
           setData(result);
+
+          try {
+            const incidentResponse = await fetch(
+              `${API_BASE_URL}/api/public/status/${encodeURIComponent(slug)}/incidents`
+            );
+            const incidentData = await incidentResponse.json().catch(() => ({}));
+
+            if (incidentResponse.ok) {
+              setIncidents(Array.isArray(incidentData.incidents) ? incidentData.incidents : []);
+            } else {
+              setIncidents([]);
+            }
+          } catch {
+            setIncidents([]);
+            // Incident loading must not prevent monitor status from displaying.
+          }
           setError('');
         }
       } catch (err) {
@@ -117,6 +134,50 @@ export default function PublicStatusPage() {
               </p>
             </header>
 
+            <section className="mt-8 space-y-4">
+              <h2 className="text-lg font-semibold">Incident announcements</h2>
+              {incidents.length === 0 ? (
+                <p className="rounded-xl border border-[#292929] bg-[#141414] p-5 text-sm text-gray-400">
+                  No incidents have been announced.
+                </p>
+              ) : (
+                incidents.map((incident) => (
+                  <article key={incident.id} className="space-y-4 rounded-xl border border-[#292929] bg-[#141414] p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 className="font-semibold text-white">{incident.title}</h3>
+                        <p className="mt-1 text-xs capitalize text-gray-400">
+                          {incident.impact} impact
+                        </p>
+                      </div>
+                      <span className={`rounded-full border px-3 py-1 text-xs capitalize ${
+                        incident.status === 'resolved'
+                          ? 'border-emerald-900 bg-emerald-950/30 text-emerald-300'
+                          : 'border-amber-900 bg-amber-950/30 text-amber-300'
+                      }`}>
+                        {incident.status}
+                      </span>
+                    </div>
+
+                    {incident.affected_monitors?.length > 0 && (
+                      <p className="text-xs text-gray-400">
+                        Affected services: {incident.affected_monitors.map((monitor) => monitor.name).join(', ')}
+                      </p>
+                    )}
+
+                    <div className="space-y-4 border-l border-[#383838] pl-4">
+                      {(incident.updates || []).map((update) => (
+                        <div key={update.id}>
+                          <p className="text-xs font-medium capitalize text-emerald-400">{update.status}</p>
+                          <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-gray-300">{update.message}</p>
+                          <p className="mt-1 text-xs text-gray-500">{formatDate(update.created_at)}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                ))
+              )}
+            </section>
             <section className="mt-8">
               <div className="mb-4 flex items-center justify-between">
                 <h2 className="text-lg font-semibold">Monitored services</h2>
@@ -165,3 +226,6 @@ export default function PublicStatusPage() {
     </div>
   );
 }
+
+
+

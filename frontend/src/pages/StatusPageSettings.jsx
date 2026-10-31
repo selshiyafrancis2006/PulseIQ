@@ -1,7 +1,8 @@
-﻿import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { API_BASE_URL } from '../config/api';
 import { apiFetch } from '../utils/apiFetch';
+import StatusPageIncidents from '../components/StatusPageIncidents';
 
 const inputClass =
   'mt-2 w-full rounded-lg border border-[#303030] bg-[#111] px-4 py-3 text-sm text-white outline-none focus:border-emerald-500';
@@ -274,6 +275,9 @@ export default function StatusPageSettings() {
           </div>
         )}
       </form>
+
+      {page && <StatusPageIncidents monitors={monitors} />}
     </div>
   );
 }
+

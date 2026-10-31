@@ -1,4 +1,4 @@
-﻿import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useNotificationChannels, {
   getErrorMessage,
 } from "../../hooks/useNotificationChannels";
@@ -6,6 +6,7 @@ import useNotificationChannels, {
 const TYPE_LABELS = {
   slack: "Slack",
   webhook: "Webhook",
+  email: "Email",
 };
 
 const URL_PLACEHOLDERS = {
@@ -28,6 +29,7 @@ export default function NotificationChannels() {
   const [type, setType] = useState("slack");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
+  const [email, setEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState("");
 
@@ -50,6 +52,7 @@ useEffect(() => {
     setType("slack");
     setName("");
     setUrl("");
+    setEmail("");
     setFormError("");
   };
 
@@ -60,8 +63,16 @@ useEffect(() => {
       setFormError("Name is required");
       return;
     }
-    if (!url.trim()) {
-      setFormError("Webhook URL is required");
+    if (type === "email" && !email.trim()) {
+      setFormError("Recipient email is required");
+      return;
+    }
+    if (type !== "email" && !url.trim()) {
+      setFormError(
+        type === "slack"
+          ? "Slack incoming webhook URL is required"
+          : "Webhook URL is required"
+      );
       return;
     }
 
@@ -69,9 +80,15 @@ useEffect(() => {
     setFormError("");
 
     try {
-      await createChannel({ type, name: name.trim(), url: url.trim() });
+      await createChannel({
+        type,
+        name: name.trim(),
+        url: type === "email" ? null : url.trim(),
+        email: type === "email" ? email.trim() : null,
+      });
       setShowForm(false);
       setUrl("");
+      setEmail("");
     } catch (err) {
       console.error("Failed to create channel:", err);
       setFormError(getErrorMessage(err, "Failed to create channel"));
@@ -184,6 +201,7 @@ const handleTest = async (id) => {
               >
                 <option value="slack">Slack</option>
                 <option value="webhook">Generic webhook</option>
+                <option value="email">Email</option>
               </select>
             </div>
 
@@ -204,21 +222,45 @@ const handleTest = async (id) => {
           </div>
 
           <div>
-            <label className="mb-1 block text-xs uppercase tracking-widest text-gray-500">
-              {type === "slack" ? "Slack incoming webhook URL" : "Webhook URL"}
-            </label>
-            <input
-              type="password"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder={URL_PLACEHOLDERS[type]}
-              autoComplete="off"
-              className="w-full rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              The URL is stored on the server and is never shown again after
-              saving.
-            </p>
+            {type === "email" ? (
+              <>
+                <label className="mb-1 block text-xs uppercase tracking-widest text-gray-500">
+                  Recipient email address
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="alerts@example.com"
+                  maxLength={254}
+                  autoComplete="email"
+                  required
+                  className="w-full rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Alerts are sent to this address using the server SMTP configuration.
+                </p>
+              </>
+            ) : (
+              <>
+                <label className="mb-1 block text-xs uppercase tracking-widest text-gray-500">
+                  {type === "slack" ? "Slack incoming webhook URL" : "Webhook URL"}
+                </label>
+                <input
+                  type="password"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder={URL_PLACEHOLDERS[type]}
+                  autoComplete="off"
+                  required
+                  className="w-full rounded-lg border border-[#2a2a2a] bg-[#0f0f0f] px-3 py-2 text-sm text-white outline-none focus:border-emerald-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  The URL is stored on the server and is never shown again after
+                  saving.
+                </p>
+              </>
+            )}
           </div>
 
           {formError && (
@@ -255,7 +297,7 @@ const handleTest = async (id) => {
           <p className="p-5 text-sm text-red-400">{error}</p>
         ) : channels.length === 0 ? (
           <p className="p-5 text-sm text-gray-500">
-            No channels yet. Add a Slack or webhook channel to get notified
+            No channels yet. Add a Slack, webhook, or email channel to get notified
             when a monitor goes down.
           </p>
         ) : (
@@ -290,7 +332,7 @@ const handleTest = async (id) => {
                         </span>
                       </div>
                       <p className="mt-1 truncate text-xs text-gray-500">
-                        {channel.url_hint}
+                        {channel.type === "email" ? channel.email_hint : channel.url_hint}
                       </p>
                     </div>
 

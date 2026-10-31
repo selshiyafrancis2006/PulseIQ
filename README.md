@@ -84,6 +84,26 @@ JWT_SECRET=your_jwt_secret
 PORT=5000
 ```
 
+### Email Notifications (SMTP)
+
+Email notifications require SMTP configuration in `backend/.env`:
+
+```env
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
+```
+
+- `SMTP_HOST`: SMTP server hostname.
+- `SMTP_PORT`: SMTP server port (commonly 587 or 465).
+- `SMTP_SECURE`: Set to `true` for implicit TLS, commonly port 465.
+- `SMTP_USER` and `SMTP_PASS`: SMTP authentication credentials.
+- `SMTP_FROM`: Sender email address.
+
+Keep SMTP credentials private. Do not commit actual `.env` files to Git. Email delivery requires valid SMTP configuration.
 ### Private Monitor Targets
 
 By default, PulseIQ only allows monitors to target public IP addresses and public hostnames.

@@ -1,5 +1,6 @@
-const db = require('../config/db');
+﻿const db = require('../config/db');
 const { checkHttp } = require('./httpCheck.service');
+const nodemailer = require('nodemailer');
 
 const SEND_TIMEOUT_MS = 5000;
 
@@ -25,13 +26,6 @@ function formatDuration(totalSeconds) {
     return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-// event: {
-//   type: 'DOWN' | 'UP' | 'FLAPPING' | 'STABLE' | 'TEST',
-//   monitor: { id, name, url },
-//   message, errorType, errorMessage, responseTimeMs, statusCode,
-//   downForSeconds, transitions, windowMinutes, currentStatus,
-//   occurredAt (ISO string)
-// }
 function buildSlackPayload(event) {
     const name = escapeSlack(event.monitor?.name);
     const url = escapeSlack(event.monitor?.url);
@@ -136,9 +130,173 @@ function buildWebhookPayload(event) {
     return payload;
 }
 
-// Sends through checkHttp so the destination gets the same protection as
-// monitor URLs: public-IP-only, DNS pinning, validated redirects, size cap.
+function buildEmailMessage(event) {
+    const monitorName = event.monitor?.name || 'PulseIQ monitor';
+    const monitorUrl = event.monitor?.url || '';
+    const subjectPrefix = '[PulseIQ]';
+
+    let subject;
+
+    switch (event.type) {
+        case 'DOWN':
+            subject = `${subjectPrefix} Monitor DOWN: ${monitorName}`;
+            break;
+        case 'STILL_DOWN':
+            subject = `${subjectPrefix} Monitor still DOWN: ${monitorName}`;
+            break;
+        case 'UP':
+            subject = `${subjectPrefix} Monitor recovered: ${monitorName}`;
+            break;
+        case 'FLAPPING':
+            subject = `${subjectPrefix} Monitor flapping: ${monitorName}`;
+            break;
+        case 'STABLE':
+            subject = `${subjectPrefix} Monitor stable: ${monitorName}`;
+            break;
+        case 'CERTIFICATE_EXPIRING':
+            subject = `${subjectPrefix} SSL certificate expiring: ${monitorName}`;
+            break;
+        case 'CERTIFICATE_EXPIRED':
+            subject = `${subjectPrefix} SSL certificate expired: ${monitorName}`;
+            break;
+        default:
+            subject = `${subjectPrefix} Test notification`;
+    }
+
+    const lines = [
+        `PulseIQ notification: ${event.type}`,
+        '',
+        `Monitor: ${monitorName}`
+    ];
+
+    if (monitorUrl) lines.push(`URL: ${monitorUrl}`);
+    if (event.message) lines.push(`Message: ${event.message}`);
+    if (event.errorType) lines.push(`Error type: ${event.errorType}`);
+    if (event.errorMessage) lines.push(`Reason: ${event.errorMessage}`);
+
+    if (event.responseTimeMs != null) {
+        lines.push(`Response time: ${event.responseTimeMs} ms`);
+    }
+
+    if (event.statusCode != null) {
+        lines.push(`HTTP status code: ${event.statusCode}`);
+    }
+
+    if (event.downForSeconds != null) {
+        lines.push(
+            `${event.type === 'UP' ? 'Downtime' : 'Down for'}: ` +
+            formatDuration(event.downForSeconds)
+        );
+    }
+
+    if (event.type === 'FLAPPING') {
+        lines.push(
+            `State changes: ${event.transitions ?? 'Unknown'}`,
+            `Detection window: ${event.windowMinutes ?? 'Unknown'} minutes`
+        );
+    }
+
+    if (event.type === 'STABLE') {
+        lines.push(`Current status: ${event.currentStatus ?? 'Unknown'}`);
+    }
+
+    if (event.certificateExpiresAt) {
+        lines.push(`Certificate expires: ${event.certificateExpiresAt}`);
+    }
+
+    if (event.certificateDaysRemaining != null) {
+        lines.push(`Certificate days remaining: ${event.certificateDaysRemaining}`);
+    }
+
+    lines.push(
+        '',
+        `Occurred at: ${event.occurredAt || new Date().toISOString()}`,
+        '',
+        'This notification was sent by PulseIQ.'
+    );
+
+    return {
+        subject,
+        text: lines.join('\n')
+    };
+}
+
+function createSmtpTransporter() {
+    const {
+        SMTP_HOST,
+        SMTP_PORT = '587',
+        SMTP_SECURE = 'false',
+        SMTP_USER,
+        SMTP_PASS
+    } = process.env;
+
+    if (!SMTP_HOST || !process.env.SMTP_FROM) {
+        throw new Error(
+            'Email delivery is not configured. Set SMTP_HOST and SMTP_FROM.'
+        );
+    }
+
+    const port = Number(SMTP_PORT);
+
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        throw new Error('SMTP_PORT must be a valid port between 1 and 65535.');
+    }
+
+    if (Boolean(SMTP_USER) !== Boolean(SMTP_PASS)) {
+        throw new Error('SMTP_USER and SMTP_PASS must both be configured.');
+    }
+
+    const secure = ['true', '1'].includes(
+        String(SMTP_SECURE).toLowerCase()
+    );
+
+    const options = {
+        host: SMTP_HOST,
+        port,
+        secure,
+        connectionTimeout: SEND_TIMEOUT_MS,
+        greetingTimeout: SEND_TIMEOUT_MS,
+        socketTimeout: SEND_TIMEOUT_MS
+    };
+
+    if (SMTP_USER && SMTP_PASS) {
+        options.auth = {
+            user: SMTP_USER,
+            pass: SMTP_PASS
+        };
+    }
+
+    return nodemailer.createTransport(options);
+}
+
+async function sendEmail(channel, event) {
+    if (!channel.email) {
+        throw new Error('Email channel has no recipient address.');
+    }
+
+    const transporter = createSmtpTransporter();
+    const message = buildEmailMessage(event);
+
+    try {
+        await transporter.sendMail({
+            from: process.env.SMTP_FROM,
+            to: channel.email,
+            subject: message.subject,
+            text: message.text
+        });
+    } finally {
+        transporter.close();
+    }
+}
+
+// Sends through checkHttp so webhook destinations get the same
+// protection as monitor URLs: public-IP-only, DNS pinning,
+// validated redirects and response-size limits.
 async function sendToChannel(channel, event) {
+    if (channel.type === 'email') {
+        return sendEmail(channel, event);
+    }
+
     const payload = channel.type === 'slack'
         ? buildSlackPayload(event)
         : buildWebhookPayload(event);
@@ -163,7 +321,7 @@ async function notifyUser(userId, event) {
 
     try {
         const result = await db.query(
-            `SELECT id, type, name, url
+            `SELECT id, type, name, url, email
              FROM notification_channels
              WHERE user_id = $1 AND is_active = true
              ORDER BY id`,
@@ -203,5 +361,7 @@ module.exports = {
     sendToChannel,
     notifyUser,
     buildSlackPayload,
-    buildWebhookPayload
+    buildWebhookPayload,
+    buildEmailMessage,
+    createSmtpTransporter
 };
