@@ -138,3 +138,109 @@ describe('checkDns', () => {
         )).rejects.toThrow('DNS resolver is unavailable');
     });
 });
+
+
+describe('checkDns expected-value validation', () => {
+    test.each([
+        ['A', ['93.184.216.34'], ['93.184.216.34']],
+        ['AAAA', ['2001:db8::1'], ['2001:db8::1']],
+        ['CNAME', ['Alias.Example.com.'], ['alias.example.com']],
+        ['MX', [{ exchange: 'Mail.Example.com.', priority: 10 }], ['10 mail.example.com']],
+        ['TXT', [['v=spf1 ', '-all']], ['v=spf1 -all']],
+        ['NS', ['NS1.Example.com.'], ['ns1.example.com']]
+    ])('accepts matching %s expected values', async (
+        recordType,
+        records,
+        expectedValues
+    ) => {
+        const resolverMethod = DNS_RESOLVERS[recordType];
+        const resolve = jest.fn().mockResolvedValue(records);
+
+        await expect(checkDns(
+            {
+                dns_hostname: 'example.com',
+                dns_record_type: recordType,
+                dns_expected_values: expectedValues
+            },
+            { resolver: { [resolverMethod]: resolve } }
+        )).resolves.toMatchObject({ records });
+    });
+
+    test('requires every expected value but allows additional DNS answers', async () => {
+        const resolve4 = jest.fn().mockResolvedValue([
+            '93.184.216.34',
+            '93.184.216.35',
+            '93.184.216.36'
+        ]);
+
+        await expect(checkDns(
+            {
+                dns_hostname: 'example.com',
+                dns_record_type: 'A',
+                dns_expected_values: [
+                    '93.184.216.34',
+                    '93.184.216.35'
+                ]
+            },
+            { resolver: { resolve4 } }
+        )).resolves.toMatchObject({
+            records: [
+                '93.184.216.34',
+                '93.184.216.35',
+                '93.184.216.36'
+            ]
+        });
+    });
+
+    test('rejects when an expected DNS answer is missing', async () => {
+        const resolve4 = jest.fn().mockResolvedValue([
+            '93.184.216.34'
+        ]);
+
+        await expect(checkDns(
+            {
+                dns_hostname: 'example.com',
+                dns_record_type: 'A',
+                dns_expected_values: ['93.184.216.99']
+            },
+            { resolver: { resolve4 } }
+        )).rejects.toMatchObject({
+            code: 'DNS_EXPECTED_VALUE_MISMATCH',
+            message: expect.stringContaining('93.184.216.99')
+        });
+    });
+
+    test('does not enforce expected values when none are configured', async () => {
+        const resolve4 = jest.fn().mockResolvedValue([
+            '93.184.216.34'
+        ]);
+
+        await expect(checkDns(
+            {
+                dns_hostname: 'example.com',
+                dns_record_type: 'A',
+                dns_expected_values: []
+            },
+            { resolver: { resolve4 } }
+        )).resolves.toMatchObject({
+            records: ['93.184.216.34']
+        });
+    });
+
+    test('preserves TXT case when comparing expected values', async () => {
+        const resolveTxt = jest.fn().mockResolvedValue([
+            ['v=spf1 -all']
+        ]);
+
+        await expect(checkDns(
+            {
+                dns_hostname: 'example.com',
+                dns_record_type: 'TXT',
+                dns_expected_values: ['V=SPF1 -ALL']
+            },
+            { resolver: { resolveTxt } }
+        )).rejects.toMatchObject({
+            code: 'DNS_EXPECTED_VALUE_MISMATCH'
+        });
+    });
+});

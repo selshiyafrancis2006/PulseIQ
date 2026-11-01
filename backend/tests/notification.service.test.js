@@ -1,4 +1,4 @@
-﻿jest.mock('../src/config/db', () => ({
+jest.mock('../src/config/db', () => ({
     query: jest.fn()
 }));
 
@@ -9,6 +9,12 @@ jest.mock('../src/services/httpCheck.service', () => ({
 jest.mock('nodemailer', () => ({
     createTransport: jest.fn()
 }));
+const crypto = require('crypto');
+if (!process.env.NOTIFICATION_ENCRYPTION_KEY) {
+    process.env.NOTIFICATION_ENCRYPTION_KEY = crypto.randomBytes(32).toString('base64');
+}
+const { encryptUrl } = require('../src/services/notificationChannelCrypto.service');
+
 const {
     sendToChannel,
     buildSlackPayload,
@@ -102,8 +108,8 @@ describe('notifyUser delivery', () => {
     test('delivers to all active channels belonging to the requested user', async () => {
         db.query.mockResolvedValueOnce({
             rows: [
-                { id: 1, type: 'slack', name: 'Team Slack', url: 'https://hooks.slack.com/services/test' },
-                { id: 2, type: 'webhook', name: 'Incident Webhook', url: 'https://example.com/webhook' }
+                { id: 1, type: 'slack', name: 'Team Slack', url: encryptUrl('https://hooks.slack.com/services/test') },
+                { id: 2, type: 'webhook', name: 'Incident Webhook', url: encryptUrl('https://example.com/webhook') }
             ]
         });
         checkHttp.mockResolvedValue({ statusCode: 200 });
@@ -111,9 +117,12 @@ describe('notifyUser delivery', () => {
         const results = await notifyUser(7, event);
 
         expect(db.query).toHaveBeenCalledWith(
-            expect.stringContaining('WHERE user_id = $1 AND is_active = true'),
-            [7]
+            expect.stringContaining('WHERE user_id = $1'),
+            [7, 12]
         );
+        expect(db.query.mock.calls[0][0]).toContain('monitor_notification_settings');
+        expect(db.query.mock.calls[0][0]).toContain("settings.routing_mode = 'SELECTED'");
+        expect(db.query.mock.calls[0][0]).toContain('monitor_notification_channels');
         expect(checkHttp).toHaveBeenCalledTimes(2);
         expect(checkHttp).toHaveBeenNthCalledWith(
             1,
@@ -129,6 +138,20 @@ describe('notifyUser delivery', () => {
         ]);
     });
 
+    test('does not deliver when SELECTED routing has no mapped channels', async () => {
+        db.query.mockResolvedValueOnce({ rows: [] });
+
+        const results = await notifyUser(7, event);
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('SELECT id, type, name, url, email'),
+            [7, 12]
+        );
+        expect(db.query.mock.calls[0][0]).toContain("settings.routing_mode = 'SELECTED'");
+        expect(db.query.mock.calls[0][0]).toContain('selected.channel_id = notification_channels.id');
+        expect(results).toEqual([]);
+        expect(checkHttp).not.toHaveBeenCalled();
+    });
     test('returns an empty array when no active channels exist', async () => {
         db.query.mockResolvedValueOnce({ rows: [] });
 
@@ -141,7 +164,7 @@ describe('notifyUser delivery', () => {
     test('reports non-2xx responses as channel failures', async () => {
         db.query.mockResolvedValueOnce({
             rows: [
-                { id: 3, type: 'webhook', name: 'Failed Webhook', url: 'https://example.com/webhook' }
+                { id: 3, type: 'webhook', name: 'Failed Webhook', url: encryptUrl('https://example.com/webhook') }
             ]
         });
         checkHttp.mockResolvedValueOnce({ statusCode: 503 });
@@ -160,8 +183,8 @@ describe('notifyUser delivery', () => {
     test('continues delivery when one channel rejects', async () => {
         db.query.mockResolvedValueOnce({
             rows: [
-                { id: 4, type: 'webhook', name: 'Unavailable Webhook', url: 'https://example.com/failing' },
-                { id: 5, type: 'slack', name: 'Working Slack', url: 'https://hooks.slack.com/services/working' }
+                { id: 4, type: 'webhook', name: 'Unavailable Webhook', url: encryptUrl('https://example.com/failing') },
+                { id: 5, type: 'slack', name: 'Working Slack', url: encryptUrl('https://hooks.slack.com/services/working') }
             ]
         });
         checkHttp
@@ -714,7 +737,7 @@ describe('notifyUser email channel delivery', () => {
 
         expect(db.query).toHaveBeenCalledWith(
             expect.stringContaining('SELECT id, type, name, url, email'),
-            [7]
+            [7, 12]
         );
 
         expect(nodemailer.createTransport).toHaveBeenCalledTimes(1);

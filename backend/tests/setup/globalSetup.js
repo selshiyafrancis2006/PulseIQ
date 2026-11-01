@@ -52,13 +52,29 @@ ALTER TABLE monitors
     ADD COLUMN IF NOT EXISTS tcp_port INTEGER,
     ADD COLUMN IF NOT EXISTS dns_hostname VARCHAR(253),
     ADD COLUMN IF NOT EXISTS dns_record_type VARCHAR(10) NOT NULL DEFAULT 'A',
+    ADD COLUMN IF NOT EXISTS dns_expected_values TEXT[] NOT NULL DEFAULT '{}',
     ADD COLUMN IF NOT EXISTS method VARCHAR(10) NOT NULL DEFAULT 'GET',
     ADD COLUMN IF NOT EXISTS headers JSONB NOT NULL DEFAULT '{}'::jsonb,
     ADD COLUMN IF NOT EXISTS body TEXT,
     ADD COLUMN IF NOT EXISTS timeout_ms INTEGER NOT NULL DEFAULT 10000,
     ADD COLUMN IF NOT EXISTS expected_status_codes JSONB,
     ADD COLUMN IF NOT EXISTS expected_keyword VARCHAR(500),
-    ADD COLUMN IF NOT EXISTS max_response_time_ms INTEGER;
+    ADD COLUMN IF NOT EXISTS max_response_time_ms INTEGER,
+    ADD COLUMN IF NOT EXISTS heartbeat_grace_seconds INTEGER NOT NULL DEFAULT 60;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'monitors_heartbeat_grace_seconds_check'
+          AND conrelid = 'monitors'::regclass
+    ) THEN
+        ALTER TABLE monitors
+            ADD CONSTRAINT monitors_heartbeat_grace_seconds_check
+            CHECK (heartbeat_grace_seconds BETWEEN 0 AND 86400);
+    END IF;
+END $$;
 
 
 ALTER TABLE monitors
@@ -368,6 +384,27 @@ ALTER TABLE notification_channels
             AND length(trim(email)) > 0
         )
     );
+        `);
+
+        await client.query(`CREATE TABLE IF NOT EXISTS monitor_notification_settings (
+    monitor_id INTEGER PRIMARY KEY
+        REFERENCES monitors(id) ON DELETE CASCADE,
+    routing_mode VARCHAR(10) NOT NULL DEFAULT 'ALL'
+        CHECK (routing_mode IN ('ALL', 'SELECTED')),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS monitor_notification_channels (
+    monitor_id INTEGER NOT NULL
+        REFERENCES monitors(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL
+        REFERENCES notification_channels(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (monitor_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_notification_channels_channel
+    ON monitor_notification_channels (channel_id);
         `);
     } finally {
         await client.end();

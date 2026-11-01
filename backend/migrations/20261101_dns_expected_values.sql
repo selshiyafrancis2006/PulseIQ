@@ -1,0 +1,6 @@
+﻿BEGIN;
+
+ALTER TABLE monitors
+    ADD COLUMN IF NOT EXISTS dns_expected_values TEXT[] NOT NULL DEFAULT '{}';
+
+COMMIT;

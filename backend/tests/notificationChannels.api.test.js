@@ -19,6 +19,7 @@ const {
 
 const { validatePublicHttpUrl } = require('../src/services/urlSecurity.service');
 const { sendToChannel } = require('../src/services/notification.service');
+const { decryptUrl } = require('../src/services/notificationChannelCrypto.service');
 
 let token;
 let otherToken;
@@ -89,8 +90,10 @@ describe('notification channel API', () => {
             expect(saved.rows[0]).toMatchObject({
                 type: 'webhook',
                 name: 'Test webhook',
-                url: webhookUrl
+                url: expect.stringMatching(/^enc:v1:/)
             });
+            expect(decryptUrl(saved.rows[0].url)).toBe(webhookUrl);
+            expect(saved.rows[0].url).not.toContain(webhookUrl);
             expect(validatePublicHttpUrl).toHaveBeenCalledWith(webhookUrl);
         });
 
@@ -349,7 +352,8 @@ describe('notification channel API', () => {
             expect(sendToChannel).toHaveBeenCalledWith(
                 expect.objectContaining({
                     id: channelId,
-                    type: 'webhook'
+                    type: 'webhook',
+                    url: webhookUrl
                 }),
                 expect.objectContaining({
                     type: 'TEST',

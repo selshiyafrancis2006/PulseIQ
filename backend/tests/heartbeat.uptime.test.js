@@ -1,4 +1,4 @@
-﻿jest.mock('../src/config/db', () => ({
+jest.mock('../src/config/db', () => ({
     query: jest.fn()
 }));
 
@@ -116,6 +116,40 @@ test('marks a heartbeat monitor DOWN after the interval and grace expire', async
     );
 });
 
+test('respects a custom 180-second grace period before the deadline', async () => {
+    currentLastSeenAt = null;
+    db.query.mockResolvedValueOnce({ rows: [{ last_seen_at: null }] });
+
+    const customMonitor = monitor(804, 100000);
+    customMonitor.heartbeat_grace_seconds = 180;
+
+    const result = await checkMonitor(customMonitor);
+
+    expect(result).toBeNull();
+    expect(evaluateMonitorQuorum).not.toHaveBeenCalled();
+    expect(processCheckOutcome).not.toHaveBeenCalled();
+});
+
+test('marks DOWN after a custom 180-second grace period expires', async () => {
+    currentLastSeenAt = null;
+    setupPersistence({ previousStatus: 'UP', confirmedStatus: 'UP', failures: 0 });
+
+    const customMonitor = monitor(805, 215000);
+    customMonitor.heartbeat_grace_seconds = 180;
+
+    const result = await checkMonitor(customMonitor);
+
+    expect(result).toMatchObject({ status: 'DOWN' });
+    expect(db.query).toHaveBeenCalledWith(
+        expect.stringContaining('INSERT INTO monitor_results'),
+        expect.arrayContaining([805, 'DOWN', null, null, 'HEARTBEAT_MISSED'])
+    );
+    expect(processCheckOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 805 }),
+        expect.objectContaining({ status: 'DOWN' }),
+        'DOWN'
+    );
+});
 test('records UP and emits recovery after a heartbeat resumes', async () => {
     currentLastSeenAt = new Date(Date.now() - 20000).toISOString();
     setupPersistence({ previousStatus: 'DOWN', confirmedStatus: 'DOWN', failures: 2 });

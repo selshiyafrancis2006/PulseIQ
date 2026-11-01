@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -283,6 +283,9 @@ ALTER TABLE monitors
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS dns_record_type VARCHAR(10) NOT NULL DEFAULT 'A';
 
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS dns_expected_values TEXT[] NOT NULL DEFAULT '{}';
+
 -- Replace the existing constraint so DNS monitors are permitted.
 ALTER TABLE monitors
   DROP CONSTRAINT IF EXISTS monitors_monitor_type_check;
@@ -291,6 +294,22 @@ ALTER TABLE monitors
   ADD CONSTRAINT monitors_monitor_type_check
   CHECK (monitor_type IN ('HTTP', 'TCP', 'DNS', 'HEARTBEAT'));
 
+-- Configurable additional grace period for heartbeat monitors.
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS heartbeat_grace_seconds INTEGER NOT NULL DEFAULT 60;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'monitors_heartbeat_grace_seconds_check'
+      AND conrelid = 'monitors'::regclass
+  ) THEN
+    ALTER TABLE monitors
+      ADD CONSTRAINT monitors_heartbeat_grace_seconds_check
+      CHECK (heartbeat_grace_seconds BETWEEN 0 AND 86400);
+  END IF;
+END $$;
 -- Heartbeat monitors: store only token hashes, never raw check-in tokens.
 CREATE TABLE IF NOT EXISTS heartbeat_monitor_secrets (
   monitor_id INTEGER PRIMARY KEY
@@ -469,6 +488,26 @@ CREATE TABLE IF NOT EXISTS notification_channels (
 
 CREATE INDEX IF NOT EXISTS idx_notification_channels_user
   ON notification_channels (user_id);
+
+CREATE TABLE IF NOT EXISTS monitor_notification_settings (
+    monitor_id INTEGER PRIMARY KEY
+        REFERENCES monitors(id) ON DELETE CASCADE,
+    routing_mode VARCHAR(10) NOT NULL DEFAULT 'ALL'
+        CHECK (routing_mode IN ('ALL', 'SELECTED')),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS monitor_notification_channels (
+    monitor_id INTEGER NOT NULL
+        REFERENCES monitors(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL
+        REFERENCES notification_channels(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (monitor_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_notification_channels_channel
+    ON monitor_notification_channels (channel_id);
 
   -- Per-monitor notification state (dedup + flap detection).
 CREATE TABLE IF NOT EXISTS monitor_alert_state (

@@ -30,6 +30,7 @@ const apmRoutes = require('./routes/apm.routes');
 const anomalyRoutes = require('./routes/anomaly.routes');
 const dashboardRoutes = require('./routes/dashboard.routes');
 const agentRateLimit = require('./middleware/agentRateLimit.middleware');
+const { publicStatusLimiter } = require('./middleware/publicRateLimit.middleware');
 const notificationChannelRoutes = require('./routes/notificationChannels.routes');
 const maintenanceWindowRoutes = require('./routes/maintenanceWindows.routes');
 const publicStatusPageRoutes = require('./routes/publicStatusPage.routes');
@@ -59,7 +60,7 @@ app.use(loggerMiddleware);
 // Routes
 // Public â€” no auth required
 app.use('/api/auth', authRoutes);
-app.use('/api/public/status', publicStatusPageRoutes);
+app.use('/api/public/status', publicStatusLimiter, publicStatusPageRoutes);
 app.use('/api/heartbeat', heartbeatRoutes);
 
 // Protected â€” requires a valid JWT

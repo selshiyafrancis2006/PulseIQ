@@ -19,12 +19,29 @@ const EMPTY_FORM = {
   tcp_port: 443,
   dns_hostname: '',
   dns_record_type: 'A',
+  dnsExpectedValuesText: '',
   tags: '',
   interval_seconds: 30,
   renotify_minutes: 60,
+  failure_threshold: 3,
+  heartbeat_grace_seconds: 60,
+  method: 'GET',
+  headersText: '{}',
+  body: '',
+  timeout_ms: 10000,
+  expected_status_codes: '',
+  expected_keyword: '',
+  max_response_time_ms: '',
 };
 
-const NUMERIC_FIELDS = ['interval_seconds', 'renotify_minutes', 'tcp_port'];
+const NUMERIC_FIELDS = [
+  'interval_seconds',
+  'renotify_minutes',
+  'tcp_port',
+  'failure_threshold',
+  'heartbeat_grace_seconds',
+  'timeout_ms',
+];
 
 function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
   const [form, setForm] = useState(() => monitor ? {
@@ -35,9 +52,26 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
     tcp_port: monitor.tcp_port ?? 443,
     dns_hostname: monitor.dns_hostname || '',
     dns_record_type: monitor.dns_record_type || 'A',
+    dnsExpectedValuesText: Array.isArray(monitor.dns_expected_values) ? monitor.dns_expected_values.join('\n') : '',
     tags: Array.isArray(monitor.tags) ? monitor.tags.join(', ') : '',
     interval_seconds: monitor.interval_seconds ?? 30,
     renotify_minutes: monitor.renotify_minutes ?? 60,
+    failure_threshold: monitor.failure_threshold ?? 3,
+    heartbeat_grace_seconds: monitor.heartbeat_grace_seconds ?? 60,
+    method: monitor.method || 'GET',
+    headersText: JSON.stringify(
+      monitor.headers && typeof monitor.headers === 'object' &&
+      !Array.isArray(monitor.headers) ? monitor.headers : {},
+      null,
+      2
+    ),
+    body: monitor.body ?? '',
+    timeout_ms: monitor.timeout_ms ?? 10000,
+    expected_status_codes: Array.isArray(monitor.expected_status_codes)
+      ? monitor.expected_status_codes.join(', ')
+      : '',
+    expected_keyword: monitor.expected_keyword ?? '',
+    max_response_time_ms: monitor.max_response_time_ms ?? '',
   } : { ...EMPTY_FORM });
   const [error, setError] = useState('');
 
@@ -129,6 +163,133 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
       return;
     }
 
+    if (!Number.isInteger(form.failure_threshold) ||
+        form.failure_threshold < 1 || form.failure_threshold > 10) {
+      setError('Failure threshold must be an integer between 1 and 10.');
+      return;
+    }
+
+    if (monitorType === 'HEARTBEAT' &&
+        (!Number.isInteger(form.heartbeat_grace_seconds) ||
+          form.heartbeat_grace_seconds < 0 || form.heartbeat_grace_seconds > 86400)) {
+      setError('Heartbeat grace period must be an integer between 0 and 86400 seconds.');
+      return;
+    }
+
+    let httpHeaders = {};
+
+    if (monitorType === 'HTTP') {
+      const allowedMethods = [
+        'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS',
+      ];
+
+      if (!allowedMethods.includes(form.method)) {
+        setError('Choose a supported HTTP method.');
+        return;
+      }
+
+      try {
+        httpHeaders = JSON.parse(form.headersText || '{}');
+      } catch {
+        setError('Headers must contain valid JSON.');
+        return;
+      }
+
+      if (
+        !httpHeaders ||
+        typeof httpHeaders !== 'object' ||
+        Array.isArray(httpHeaders)
+      ) {
+        setError('Headers must be a JSON object.');
+        return;
+      }
+
+      const headerEntries = Object.entries(httpHeaders);
+      const forbiddenHeaders = new Set([
+        'host', 'content-length', 'connection', 'transfer-encoding',
+        'proxy-authorization', 'proxy-connection', 'upgrade',
+      ]);
+      const headerNamePattern = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+      if (headerEntries.length > 50) {
+        setError('Use no more than 50 HTTP headers.');
+        return;
+      }
+
+      for (const [key, value] of headerEntries) {
+        if (
+          !key ||
+          key.length > 100 ||
+          !headerNamePattern.test(key) ||
+          forbiddenHeaders.has(key.toLowerCase())
+        ) {
+          setError(`Invalid or restricted HTTP header name: ${key}`);
+          return;
+        }
+
+        if (
+          typeof value !== 'string' ||
+          value.length > 8192 ||
+          /[\r\n]/.test(value)
+        ) {
+          setError(`Invalid value for HTTP header: ${key}`);
+          return;
+        }
+      }
+
+      if (
+        !Number.isInteger(form.timeout_ms) ||
+        form.timeout_ms < 1 ||
+        form.timeout_ms > 30000
+      ) {
+        setError('HTTP timeout must be between 1 and 30000 milliseconds.');
+        return;
+      }
+
+      if (new TextEncoder().encode(form.body).length > 1000000) {
+        setError('HTTP request body cannot exceed 1 MB.');
+        return;
+      }
+
+      const statusCodesText = form.expected_status_codes.trim();
+      if (statusCodesText) {
+        const statusCodes = statusCodesText.split(',').map(
+          (code) => Number(code.trim())
+        );
+
+        if (
+          statusCodes.length > 20 ||
+          statusCodes.some(
+            (code) => !Number.isInteger(code) || code < 100 || code > 599
+          ) ||
+          new Set(statusCodes).size !== statusCodes.length
+        ) {
+          setError('Expected status codes must be 1–20 unique codes between 100 and 599.');
+          return;
+        }
+      }
+
+      if (
+        form.expected_keyword.trim().length > 500
+      ) {
+        setError('Expected keyword cannot exceed 500 characters.');
+        return;
+      }
+
+      if (form.max_response_time_ms !== '') {
+        const maxResponseTime = Number(form.max_response_time_ms);
+
+        if (
+          !Number.isInteger(maxResponseTime) ||
+          maxResponseTime < 1 ||
+          maxResponseTime > 30000
+        ) {
+          setError('Maximum response time must be between 1 and 30000 milliseconds.');
+          return;
+        }
+      }
+    }
+
     const tags = form.tags.split(',').map((tag) => tag.trim()).filter(Boolean);
     if (tags.length > 20 || tags.some((tag) => tag.length > 50)) {
       setError('Use at most 20 tags, each up to 50 characters.');
@@ -141,16 +302,36 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
       tags: [...new Set(tags)],
       interval_seconds: form.interval_seconds,
       renotify_minutes: form.renotify_minutes,
+      failure_threshold: form.failure_threshold,
     };
 
     if (monitorType === 'HTTP') {
+      const statusCodesText = form.expected_status_codes.trim();
+
       payload.url = url;
+      payload.method = form.method;
+      payload.headers = httpHeaders;
+      payload.body = form.body === '' ? null : form.body;
+      payload.timeout_ms = form.timeout_ms;
+      payload.expected_status_codes = statusCodesText
+        ? statusCodesText.split(',').map((code) => Number(code.trim()))
+        : null;
+      payload.expected_keyword = form.expected_keyword.trim() || null;
+      payload.max_response_time_ms = form.max_response_time_ms === ''
+        ? null
+        : Number(form.max_response_time_ms);
     } else if (monitorType === 'TCP') {
       payload.tcp_host = tcpHost;
       payload.tcp_port = form.tcp_port;
     } else if (monitorType === 'DNS') {
       payload.dns_hostname = dnsHostname;
       payload.dns_record_type = form.dns_record_type;
+      payload.dns_expected_values = form.dnsExpectedValuesText
+        .split(/\r?\n/)
+        .map((value) => value.trim())
+        .filter(Boolean);
+    } else if (monitorType === 'HEARTBEAT') {
+      payload.heartbeat_grace_seconds = form.heartbeat_grace_seconds;
     }
 
     try {
@@ -207,24 +388,176 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
         </div>
 
         {form.monitor_type === 'HEARTBEAT' ? (
-          <div className="rounded-lg border border-[#303030] bg-[#111] p-3 text-sm text-gray-300">
-            Create this monitor, then configure your service or scheduled job to send a check-in using its generated token. If a check-in is missed beyond the configured deadline, the monitor will go DOWN.
-          </div>
+          <>
+            <div className="rounded-lg border border-[#303030] bg-[#111] p-3 text-sm text-gray-300">
+              Create this monitor, then configure your service or scheduled job to send a check-in using its generated token. If a check-in is missed beyond the configured deadline, the monitor will go DOWN.
+            </div>
+            <div>
+              <label className={labelClass} htmlFor="heartbeat-grace-seconds">
+                Heartbeat grace period (seconds)
+              </label>
+              <input
+                id="heartbeat-grace-seconds"
+                name="heartbeat_grace_seconds"
+                type="number"
+                min={0}
+                max={86400}
+                step={1}
+                value={form.heartbeat_grace_seconds}
+                onChange={handleChange}
+                required
+                className={inputClass}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Extra time allowed after the check-in interval before this monitor is marked DOWN. Set to 0 for no extra grace.
+              </p>
+            </div>
+          </>
         ) : form.monitor_type === 'HTTP' ? (
-          <div>
-            <label className={labelClass} htmlFor="monitor-url">URL</label>
-            <input
-              id="monitor-url"
-              name="url"
-              type="url"
-              value={form.url}
-              onChange={handleChange}
-              maxLength={500}
-              required
-              className={inputClass}
-              placeholder="https://example.com/health"
-            />
-          </div>
+          <>
+            <div>
+              <label className={labelClass} htmlFor="monitor-url">URL</label>
+              <input
+                id="monitor-url"
+                name="url"
+                type="url"
+                value={form.url}
+                onChange={handleChange}
+                maxLength={500}
+                required
+                className={inputClass}
+                placeholder="https://example.com/health"
+              />
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-method">HTTP method</label>
+              <select
+                id="monitor-method"
+                name="method"
+                value={form.method}
+                onChange={handleChange}
+                className={inputClass}
+              >
+                {['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'].map((method) => (
+                  <option key={method} value={method}>{method}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-headers">
+                Request headers (JSON)
+              </label>
+              <textarea
+                id="monitor-headers"
+                name="headersText"
+                value={form.headersText}
+                onChange={handleChange}
+                rows={4}
+                spellCheck={false}
+                className={inputClass}
+                placeholder={'{\n  "Authorization": "Bearer token"\n}'}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Optional JSON object. Maximum 50 headers.
+              </p>
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-body">
+                Request body
+              </label>
+              <textarea
+                id="monitor-body"
+                name="body"
+                value={form.body}
+                onChange={handleChange}
+                rows={4}
+                className={inputClass}
+                placeholder="Optional request body for POST, PUT or PATCH."
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Leave empty to send no request body. Maximum 1 MB.
+              </p>
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-timeout">
+                Request timeout (milliseconds)
+              </label>
+              <input
+                id="monitor-timeout"
+                name="timeout_ms"
+                type="number"
+                min={1}
+                max={30000}
+                step={1}
+                value={form.timeout_ms}
+                onChange={handleChange}
+                className={inputClass}
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Allowed range: 1–30000 milliseconds.
+              </p>
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-status-codes">
+                Expected status codes
+              </label>
+              <input
+                id="monitor-status-codes"
+                name="expected_status_codes"
+                value={form.expected_status_codes}
+                onChange={handleChange}
+                className={inputClass}
+                placeholder="200, 201, 204"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Comma-separated. Leave empty to accept the default 200–399 range.
+              </p>
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-keyword">
+                Expected response keyword
+              </label>
+              <input
+                id="monitor-keyword"
+                name="expected_keyword"
+                value={form.expected_keyword}
+                onChange={handleChange}
+                maxLength={500}
+                className={inputClass}
+                placeholder="healthy"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                The response body must contain this text, ignoring case.
+              </p>
+            </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-max-response">
+                Maximum response time (milliseconds)
+              </label>
+              <input
+                id="monitor-max-response"
+                name="max_response_time_ms"
+                type="number"
+                min={1}
+                max={30000}
+                step={1}
+                value={form.max_response_time_ms}
+                onChange={handleChange}
+                className={inputClass}
+                placeholder="No limit"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Leave empty for no response-time limit.
+              </p>
+            </div>
+          </>
         ) : form.monitor_type === 'TCP' ? (
           <>
             <div>
@@ -306,6 +639,25 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
                 <option value="NS">NS - Name server</option>
               </select>
             </div>
+
+            <div>
+              <label className={labelClass} htmlFor="monitor-dns-expected-values">
+                Expected DNS values (optional)
+              </label>
+              <textarea
+                id="monitor-dns-expected-values"
+                name="dnsExpectedValuesText"
+                value={form.dnsExpectedValuesText}
+                onChange={handleChange}
+                rows={4}
+                maxLength={20480}
+                className={inputClass}
+                placeholder="One expected value per line"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                Every listed value must appear in the DNS response. For MX, use priority followed by hostname (for example: 10 mail.example.com).
+              </p>
+            </div>
           </>
         )}
 
@@ -343,6 +695,27 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
           </select>
           <p className="mt-1 text-xs text-gray-500">
             Allowed range: 30-3600 seconds.
+          </p>
+        </div>
+
+        <div>
+          <label className={labelClass} htmlFor="monitor-failure-threshold">
+            Consecutive failures before DOWN
+          </label>
+          <input
+            id="monitor-failure-threshold"
+            name="failure_threshold"
+            type="number"
+            min={1}
+            max={10}
+            step={1}
+            value={form.failure_threshold}
+            onChange={handleChange}
+            required
+            className={inputClass}
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            The monitor is marked DOWN only after this many consecutive failed checks (1–10).
           </p>
         </div>
 

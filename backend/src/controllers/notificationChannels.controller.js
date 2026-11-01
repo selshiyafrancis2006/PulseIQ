@@ -1,6 +1,7 @@
 ﻿const db = require('../config/db');
 const { validatePublicHttpUrl } = require('../services/urlSecurity.service');
 const { sendToChannel } = require('../services/notification.service');
+const { encryptUrl, decryptUrl } = require('../services/notificationChannelCrypto.service');
 
 const CHANNEL_TYPES = ['slack', 'webhook', 'email'];
 const MAX_CHANNELS_PER_USER = 10;
@@ -22,7 +23,7 @@ function maskEmail(value) {
 // Webhook URLs and email recipients are sensitive.
 // Never return their full values from the API.
 function toPublic(row) {
-    const url = row.url || '';
+    const url = row.type !== 'email' && row.url ? decryptUrl(row.url) : '';
     let host = '';
 
     try {
@@ -124,7 +125,7 @@ const createChannel = async (req, res) => {
         } else {
             const urlError = await validateChannelUrl(type, url);
             if (urlError) return res.status(400).json({ message: urlError });
-            channelUrl = url.trim();
+            channelUrl = encryptUrl(url.trim());
         }
 
         const count = await db.query(
@@ -233,7 +234,12 @@ const testChannel = async (req, res) => {
         }
 
         try {
-            await sendToChannel(result.rows[0], {
+            const channel = result.rows[0];
+            const deliveryChannel = channel.type === 'email'
+                ? channel
+                : { ...channel, url: decryptUrl(channel.url) };
+
+            await sendToChannel(deliveryChannel, {
                 type: 'TEST',
                 monitor: { id: 0, name: 'Test monitor', url: 'https://example.com' },
                 message: 'This is a test notification from PulseIQ',

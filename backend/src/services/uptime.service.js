@@ -1,4 +1,4 @@
-﻿const db = require('../config/db');
+const db = require('../config/db');
 const { checkHttp } = require('./httpCheck.service');
 const { checkTcp } = require('./tcpCheck.service');
 const { checkDns } = require('./dnsCheck.service');
@@ -279,7 +279,9 @@ async function checkMonitor(monitor) {
                 errorMessage: null
             };
         } else if (monitor.monitor_type === 'TCP') {
-            const checked = await checkTcp(monitor);
+            const checked = await checkTcp(monitor, {
+                timeoutMs: monitor.timeout_ms ?? 10000
+            });
 
             result = {
                 status: 'UP',
@@ -378,6 +380,8 @@ async function checkMonitor(monitor) {
             status: 'DOWN',
             responseTime: null,
             statusCode: null,
+            certificateExpiresAt: error.certificateExpiresAt ?? null,
+            certificateDaysRemaining: error.certificateDaysRemaining ?? null,
             errorType: classified.errorType,
             errorMessage: classified.errorMessage
         };

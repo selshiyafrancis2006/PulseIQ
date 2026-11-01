@@ -1,10 +1,11 @@
 ﻿const express = require('express');
 const crypto = require('crypto');
 const db = require('../config/db');
+const { heartbeatLimiters } = require('../middleware/publicRateLimit.middleware');
 
 const router = express.Router();
 
-router.post('/:monitorId', async (req, res) => {
+router.post('/:monitorId', heartbeatLimiters, async (req, res) => {
     const { monitorId } = req.params;
     const token = req.get('x-heartbeat-token');
 

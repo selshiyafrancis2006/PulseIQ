@@ -1,6 +1,8 @@
 const axios = require('axios');
 const http = require('node:http');
 const https = require('node:https');
+const tls = require('node:tls');
+const net = require('node:net');
 const { validateMonitorHttpUrl } = require('./urlSecurity.service');
 
 const DEFAULT_TIMEOUT_MS = 10_000;
@@ -114,6 +116,66 @@ const agent = new Agent({
     return agent;
 }
 
+function inspectPeerCertificate(url, validatedAddress, timeoutMs) {
+    return new Promise((resolve) => {
+        let socket;
+        let settled = false;
+
+        const finish = (metadata = null) => {
+            if (settled) return;
+            settled = true;
+            if (socket) socket.destroy();
+            resolve(metadata);
+        };
+
+        try {
+            const port = Number(url.port || 443);
+            const servername = net.isIP(url.hostname)
+                ? undefined
+                : url.hostname;
+
+            // Certificate inspection only: no HTTP request or payload.
+            // The actual Axios request still enforces normal TLS verification.
+            socket = tls.connect({
+                host: validatedAddress,
+                port,
+                ...(servername ? { servername } : {}),
+                rejectUnauthorized: false
+            });
+
+            socket.setTimeout(Math.min(timeoutMs, 3000), () => finish());
+
+            socket.once('secureConnect', () => {
+                try {
+                    const certificate = socket.getPeerCertificate();
+                    if (!certificate?.valid_to) {
+                        finish();
+                        return;
+                    }
+
+                    const expiryMs = Date.parse(certificate.valid_to);
+                    if (!Number.isFinite(expiryMs)) {
+                        finish();
+                        return;
+                    }
+
+                    finish({
+                        certificateExpiresAt: new Date(expiryMs).toISOString(),
+                        certificateDaysRemaining: Math.floor(
+                            (expiryMs - Date.now()) / 86_400_000
+                        )
+                    });
+                } catch {
+                    finish();
+                }
+            });
+
+            socket.once('error', () => finish());
+        } catch {
+            finish();
+        }
+    });
+}
 async function checkHttp(monitor, options = {}) {
     const validateUrl =
         options.validateUrl || validateMonitorHttpUrl;
@@ -200,6 +262,36 @@ const agent = createPinnedAgent(
                     clarifyTimeoutError: true
                 }
             });
+        } catch (error) {
+            const tlsErrorCode = error?.code || error?.cause?.code;
+            const certificateVerificationErrors = new Set([
+                'DEPTH_ZERO_SELF_SIGNED_CERT',
+                'SELF_SIGNED_CERT_IN_CHAIN',
+                'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+                'UNABLE_TO_GET_ISSUER_CERT',
+                'UNABLE_TO_GET_ISSUER_CERT_LOCALLY',
+                'CERT_HAS_EXPIRED',
+                'CERT_NOT_YET_VALID',
+                'CERT_UNTRUSTED',
+                'ERR_TLS_CERT_ALTNAME_INVALID'
+            ]);
+
+            if (
+                currentUrl.protocol === 'https:' &&
+                certificateVerificationErrors.has(tlsErrorCode)
+            ) {
+                const certificateMetadata = await inspectPeerCertificate(
+                    currentUrl,
+                    validatedAddress,
+                    timeoutMs
+                );
+
+                if (certificateMetadata && error && typeof error === 'object') {
+                    Object.assign(error, certificateMetadata);
+                }
+            }
+
+            throw error;
         } finally {
             agent.destroy();
 

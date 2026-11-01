@@ -283,6 +283,110 @@ test.each([
 
     expect(response.status).toBe(400);
 });
+test.each([
+    ['below minimum', 999],
+    ['above maximum', 30001],
+    ['fractional', 1500.5],
+    ['string', '5000']
+])('rejects TCP timeout on creation when it is %s', async (_case, timeoutMs) => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'tcp-invalid-timeout',
+            monitor_type: 'TCP',
+            tcp_host: '1.1.1.1',
+            tcp_port: 443,
+            timeout_ms: timeoutMs
+        });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['below minimum', 999],
+    ['above maximum', 30001],
+    ['fractional', 1500.5],
+    ['string', '5000']
+])('rejects TCP timeout on update when it is %s', async (_case, timeoutMs) => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'tcp-invalid-timeout-update',
+            monitor_type: 'TCP',
+            tcp_host: '1.1.1.1',
+            tcp_port: 443
+        });
+
+    expect(created.status).toBe(201);
+
+    const response = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ timeout_ms: timeoutMs });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['DNS', {
+        monitor_type: 'DNS',
+        dns_hostname: 'example.com',
+        dns_record_type: 'A'
+    }],
+    ['HEARTBEAT', {
+        monitor_type: 'HEARTBEAT'
+    }]
+])('rejects timeout_ms when creating a %s monitor', async (_type, fields) => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'unsupported-timeout-create',
+            ...fields,
+            timeout_ms: 5000
+        });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['DNS', {
+        monitor_type: 'DNS',
+        dns_hostname: 'example.com',
+        dns_record_type: 'A'
+    }],
+    ['HEARTBEAT', {
+        monitor_type: 'HEARTBEAT'
+    }]
+])('rejects timeout_ms when updating a %s monitor', async (_type, fields) => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'unsupported-timeout-update',
+            ...fields
+        });
+
+    expect(created.status).toBe(201);
+
+    const response = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ timeout_ms: 5000 });
+
+    expect(response.status).toBe(400);
+});
+
 test('owner can update monitor fields', async () => {
     const user = await createUser();
     const monitor = await createMonitor(user.token);
@@ -449,6 +553,7 @@ test('owner can create a TCP monitor with a validated public IP', async () => {
             monitor_type: 'TCP',
             tcp_host: '1.1.1.1',
             tcp_port: 443,
+            timeout_ms: 5000,
             interval_seconds: 60,
             tags: ['env:test']
         });
@@ -460,7 +565,8 @@ test('owner can create a TCP monitor with a validated public IP', async () => {
         tcp_host: '1.1.1.1',
         tcp_port: 443,
         url: 'tcp://1.1.1.1:443',
-        interval_seconds: 60
+        interval_seconds: 60,
+        timeout_ms: 5000,
     });
 });
 
@@ -536,14 +642,15 @@ test('owner can update a TCP monitor target', async () => {
     const response = await request(app)
         .patch(`/api/monitors/${created.body.id}`)
         .set(authHeader(user.token))
-        .send({ tcp_host: '8.8.8.8', tcp_port: 8443 });
+        .send({ tcp_host: '8.8.8.8', tcp_port: 8443, timeout_ms: 8000 });
 
     expect(response.status).toBe(200);
     expect(response.body).toMatchObject({
         monitor_type: 'TCP',
         tcp_host: '8.8.8.8',
         tcp_port: 8443,
-        url: 'tcp://8.8.8.8:8443'
+        url: 'tcp://8.8.8.8:8443',
+        timeout_ms: 8000,
     });
 });
 
@@ -636,6 +743,124 @@ test('owner can create a DNS monitor with a valid hostname and record type', asy
     });
 });
 
+test('DNS monitor creation stores expected values', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'dns-expected-create-test',
+            monitor_type: 'DNS',
+            dns_hostname: 'example.com',
+            dns_record_type: 'A',
+            dns_expected_values: ['93.184.216.34', '1.2.3.4'],
+            interval_seconds: 60
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body.dns_expected_values).toEqual([
+        '93.184.216.34',
+        '1.2.3.4'
+    ]);
+});
+
+test('DNS monitor creation rejects invalid expected values', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'dns-invalid-expected-test',
+            monitor_type: 'DNS',
+            dns_hostname: 'example.com',
+            dns_record_type: 'A',
+            dns_expected_values: ['not-an-ip-address'],
+            interval_seconds: 60
+        });
+
+    expect(response.status).toBe(400);
+});
+
+test('DNS monitor update stores expected values and preserves them when omitted', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'dns-expected-update-test',
+            monitor_type: 'DNS',
+            dns_hostname: 'example.com',
+            dns_record_type: 'A',
+            dns_expected_values: ['93.184.216.34'],
+            interval_seconds: 60
+        });
+
+    expect(created.status).toBe(201);
+
+    const updated = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({
+            dns_expected_values: ['1.1.1.1', '8.8.8.8']
+        });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body.dns_expected_values).toEqual([
+        '1.1.1.1',
+        '8.8.8.8'
+    ]);
+
+    const preserved = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ dns_hostname: 'example.org' });
+
+    expect(preserved.status).toBe(200);
+    expect(preserved.body.dns_expected_values).toEqual([
+        '1.1.1.1',
+        '8.8.8.8'
+    ]);
+});
+
+test('DNS monitor rejects retained expected values incompatible with a changed record type', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'dns-record-type-change-test',
+            monitor_type: 'DNS',
+            dns_hostname: 'example.com',
+            dns_record_type: 'A',
+            dns_expected_values: ['93.184.216.34'],
+            interval_seconds: 60
+        });
+
+    expect(created.status).toBe(201);
+
+    const response = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ dns_record_type: 'AAAA' });
+
+    expect(response.status).toBe(400);
+});
+
+test('HTTP monitor update rejects DNS expected values', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token);
+
+    const response = await request(app)
+        .patch(`/api/monitors/${monitor.id}`)
+        .set(authHeader(user.token))
+        .send({ dns_expected_values: ['93.184.216.34'] });
+
+    expect(response.status).toBe(400);
+});
 test('DNS monitor creation rejects localhost', async () => {
     const user = await createUser();
 
@@ -937,4 +1162,108 @@ test('heartbeat token rotation cannot be performed by another user', async () =>
         .set('x-heartbeat-token', originalToken);
 
     expect(checkIn.status).toBe(202);
+});
+
+
+test('heartbeat monitor stores the default grace period', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'heartbeat-default-grace',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body.heartbeat_grace_seconds).toBe(60);
+});
+
+test('heartbeat monitor accepts a custom grace period', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'heartbeat-custom-grace',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60,
+            heartbeat_grace_seconds: 180
+        });
+
+    expect(response.status).toBe(201);
+    expect(response.body.heartbeat_grace_seconds).toBe(180);
+});
+
+test.each([-1, 1.5, 86401])(
+    'rejects invalid heartbeat grace period: %s',
+    async (graceSeconds) => {
+        const user = await createUser();
+
+        const response = await request(app)
+            .post('/api/monitors')
+            .set(authHeader(user.token))
+            .send({
+                name: 'heartbeat-invalid-grace',
+                monitor_type: 'HEARTBEAT',
+                interval_seconds: 60,
+                heartbeat_grace_seconds: graceSeconds
+            });
+
+        expect(response.status).toBe(400);
+    }
+);
+
+test('updates heartbeat grace period without changing its URL or token', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'heartbeat-update-grace',
+            monitor_type: 'HEARTBEAT',
+            interval_seconds: 60
+        });
+
+    expect(created.status).toBe(201);
+
+    const updated = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ heartbeat_grace_seconds: 240 });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body.heartbeat_grace_seconds).toBe(240);
+    expect(updated.body.url).toBe(created.body.url);
+
+    const checkin = await request(app)
+        .post(`/api/heartbeat/${created.body.id}`)
+        .set('x-heartbeat-token', created.body.heartbeat_token);
+
+    expect(checkin.status).toBe(202);
+});
+
+test('rejects heartbeat grace period on non-heartbeat monitors', async () => {
+    const user = await createUser();
+
+    const created = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'http-grace-rejection',
+            url: 'https://example.com'
+        });
+
+    expect(created.status).toBe(201);
+
+    const updated = await request(app)
+        .patch(`/api/monitors/${created.body.id}`)
+        .set(authHeader(user.token))
+        .send({ heartbeat_grace_seconds: 120 });
+
+    expect(updated.status).toBe(400);
 });

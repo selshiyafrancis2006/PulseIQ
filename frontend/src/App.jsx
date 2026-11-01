@@ -27,6 +27,7 @@ import DashboardBuilder from './pages/DashboardBuilder'
 import StatusPageSettings from './pages/StatusPageSettings'
 import PublicStatusPage from './pages/PublicStatusPage'
 import ApiTests from './pages/ApiTests'
+import MaintenanceWindows from './pages/MaintenanceWindows'
 
 
 const ProtectedRoute = ({ children }) => {
@@ -66,6 +67,18 @@ export default function App() {
     <ProtectedRoute>
       <DashboardLayout>
         <ApiTests />
+      </DashboardLayout>
+    </ProtectedRoute>
+  }
+/>
+
+
+<Route
+  path="/maintenance"
+  element={
+    <ProtectedRoute>
+      <DashboardLayout>
+        <MaintenanceWindows />
       </DashboardLayout>
     </ProtectedRoute>
   }

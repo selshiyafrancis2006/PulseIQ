@@ -1,4 +1,5 @@
 const db = require('../config/db');
+const { getMaxMonitorsPerUser } = require('../config/limits');
 const { calculateSlo } = require('../utils/slo');
 const { validateMonitorTcpTarget } = require('../services/urlSecurity.service');
 const { validateDnsTarget } = require('../services/dnsCheck.service');
@@ -65,6 +66,69 @@ function validateFailureThreshold(value) {
 const FAILURE_THRESHOLD_ERROR =
     'failure_threshold must be an integer between 1 and 10';
 
+function validateHeartbeatGraceSeconds(value) {
+    return Number.isInteger(value) && value >= 0 && value <= 86400;
+}
+
+const HEARTBEAT_GRACE_ERROR =
+    'heartbeat_grace_seconds must be an integer between 0 and 86400';
+
+const DNS_EXPECTED_VALUES_ERROR =
+    'dns_expected_values must be an array of at most 20 valid, non-empty strings (maximum 1024 characters each)';
+
+function isValidDnsHostname(value) {
+    if (typeof value !== 'string' || value.length > 253 || !value.length) {
+        return false;
+    }
+
+    const hostname = value.replace(/\.$/, '');
+
+    return hostname.length > 0 &&
+        hostname.split('.').every(label =>
+            label.length <= 63 &&
+            /^[a-zA-Z0-9](?:[a-zA-Z0-9-]*[a-zA-Z0-9])?$/.test(label)
+        );
+}
+
+function validateDnsExpectedValues(recordType, values) {
+    if (
+        !Array.isArray(values) ||
+        values.length > 20 ||
+        values.some(value =>
+            typeof value !== 'string' ||
+            !value.trim() ||
+            value.trim().length > 1024
+        )
+    ) {
+        return false;
+    }
+
+    const cleaned = values.map(value => value.trim());
+
+    if (new Set(cleaned).size !== cleaned.length) return false;
+
+    return cleaned.every(value => {
+        if (recordType === 'A') return require('node:net').isIP(value) === 4;
+        if (recordType === 'AAAA') return require('node:net').isIP(value) === 6;
+
+        if (recordType === 'CNAME' || recordType === 'NS') {
+            return isValidDnsHostname(value);
+        }
+
+        if (recordType === 'MX') {
+            const match = value.match(/^(\d{1,5})\s+(.+)$/);
+            return Boolean(
+                match &&
+                Number(match[1]) <= 65535 &&
+                isValidDnsHostname(match[2].trim())
+            );
+        }
+
+        if (recordType === 'TXT') return true;
+
+        return false;
+    });
+}
 
 const HTTP_METHODS = new Set([
     'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'
@@ -126,6 +190,10 @@ function validateTimeout(value) {
     return Number.isInteger(value) && value >= 1 && value <= 30000;
 }
 
+function validateTcpTimeout(value) {
+    return Number.isInteger(value) && value >= 1000 && value <= 30000;
+}
+
 
 function validateExpectedStatusCodes(value) {
     return value === null || (
@@ -174,6 +242,7 @@ const {
     tcp_port,
     dns_hostname,
     dns_record_type = 'A',
+    dns_expected_values = [],
     tags,
     interval_seconds = 30,
     renotify_minutes = 60,
@@ -184,7 +253,8 @@ const {
     timeout_ms = 10000,
     expected_status_codes = null,
     expected_keyword = null,
-    max_response_time_ms = null
+    max_response_time_ms = null,
+    heartbeat_grace_seconds = 60
 } = body;
 
 
@@ -211,18 +281,49 @@ const {
             return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
         }
 
+        if (
+            monitor_type === 'HEARTBEAT' &&
+            !validateHeartbeatGraceSeconds(heartbeat_grace_seconds)
+        ) {
+            return res.status(400).json({ message: HEARTBEAT_GRACE_ERROR });
+        }
 
-if (monitor_type !== 'HTTP') {
-    const hasHttpSettings = [
-        'method', 'headers', 'body', 'timeout_ms',
-        'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
-    ].some(key => Object.hasOwn(body, key));
+        if (
+            monitor_type !== 'HEARTBEAT' &&
+            Object.hasOwn(body, 'heartbeat_grace_seconds')
+        ) {
+            return res.status(400).json({
+                message: 'heartbeat_grace_seconds is only supported for HEARTBEAT monitors'
+            });
+        }
 
-    if (hasHttpSettings) {
-        return res.status(400).json({
-            message: HTTP_SETTINGS_ERROR
-        });
-    }
+if (monitor_type !== 'DNS' && Object.hasOwn(body, 'dns_expected_values')) {
+    return res.status(400).json({
+        message: 'dns_expected_values is only supported for DNS monitors'
+    });
+}
+
+const hasHttpOnlySettings = [
+    'method', 'headers', 'body',
+    'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
+].some(key => Object.hasOwn(body, key));
+
+if (monitor_type !== 'HTTP' && hasHttpOnlySettings) {
+    return res.status(400).json({
+        message: HTTP_SETTINGS_ERROR
+    });
+}
+
+if (!['HTTP', 'TCP'].includes(monitor_type) && Object.hasOwn(body, 'timeout_ms')) {
+    return res.status(400).json({
+        message: HTTP_SETTINGS_ERROR
+    });
+}
+
+if (monitor_type === 'TCP' && !validateTcpTimeout(timeout_ms)) {
+    return res.status(400).json({
+        message: 'timeout_ms must be an integer between 1000 and 30000 for TCP monitors'
+    });
 }
 
 if (monitor_type === 'HTTP') {
@@ -305,6 +406,12 @@ if (monitor_type === 'HTTP') {
             storedDnsHost = target.hostname;
             storedDnsRecordType = target.recordType;
 
+            if (!validateDnsExpectedValues(storedDnsRecordType, dns_expected_values)) {
+                return res.status(400).json({
+                    message: DNS_EXPECTED_VALUES_ERROR
+                });
+            }
+
             // url is NOT NULL for legacy schema compatibility.
             // DNS checks use dns_hostname/dns_record_type, never this display value.
             storedUrl = `dns://${storedDnsHost}/${storedDnsRecordType}`;
@@ -326,17 +433,43 @@ if (monitor_type === 'HTTP') {
                 .update(heartbeatToken).digest('hex')
             : null;
 
-        const result = await db.query(
+        // The limit check and the insert share one transaction, guarded by a
+        // per-user advisory lock, so parallel requests cannot exceed the cap.
+        const maxMonitors = getMaxMonitorsPerUser();
+        const client = await db.connect();
 
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                'SELECT pg_advisory_xact_lock(7001, $1::int)',
+                [req.user.id]
+            );
+
+            const existing = await client.query(
+                'SELECT COUNT(*)::int AS total FROM monitors WHERE user_id = $1',
+                [req.user.id]
+            );
+
+            if (existing.rows[0].total >= maxMonitors) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({
+                    message:
+                        `Monitor limit reached (${maxMonitors}). ` +
+                        'Delete a monitor you no longer need to add another.'
+                });
+            }
+
+            const result = await client.query(
 `INSERT INTO monitors
     (name, url, user_id, tags, interval_seconds,
      renotify_minutes, failure_threshold, monitor_type,
      tcp_host, tcp_port, dns_hostname, dns_record_type,
      method, headers, body, timeout_ms,
-     expected_status_codes, expected_keyword, max_response_time_ms)
+     expected_status_codes, expected_keyword, max_response_time_ms,
+     heartbeat_grace_seconds, dns_expected_values)
  VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
          $9, $10, $11, $12, $13, $14, $15, $16,
-         $17::jsonb, $18, $19)
+         $17::jsonb, $18, $19, $20, $21)
  RETURNING *`,
 [
     name.trim(),
@@ -354,37 +487,42 @@ if (monitor_type === 'HTTP') {
     monitor_type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
     monitor_type === 'HTTP' ? headers : {},
     monitor_type === 'HTTP' ? requestBody : null,
-    monitor_type === 'HTTP' ? timeout_ms : 10000,
+    ['HTTP', 'TCP'].includes(monitor_type) ? timeout_ms : 10000,
     monitor_type === 'HTTP' && expected_status_codes !== null
         ? JSON.stringify(expected_status_codes) : null,
     monitor_type === 'HTTP' && expected_keyword !== null
         ? expected_keyword.trim() : null,
-    monitor_type === 'HTTP' ? max_response_time_ms : null
+    monitor_type === 'HTTP' ? max_response_time_ms : null,
+    monitor_type === 'HEARTBEAT' ? heartbeat_grace_seconds : 60,
+    monitor_type === 'DNS' ? dns_expected_values.map(value => value.trim()) : []
 ]
+            );
 
-        );
-
-        if (heartbeatTokenHash) {
-            try {
-                await db.query(
+            if (heartbeatTokenHash) {
+                await client.query(
                     `INSERT INTO heartbeat_monitor_secrets
                         (monitor_id, token_hash)
                      VALUES ($1, $2)`,
                     [result.rows[0].id, heartbeatTokenHash]
                 );
-            } catch (secretError) {
-                await db.query(
-                    'DELETE FROM monitors WHERE id = $1 AND user_id = $2',
-                    [result.rows[0].id, req.user.id]
-                );
-                throw secretError;
             }
-        }
 
-        return res.status(201).json({
-            ...result.rows[0],
-            ...(heartbeatToken ? { heartbeat_token: heartbeatToken } : {})
-        });
+            await client.query('COMMIT');
+
+            return res.status(201).json({
+                ...result.rows[0],
+                ...(heartbeatToken ? { heartbeat_token: heartbeatToken } : {})
+            });
+        } catch (insertError) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback failed:', rollbackError);
+            }
+            throw insertError;
+        } finally {
+            client.release();
+        }
     } catch (error) {
         console.error(error);
         return res.status(500).json({
@@ -1197,10 +1335,11 @@ const updateMonitor = async (req, res) => {
         const body = req.body || {};
 const allowed = [
     'name', 'url', 'tcp_host', 'tcp_port',
-    'dns_hostname', 'dns_record_type', 'tags',
+    'dns_hostname', 'dns_record_type', 'dns_expected_values', 'tags',
     'interval_seconds', 'renotify_minutes', 'failure_threshold',
     'method', 'headers', 'body', 'timeout_ms',
-    'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
+    'expected_status_codes', 'expected_keyword', 'max_response_time_ms',
+    'heartbeat_grace_seconds'
 ];
         const keys = Object.keys(body);
 
@@ -1222,19 +1361,56 @@ const allowed = [
         const monitor = current.rows[0];
         const type = monitor.monitor_type || 'HTTP';
 
+        if (
+            type !== 'HEARTBEAT' &&
+            Object.hasOwn(body, 'heartbeat_grace_seconds')
+        ) {
+            return res.status(400).json({
+                message: 'heartbeat_grace_seconds is only supported for HEARTBEAT monitors'
+            });
+        }
+
+        const heartbeatGraceSeconds = Object.hasOwn(body, 'heartbeat_grace_seconds')
+            ? body.heartbeat_grace_seconds
+            : (monitor.heartbeat_grace_seconds ?? 60);
+
+        if (
+            type === 'HEARTBEAT' &&
+            !validateHeartbeatGraceSeconds(heartbeatGraceSeconds)
+        ) {
+            return res.status(400).json({ message: HEARTBEAT_GRACE_ERROR });
+        }
+
+        if (
+            type === 'HEARTBEAT' &&
+            ['url', 'tcp_host', 'tcp_port', 'dns_hostname', 'dns_record_type', 'dns_expected_values']
+                .some(key => Object.hasOwn(body, key))
+        ) {
+            return res.status(400).json({
+                message: 'Heartbeat monitors do not support URL, TCP, or DNS target fields'
+            });
+        }
+
         const hasTcpFields =
             Object.hasOwn(body, 'tcp_host') ||
             Object.hasOwn(body, 'tcp_port');
         const hasDnsFields =
             Object.hasOwn(body, 'dns_hostname') ||
-            Object.hasOwn(body, 'dns_record_type');
+            Object.hasOwn(body, 'dns_record_type') ||
+            Object.hasOwn(body, 'dns_expected_values');
 
-        const hasHttpSettings = [
-    'method', 'headers', 'body', 'timeout_ms',
+        const hasHttpOnlySettings = [
+    'method', 'headers', 'body',
     'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
 ].some(key => Object.hasOwn(body, key));
 
-if (type !== 'HTTP' && hasHttpSettings) {
+if (type !== 'HTTP' && hasHttpOnlySettings) {
+    return res.status(400).json({
+        message: HTTP_SETTINGS_ERROR
+    });
+}
+
+if (!['HTTP', 'TCP'].includes(type) && Object.hasOwn(body, 'timeout_ms')) {
     return res.status(400).json({
         message: HTTP_SETTINGS_ERROR
     });
@@ -1280,6 +1456,12 @@ const requestBody = Object.hasOwn(body, 'body')
     ? body.body : (monitor.body ?? null);
 const timeoutMs = Object.hasOwn(body, 'timeout_ms')
     ? body.timeout_ms : (monitor.timeout_ms ?? 10000);
+
+if (type === 'TCP' && !validateTcpTimeout(timeoutMs)) {
+    return res.status(400).json({
+        message: 'timeout_ms must be an integer between 1000 and 30000 for TCP monitors'
+    });
+}
 const expectedStatusCodes = Object.hasOwn(body, 'expected_status_codes')
     ? body.expected_status_codes : (monitor.expected_status_codes ?? null);
 const expectedKeyword = Object.hasOwn(body, 'expected_keyword')
@@ -1346,6 +1528,7 @@ if (type === 'HTTP') {
         let tcpPort = null;
         let dnsHostname = null;
         let dnsRecordType = 'A';
+        let dnsExpectedValues = [];
 
         if (type === 'TCP') {
             const requestedHost = Object.hasOwn(body, 'tcp_host')
@@ -1387,7 +1570,21 @@ if (type === 'HTTP') {
 
             dnsHostname = target.hostname;
             dnsRecordType = target.recordType;
+
+            dnsExpectedValues = Object.hasOwn(body, 'dns_expected_values')
+                ? body.dns_expected_values
+                : (monitor.dns_expected_values || []);
+
+            if (!validateDnsExpectedValues(dnsRecordType, dnsExpectedValues)) {
+                return res.status(400).json({
+                    message: DNS_EXPECTED_VALUES_ERROR
+                });
+            }
+
+            dnsExpectedValues = dnsExpectedValues.map(value => value.trim());
             url = `dns://${dnsHostname}/${dnsRecordType}`;
+        } else if (type === 'HEARTBEAT') {
+            url = monitor.url;
         } else {
             url = Object.hasOwn(body, 'url') ? body.url : monitor.url;
             const urlError = validateUrl(url);
@@ -1415,8 +1612,10 @@ if (type === 'HTTP') {
                  dns_hostname = $9, dns_record_type = $10,
                  method = $11, headers = $12, body = $13, timeout_ms = $14,
                  expected_status_codes = $15::jsonb,
-                 expected_keyword = $16, max_response_time_ms = $17
-             WHERE id = $18 AND user_id = $19
+                 expected_keyword = $16, max_response_time_ms = $17,
+                 heartbeat_grace_seconds = $18,
+                 dns_expected_values = $19
+             WHERE id = $20 AND user_id = $21
              RETURNING *`,
             [
                 name.trim(),
@@ -1432,12 +1631,14 @@ if (type === 'HTTP') {
                 type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
                 type === 'HTTP' ? headers : {},
                 type === 'HTTP' ? requestBody : null,
-                type === 'HTTP' ? timeoutMs : 10000,
+                ['HTTP', 'TCP'].includes(type) ? timeoutMs : 10000,
                 type === 'HTTP' && expectedStatusCodes !== null
                     ? JSON.stringify(expectedStatusCodes) : null,
                 type === 'HTTP' && expectedKeyword !== null
                     ? expectedKeyword.trim() : null,
                 type === 'HTTP' ? maxResponseTimeMs : null,
+                type === 'HEARTBEAT' ? heartbeatGraceSeconds : 60,
+                dnsExpectedValues,
                 Number(id),
                 req.user.id
             ]

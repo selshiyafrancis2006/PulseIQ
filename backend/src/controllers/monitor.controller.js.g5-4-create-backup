@@ -1,0 +1,1773 @@
+﻿const db = require('../config/db');
+const { getMaxMonitorsPerUser } = require('../config/limits');
+const { calculateSlo } = require('../utils/slo');
+const { validateMonitorTcpTarget } = require('../services/urlSecurity.service');
+const { validateDnsTarget } = require('../services/dnsCheck.service');
+const { OFFLINE_THRESHOLD_SECONDS } = require('../utils/hostStatus');
+
+// Same normalization used for host tags: trims, drops empties, de-dupes.
+// Validate and normalize monitor tags.
+function normalizeTags(rawTags) {
+    if (rawTags === undefined || rawTags === null || rawTags === '') return [];
+
+    const list = Array.isArray(rawTags) ? rawTags :
+        typeof rawTags === 'string' ? rawTags.split(',') : null;
+
+    if (!list || list.some(tag => typeof tag !== 'string')) {
+        throw new Error('tags must be a string or an array of strings');
+    }
+
+    const cleaned = [...new Set(list.map(tag => tag.trim()).filter(Boolean))];
+
+    if (cleaned.length > 20 || cleaned.some(tag => tag.length > 50)) {
+        throw new Error('tags may contain at most 20 entries, each up to 50 characters');
+    }
+    return cleaned;
+}
+
+function validateName(value) {
+    return typeof value === 'string' && value.trim().length > 0 &&
+        value.trim().length <= 255
+        ? null : 'name must be a non-empty string of at most 255 characters';
+}
+
+function validateUrl(value) {
+    if (typeof value !== 'string' || !value.trim() || value.trim().length > 500) {
+        return 'url must be a non-empty string of at most 500 characters';
+    }
+    try {
+        const parsed = new URL(value.trim());
+        if (!['http:', 'https:'].includes(parsed.protocol) ||
+            parsed.username || parsed.password) {
+            return 'url must use HTTP or HTTPS and cannot contain credentials';
+        }
+    } catch {
+        return 'url must be a valid HTTP or HTTPS URL';
+    }
+    return null;
+}
+
+function validateInterval(value) {
+    return Number.isInteger(value) && value >= 30 && value <= 3600;
+}
+
+function validateRenotify(value) {
+    return Number.isInteger(value) &&
+        (value === 0 || (value >= 5 && value <= 1440));
+}
+
+const RENOTIFY_ERROR =
+    'renotify_minutes must be 0 (disabled) or an integer between 5 and 1440';
+
+function validateFailureThreshold(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 10;
+}
+
+const FAILURE_THRESHOLD_ERROR =
+    'failure_threshold must be an integer between 1 and 10';
+
+function validateHeartbeatGraceSeconds(value) {
+    return Number.isInteger(value) && value >= 0 && value <= 86400;
+}
+
+const HEARTBEAT_GRACE_ERROR =
+    'heartbeat_grace_seconds must be an integer between 0 and 86400';
+
+const HTTP_METHODS = new Set([
+    'GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'
+]);
+
+const HTTP_SETTINGS_ERROR =
+    'HTTP request settings are only supported for HTTP monitors';
+
+function validateHttpMethod(value) {
+    return typeof value === 'string' &&
+        HTTP_METHODS.has(value.trim().toUpperCase());
+}
+
+function validateHttpHeaders(value) {
+    if (
+        value === null ||
+        typeof value !== 'object' ||
+        Array.isArray(value) ||
+        Object.getPrototypeOf(value) !== Object.prototype
+    ) {
+        return false;
+    }
+
+    const entries = Object.entries(value);
+
+    if (entries.length > 50) return false;
+
+    const forbiddenHeaders = new Set([
+        'host',
+        'content-length',
+        'connection',
+        'transfer-encoding',
+        'proxy-authorization',
+        'proxy-connection',
+        'upgrade'
+    ]);
+
+    return entries.every(([key, headerValue]) => {
+        return (
+            /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key) &&
+            key.length <= 100 &&
+            !forbiddenHeaders.has(key.toLowerCase()) &&
+            typeof headerValue === 'string' &&
+            headerValue.length <= 8192 &&
+            !/[\r\n]/.test(headerValue)
+        );
+    });
+}
+
+function validateHttpBody(value) {
+    return value === null ||
+        (
+            typeof value === 'string' &&
+            Buffer.byteLength(value, 'utf8') <= 1_000_000
+        );
+}
+
+function validateTimeout(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 30000;
+}
+
+
+function validateExpectedStatusCodes(value) {
+    return value === null || (
+        Array.isArray(value) &&
+        value.length >= 1 &&
+        value.length <= 20 &&
+        value.every(code =>
+            Number.isInteger(code) && code >= 100 && code <= 599
+        ) &&
+        new Set(value).size === value.length
+    );
+}
+
+function validateExpectedKeyword(value) {
+    return value === null || (
+        typeof value === 'string' &&
+        value.trim().length >= 1 &&
+        value.length <= 500
+    );
+}
+
+function validateMaxResponseTime(value) {
+    return value === null ||
+        (Number.isInteger(value) && value >= 1 && value <= 30000);
+}
+
+const EXPECTED_STATUS_CODES_ERROR = 'expected_status_codes must be null or an array of 1 to 20 unique integer HTTP status codes between 100 and 599';
+const EXPECTED_KEYWORD_ERROR =
+    'expected_keyword must be null or a non-empty string of at most 500 characters';
+const MAX_RESPONSE_TIME_ERROR =
+    'max_response_time_ms must be null or an integer between 1 and 30000';
+
+function validateMonitorId(value) {
+    return /^\d+$/.test(value) && Number.isSafeInteger(Number(value)) &&
+        Number(value) > 0;
+}
+const createMonitor = async (req, res) => {
+    try {
+        const body = req.body || {};
+
+const {
+    name,
+    url,
+    monitor_type = 'HTTP',
+    tcp_host,
+    tcp_port,
+    dns_hostname,
+    dns_record_type = 'A',
+    tags,
+    interval_seconds = 30,
+    renotify_minutes = 60,
+    failure_threshold = 3,
+    method = 'GET',
+    headers = {},
+    body: requestBody = null,
+    timeout_ms = 10000,
+    expected_status_codes = null,
+    expected_keyword = null,
+    max_response_time_ms = null,
+    heartbeat_grace_seconds = 60
+} = body;
+
+
+        const nameError = validateName(name);
+        if (nameError) return res.status(400).json({ message: nameError });
+
+        if (!['HTTP', 'TCP', 'DNS', 'HEARTBEAT'].includes(monitor_type)) {
+            return res.status(400).json({
+                message: 'monitor_type must be HTTP, TCP, DNS, or HEARTBEAT'
+            });
+        }
+
+        if (!validateInterval(interval_seconds)) {
+            return res.status(400).json({
+                message: 'interval_seconds must be an integer between 30 and 3600'
+            });
+        }
+
+        if (!validateRenotify(renotify_minutes)) {
+            return res.status(400).json({ message: RENOTIFY_ERROR });
+        }
+
+        if (!validateFailureThreshold(failure_threshold)) {
+            return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
+        }
+
+        if (
+            monitor_type === 'HEARTBEAT' &&
+            !validateHeartbeatGraceSeconds(heartbeat_grace_seconds)
+        ) {
+            return res.status(400).json({ message: HEARTBEAT_GRACE_ERROR });
+        }
+
+        if (
+            monitor_type !== 'HEARTBEAT' &&
+            Object.hasOwn(body, 'heartbeat_grace_seconds')
+        ) {
+            return res.status(400).json({
+                message: 'heartbeat_grace_seconds is only supported for HEARTBEAT monitors'
+            });
+        }
+
+if (monitor_type !== 'HTTP') {
+    const hasHttpSettings = [
+        'method', 'headers', 'body', 'timeout_ms',
+        'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
+    ].some(key => Object.hasOwn(body, key));
+
+    if (hasHttpSettings) {
+        return res.status(400).json({
+            message: HTTP_SETTINGS_ERROR
+        });
+    }
+}
+
+if (monitor_type === 'HTTP') {
+    if (!validateHttpMethod(method)) {
+        return res.status(400).json({
+            message: 'method must be a supported HTTP method'
+        });
+    }
+
+    if (!validateHttpHeaders(headers)) {
+        return res.status(400).json({
+            message: 'headers must be an object with valid string header names and values'
+        });
+    }
+
+    if (!validateHttpBody(requestBody)) {
+        return res.status(400).json({
+            message: 'body must be a string or null and cannot exceed 1 MB'
+        });
+    }
+
+    if (!validateTimeout(timeout_ms)) {
+        return res.status(400).json({
+            message: 'timeout_ms must be an integer between 1 and 30000'
+        });
+    }
+
+    if (!validateExpectedStatusCodes(expected_status_codes)) {
+        return res.status(400).json({ message: EXPECTED_STATUS_CODES_ERROR });
+    }
+    if (!validateExpectedKeyword(expected_keyword)) {
+        return res.status(400).json({ message: EXPECTED_KEYWORD_ERROR });
+    }
+    if (!validateMaxResponseTime(max_response_time_ms)) {
+        return res.status(400).json({ message: MAX_RESPONSE_TIME_ERROR });
+    }
+}
+
+
+        let storedUrl;
+        let storedTcpHost = null;
+        let storedTcpPort = null;
+        let storedDnsHost = null;
+        let storedDnsRecordType = 'A';
+
+        if (monitor_type === 'HTTP') {
+            const urlError = validateUrl(url);
+            if (urlError) return res.status(400).json({ message: urlError });
+            storedUrl = url.trim();
+        } else if (monitor_type === 'TCP') {
+            let target;
+            try {
+                target = await validateMonitorTcpTarget(tcp_host, tcp_port);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid TCP target'
+                });
+            }
+
+            storedTcpHost = target.hostname;
+            storedTcpPort = target.port;
+
+            const displayHost = storedTcpHost.includes(':')
+                ? `[${storedTcpHost}]`
+                : storedTcpHost;
+
+            // url is NOT NULL for legacy schema compatibility.
+            // TCP checks use tcp_host/tcp_port, never this display value.
+            storedUrl = `tcp://${displayHost}:${storedTcpPort}`;
+        } else if (monitor_type === 'DNS') {
+            let target;
+            try {
+                target = validateDnsTarget(dns_hostname, dns_record_type);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid DNS target'
+                });
+            }
+
+            storedDnsHost = target.hostname;
+            storedDnsRecordType = target.recordType;
+
+            // url is NOT NULL for legacy schema compatibility.
+            // DNS checks use dns_hostname/dns_record_type, never this display value.
+            storedUrl = `dns://${storedDnsHost}/${storedDnsRecordType}`;
+        } else {
+            storedUrl = 'heartbeat://check-in';
+        }
+        let normalizedTags;
+        try {
+            normalizedTags = normalizeTags(tags);
+        } catch (error) {
+            return res.status(400).json({ message: error.message });
+        }
+
+        const heartbeatToken = monitor_type === 'HEARTBEAT'
+            ? require('crypto').randomBytes(32).toString('hex')
+            : null;
+        const heartbeatTokenHash = heartbeatToken
+            ? require('crypto').createHash('sha256')
+                .update(heartbeatToken).digest('hex')
+            : null;
+
+        // The limit check and the insert share one transaction, guarded by a
+        // per-user advisory lock, so parallel requests cannot exceed the cap.
+        const maxMonitors = getMaxMonitorsPerUser();
+        const client = await db.connect();
+
+        try {
+            await client.query('BEGIN');
+            await client.query(
+                'SELECT pg_advisory_xact_lock(7001, $1::int)',
+                [req.user.id]
+            );
+
+            const existing = await client.query(
+                'SELECT COUNT(*)::int AS total FROM monitors WHERE user_id = $1',
+                [req.user.id]
+            );
+
+            if (existing.rows[0].total >= maxMonitors) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({
+                    message:
+                        `Monitor limit reached (${maxMonitors}). ` +
+                        'Delete a monitor you no longer need to add another.'
+                });
+            }
+
+            const result = await client.query(
+`INSERT INTO monitors
+    (name, url, user_id, tags, interval_seconds,
+     renotify_minutes, failure_threshold, monitor_type,
+     tcp_host, tcp_port, dns_hostname, dns_record_type,
+     method, headers, body, timeout_ms,
+     expected_status_codes, expected_keyword, max_response_time_ms,
+     heartbeat_grace_seconds)
+ VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+         $9, $10, $11, $12, $13, $14, $15, $16,
+         $17::jsonb, $18, $19, $20)
+ RETURNING *`,
+[
+    name.trim(),
+    storedUrl,
+    req.user.id,
+    normalizedTags,
+    interval_seconds,
+    renotify_minutes,
+    failure_threshold,
+    monitor_type,
+    storedTcpHost,
+    storedTcpPort,
+    storedDnsHost,
+    storedDnsRecordType,
+    monitor_type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
+    monitor_type === 'HTTP' ? headers : {},
+    monitor_type === 'HTTP' ? requestBody : null,
+    monitor_type === 'HTTP' ? timeout_ms : 10000,
+    monitor_type === 'HTTP' && expected_status_codes !== null
+        ? JSON.stringify(expected_status_codes) : null,
+    monitor_type === 'HTTP' && expected_keyword !== null
+        ? expected_keyword.trim() : null,
+    monitor_type === 'HTTP' ? max_response_time_ms : null,
+    monitor_type === 'HEARTBEAT' ? heartbeat_grace_seconds : 60
+]
+            );
+
+            if (heartbeatTokenHash) {
+                await client.query(
+                    `INSERT INTO heartbeat_monitor_secrets
+                        (monitor_id, token_hash)
+                     VALUES ($1, $2)`,
+                    [result.rows[0].id, heartbeatTokenHash]
+                );
+            }
+
+            await client.query('COMMIT');
+
+            return res.status(201).json({
+                ...result.rows[0],
+                ...(heartbeatToken ? { heartbeat_token: heartbeatToken } : {})
+            });
+        } catch (insertError) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rollbackError) {
+                console.error('Rollback failed:', rollbackError);
+            }
+            throw insertError;
+        } finally {
+            client.release();
+        }
+    } catch (error) {
+        console.error(error);
+        return res.status(500).json({
+            message: 'Failed to create monitor'
+        });
+    }
+};
+const getMonitors = async (req, res) => {
+    try {
+
+        const result = await db.query(
+            'SELECT * FROM monitors WHERE user_id = $1 ORDER BY id DESC',
+            [req.user.id]
+        );
+
+        res.json(result.rows);
+
+    } catch (error) {
+
+        console.error(error);
+
+        res.status(500).json({
+            message: 'Failed to fetch monitors'
+        });
+
+    }
+};
+
+
+const getMonitorById = async (req, res) => {
+    const { id } = req.params;
+
+    if (!validateMonitorId(id)) {
+        return res.status(400).json({ message: 'Invalid monitor ID' });
+    }
+
+    try {
+        const result = await db.query(
+            'SELECT * FROM monitors WHERE id = $1 AND user_id = $2',
+            [Number(id), req.user.id]
+        );
+
+        if (!result.rows.length) {
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        return res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Fetch monitor failed:', error);
+        return res.status(500).json({ message: 'Failed to fetch monitor' });
+    }
+};
+
+const getMonitorStatus = async (req, res) => {
+    try {
+        const { tag } = req.query;
+
+        // One index lookup per monitor for its latest result, instead of
+        // joining and sorting every monitor_results row (F2).
+        const result = await db.query(`
+            SELECT
+                m.id,
+                m.name,
+                m.url,
+                m.monitor_type,
+                m.tags,
+                m.interval_seconds,
+                m.renotify_minutes,
+                m.failure_threshold,
+                m.is_active,
+                CASE
+                    WHEN mr.status IS NULL THEN NULL
+                    ELSE COALESCE(mcs.confirmed_status, mr.status)
+                END AS status,
+                mr.response_time_ms,
+                mr.status_code,
+                mr.certificate_expires_at,
+                mr.certificate_days_remaining,
+                mr.checked_at
+            FROM monitors m
+            LEFT JOIN LATERAL (
+                SELECT
+                    status,
+                    response_time_ms,
+                    status_code,
+                    certificate_expires_at,
+                    certificate_days_remaining,
+                    checked_at
+                FROM monitor_results
+                WHERE monitor_id = m.id
+                ORDER BY checked_at DESC, id DESC
+                LIMIT 1
+            ) mr ON TRUE
+            LEFT JOIN monitor_check_state mcs
+                ON mcs.monitor_id = m.id
+            WHERE m.user_id = $1
+              AND ($2::text IS NULL OR m.tags @> ARRAY[$2::text])
+            ORDER BY m.id
+        `, [req.user.id, tag || null]);
+
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: 'Failed to fetch monitor status'
+        });
+    }
+};
+
+const getMonitorHistory = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!validateMonitorId(id)) {
+    return res.status(400).json({
+        message: 'Invalid monitor ID'
+    });
+}
+
+        const windows = {
+    '24h': 24,
+    '7d': 168,
+    '30d': 720
+};
+
+const range = req.query.range || '24h';
+
+if (!Object.hasOwn(windows, range)) {
+    return res.status(400).json({
+        message: 'Invalid range. Use 24h, 7d, or 30d'
+    });
+}
+        const result = await db.query(
+            `WITH ranked_results AS (
+    SELECT
+        mr.status,
+        mr.response_time_ms,
+        mr.status_code,
+        mr.dns_time_ms,
+        mr.connect_time_ms,
+        mr.tls_time_ms,
+        mr.ttfb_time_ms,
+        mr.download_time_ms,
+        mr.error_type,
+        mr.error_message,
+        mr.certificate_expires_at,
+        mr.certificate_days_remaining,
+        mr.checked_at,
+        ROW_NUMBER() OVER (
+            PARTITION BY FLOOR(
+                EXTRACT(EPOCH FROM (NOW() - mr.checked_at))
+                / ($3 * 3600.0 / 200)
+            )
+            ORDER BY
+                CASE WHEN mr.status = 'DOWN' THEN 0 ELSE 1 END,
+                mr.checked_at DESC
+        ) AS bucket_rank
+    FROM monitor_results mr
+    JOIN monitors m ON mr.monitor_id = m.id
+    WHERE mr.monitor_id = $1
+      AND m.user_id = $2
+      AND mr.checked_at >= NOW() - ($3 * INTERVAL '1 hour')
+)
+SELECT
+    status,
+    response_time_ms,
+    status_code,
+    dns_time_ms,
+    connect_time_ms,
+    tls_time_ms,
+    ttfb_time_ms,
+    download_time_ms,
+    error_type,
+    error_message,
+    certificate_expires_at,
+    certificate_days_remaining,
+    checked_at
+FROM ranked_results
+WHERE bucket_rank = 1
+ORDER BY checked_at DESC
+LIMIT 200`,
+            [id, req.user.id, windows[range]]
+        );
+
+        res.json(result.rows);
+
+    } catch (error) {
+        console.error(error);
+
+        res.status(500).json({
+            message: 'Failed to fetch monitor history'
+        });
+    }
+};
+
+const getMonitorUptime = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!validateMonitorId(id)) {
+            return res.status(400).json({
+                message: 'Invalid monitor ID'
+            });
+        }
+
+        const windows = {
+            '24h': 24,
+            '7d': 168,
+            '30d': 720
+        };
+
+        const range = req.query.range || '24h';
+
+        if (!Object.hasOwn(windows, range)) {
+            return res.status(400).json({
+                message: 'Invalid range. Use 24h, 7d, or 30d'
+            });
+        }
+
+        const result = await db.query(
+            `SELECT
+                COUNT(mr.id)::int AS total_checks,
+                COUNT(mr.id) FILTER (
+                    WHERE mr.status = 'UP'
+                )::int AS up_checks
+             FROM monitors m
+             LEFT JOIN monitor_results mr
+                ON mr.monitor_id = m.id
+                AND mr.checked_at >= NOW() -
+                    ($3 * INTERVAL '1 hour')
+            AND mr.in_maintenance = FALSE
+             WHERE m.id = $1
+               AND m.user_id = $2
+             GROUP BY m.id`,
+            [Number(id), req.user.id, windows[range]]
+        );
+
+        if (!result.rows.length) {
+            return res.status(404).json({
+                message: 'Monitor not found'
+            });
+        }
+
+        const { total_checks, up_checks } = result.rows[0];
+
+        const uptime = total_checks === 0
+            ? null
+            : Number(((up_checks / total_checks) * 100).toFixed(2));
+
+
+
+const selectedRangeCoverageResult = await db.query(
+    `WITH monitor_bounds AS (
+        SELECT
+            GREATEST(
+                NOW() - ($3 * INTERVAL '1 hour'),
+                m.created_at
+            ) AS window_start,
+            NOW() AS window_end,
+            m.interval_seconds,
+            m.created_at
+        FROM monitors m
+        WHERE m.id = $1
+          AND m.user_id = $2
+    ),
+    checks AS (
+        SELECT mr.checked_at, TRUE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN monitor_bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at >= b.window_start
+          AND mr.checked_at <= b.window_end
+          AND mr.in_maintenance = FALSE
+
+        UNION ALL
+
+        SELECT MAX(mr.checked_at) AS checked_at, FALSE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN monitor_bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at < b.window_start
+          AND mr.in_maintenance = FALSE
+    ),
+    ordered_checks AS (
+        SELECT
+            checked_at,
+            in_window,
+            LAG(checked_at) OVER (ORDER BY checked_at) AS previous_check
+        FROM checks
+        WHERE checked_at IS NOT NULL
+    ),
+    latest_check AS (
+        SELECT MAX(checked_at) AS checked_at
+        FROM ordered_checks
+    ),
+    maintenance_overlap AS (
+        SELECT COALESCE(
+            SUM(
+                EXTRACT(EPOCH FROM (upper(period) - lower(period)))
+            ),
+            0
+        ) AS seconds
+        FROM (
+            SELECT unnest(
+                range_agg(
+                    tstzrange(
+                        GREATEST(
+                            w.starts_at,
+                            lc.checked_at
+                        ),
+                        LEAST(
+                            w.ends_at,
+                            b.window_end
+                        ),
+                        '[)'
+                    )
+                )
+            ) AS period
+            FROM latest_check lc
+            CROSS JOIN monitor_bounds b
+            JOIN maintenance_windows w
+              ON w.user_id = $2
+             AND (w.monitor_id IS NULL OR w.monitor_id = $1)
+             AND w.starts_at < b.window_end
+             AND w.ends_at > lc.checked_at
+            WHERE lc.checked_at IS NOT NULL
+        ) merged
+    )
+    SELECT
+        COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+
+
+
+        COALESCE(
+            BOOL_OR(
+                in_window
+                AND previous_check >= (
+                    SELECT window_start FROM monitor_bounds
+                )
+                AND (
+                    EXTRACT(
+                        EPOCH FROM (checked_at - previous_check)
+                    ) - COALESCE((
+                        SELECT SUM(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    upper(merged.period) - lower(merged.period)
+                                )
+                            )
+                        )
+                        FROM unnest((
+                            SELECT range_agg(
+                                tstzrange(
+                                    GREATEST(
+                                        w.starts_at,
+                                        ordered_checks.previous_check
+                                    ),
+                                    LEAST(
+                                        w.ends_at,
+                                        ordered_checks.checked_at
+                                    ),
+                                    '[)'
+                                )
+                            )
+                            FROM maintenance_windows w
+                            WHERE w.user_id = $2
+                              AND (
+                                  w.monitor_id IS NULL
+                                  OR w.monitor_id = $1
+                              )
+                              AND w.starts_at < ordered_checks.checked_at
+                              AND w.ends_at > ordered_checks.previous_check
+                        )) AS merged(period)
+                    ), 0)
+                ) > (
+                    SELECT interval_seconds * 3 FROM monitor_bounds
+                )
+            ),
+            FALSE
+        ) AS has_gap,
+
+                COALESCE(
+            (
+                EXTRACT(EPOCH FROM (
+                    MIN(checked_at) FILTER (WHERE in_window)
+                    - (SELECT window_start FROM monitor_bounds)
+                ))
+                - COALESCE((
+                    SELECT SUM(
+                        EXTRACT(
+                            EPOCH FROM (
+                                upper(merged.period) - lower(merged.period)
+                            )
+                        )
+                    )
+                    FROM unnest((
+                        SELECT range_agg(
+                            tstzrange(
+                                GREATEST(
+                                    w.starts_at,
+                                    b.window_start
+                                ),
+                                LEAST(
+                                    w.ends_at,
+                                    (
+                                        SELECT MIN(oc.checked_at)
+                                        FROM ordered_checks oc
+                                        WHERE oc.in_window
+                                    )
+                                ),
+                                '[)'
+                            )
+                        )
+                        FROM maintenance_windows w
+                        CROSS JOIN monitor_bounds b
+                        WHERE w.user_id = $2
+                          AND (
+                              w.monitor_id IS NULL
+                              OR w.monitor_id = $1
+                          )
+                          AND w.starts_at < (
+                              SELECT MIN(oc.checked_at)
+                              FROM ordered_checks oc
+                              WHERE oc.in_window
+                          )
+                          AND w.ends_at > b.window_start
+                    )) AS merged(period)
+                ), 0) > (
+                    SELECT interval_seconds * 3
+                    FROM monitor_bounds
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM monitor_results prior
+                WHERE prior.monitor_id = $1
+                  AND prior.checked_at < (
+                      SELECT window_start FROM monitor_bounds
+                  )
+                  AND prior.in_maintenance = FALSE
+            ),
+            TRUE
+        ) AS has_initial_gap
+
+    FROM ordered_checks`,
+    [Number(id), req.user.id, windows[range]]
+);
+
+
+const {
+    check_count: selectedRangeCheckCount,
+    has_gap: selectedRangeHasGap,
+    is_stale: selectedRangeIsStale,
+    has_initial_gap: selectedRangeHasInitialGap
+} = selectedRangeCoverageResult.rows[0];
+
+const coverage =
+    selectedRangeCheckCount === 0 ||
+    selectedRangeHasGap ||
+    selectedRangeIsStale ||
+    selectedRangeHasInitialGap
+        ? 'insufficient_data'
+        : 'complete';
+
+const coverageResult = await db.query(
+    `WITH bounds AS (
+        SELECT
+            GREATEST(
+                NOW() - INTERVAL '30 days',
+                m.created_at
+            ) AS window_start,
+            NOW() AS window_end,
+            m.interval_seconds * 3 AS gap_threshold_seconds
+        FROM monitors m
+        WHERE m.id = $1
+          AND m.user_id = $2
+    ),
+    checks AS (
+        SELECT mr.checked_at, TRUE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at >= b.window_start
+          AND mr.checked_at <= b.window_end
+          AND mr.in_maintenance = FALSE
+
+        UNION ALL
+
+        SELECT MAX(mr.checked_at) AS checked_at, FALSE AS in_window
+        FROM monitor_results mr
+        CROSS JOIN bounds b
+        WHERE mr.monitor_id = $1
+          AND mr.checked_at < b.window_start
+          AND mr.in_maintenance = FALSE
+    ),
+    ordered_checks AS (
+        SELECT
+            checked_at,
+            in_window,
+            LAG(checked_at) OVER (ORDER BY checked_at) AS previous_check
+        FROM checks
+        WHERE checked_at IS NOT NULL
+    ),
+    latest_check AS (
+        SELECT MAX(checked_at) AS checked_at
+        FROM ordered_checks
+    ),
+    maintenance_overlap AS (
+        SELECT COALESCE(
+            SUM(
+                EXTRACT(
+                    EPOCH FROM (
+                        upper(merged.period) - lower(merged.period)
+                    )
+                )
+            ),
+            0
+        ) AS seconds
+        FROM (
+            SELECT unnest(
+                range_agg(
+                    tstzrange(
+                        GREATEST(
+                            w.starts_at,
+                            lc.checked_at
+                        ),
+                        LEAST(
+                            w.ends_at,
+                            b.window_end
+                        ),
+                        '[)'
+                    )
+                )
+            ) AS period
+            FROM latest_check lc
+            CROSS JOIN bounds b
+            JOIN maintenance_windows w
+              ON w.user_id = $2
+             AND (w.monitor_id IS NULL OR w.monitor_id = $1)
+             AND w.starts_at < b.window_end
+             AND w.ends_at > lc.checked_at
+            WHERE lc.checked_at IS NOT NULL
+        ) merged
+    )
+    SELECT
+        COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+
+        COALESCE(
+            BOOL_OR(
+                in_window
+                AND previous_check >= (
+                    SELECT window_start FROM bounds
+                )
+                AND (
+                    EXTRACT(
+                        EPOCH FROM (checked_at - previous_check)
+                    ) - COALESCE((
+                        SELECT SUM(
+                            EXTRACT(
+                                EPOCH FROM (
+                                    upper(merged.period)
+                                    - lower(merged.period)
+                                )
+                            )
+                        )
+                        FROM unnest((
+                            SELECT range_agg(
+                                tstzrange(
+                                    GREATEST(
+                                        w.starts_at,
+                                        ordered_checks.previous_check
+                                    ),
+                                    LEAST(
+                                        w.ends_at,
+                                        ordered_checks.checked_at
+                                    ),
+                                    '[)'
+                                )
+                            )
+                            FROM maintenance_windows w
+                            WHERE w.user_id = $2
+                              AND (
+                                  w.monitor_id IS NULL
+                                  OR w.monitor_id = $1
+                              )
+                              AND w.starts_at < ordered_checks.checked_at
+                              AND w.ends_at > ordered_checks.previous_check
+                        )) AS merged(period)
+                    ), 0) > (
+                        SELECT gap_threshold_seconds FROM bounds
+                    )
+                )
+            ),
+            FALSE
+        ) AS has_gap,
+
+        COALESCE(
+            EXTRACT(
+                EPOCH FROM (NOW() - MAX(checked_at))
+            ) - (
+                SELECT seconds FROM maintenance_overlap
+            ) > (
+                SELECT gap_threshold_seconds FROM bounds
+            ),
+            TRUE
+        ) AS is_stale,
+
+        COALESCE(
+            (
+                EXTRACT(EPOCH FROM (
+                    MIN(checked_at) FILTER (WHERE in_window)
+                    - (SELECT window_start FROM bounds)
+                ))
+                - COALESCE((
+                    SELECT SUM(
+                        EXTRACT(
+                            EPOCH FROM (
+                                upper(merged.period)
+                                - lower(merged.period)
+                            )
+                        )
+                    )
+                    FROM unnest((
+                        SELECT range_agg(
+                            tstzrange(
+                                GREATEST(
+                                    w.starts_at,
+                                    b.window_start
+                                ),
+                                LEAST(
+                                    w.ends_at,
+                                    (
+                                        SELECT MIN(oc.checked_at)
+                                        FROM ordered_checks oc
+                                        WHERE oc.in_window
+                                    )
+                                ),
+                                '[)'
+                            )
+                        )
+                        FROM maintenance_windows w
+                        CROSS JOIN bounds b
+                        WHERE w.user_id = $2
+                          AND (
+                              w.monitor_id IS NULL
+                              OR w.monitor_id = $1
+                          )
+                          AND w.starts_at < (
+                              SELECT MIN(oc.checked_at)
+                              FROM ordered_checks oc
+                              WHERE oc.in_window
+                          )
+                          AND w.ends_at > b.window_start
+                    )) AS merged(period)
+                ), 0) > (
+                    SELECT gap_threshold_seconds FROM bounds
+                )
+            ),
+            TRUE
+        ) AS has_initial_gap
+
+    FROM ordered_checks`,
+    [Number(id), req.user.id]
+);
+
+const {
+    check_count,
+    has_gap,
+    is_stale,
+    has_initial_gap
+} = coverageResult.rows[0];
+
+
+
+const monitoringCoverageInsufficient =
+    check_count === 0 ||
+    has_gap ||
+    is_stale ||
+    has_initial_gap;
+
+
+const eventResult = await db.query(
+    `WITH reference_time AS (
+        SELECT
+            NOW() AS now,
+            GREATEST(
+                NOW() - INTERVAL '30 days',
+                m.created_at
+            ) AS window_start
+        FROM monitors m
+        WHERE m.id = $1
+          AND m.user_id = $2
+    ),
+    previous_event AS (
+        SELECT me.type, me.created_at
+        FROM monitor_events me
+        CROSS JOIN reference_time rt
+        WHERE me.monitor_id = $1
+          AND me.created_at < rt.window_start
+        ORDER BY me.created_at DESC
+        LIMIT 1
+    ),
+    window_events AS (
+        SELECT me.type, me.created_at
+        FROM monitor_events me
+        CROSS JOIN reference_time rt
+        WHERE me.monitor_id = $1
+          AND me.created_at >= rt.window_start
+          AND me.created_at <= rt.now
+    )
+    SELECT
+        events.type,
+        events.created_at,
+        rt.now AS reference_time,
+        rt.window_start
+    FROM (
+        SELECT type, created_at FROM previous_event
+        UNION ALL
+        SELECT type, created_at FROM window_events
+    ) events
+    CROSS JOIN reference_time rt
+    ORDER BY events.created_at ASC`,
+    [Number(id), req.user.id]
+);
+
+const referenceTime =
+    eventResult.rows[0]?.reference_time ?? new Date();
+
+const windowStart =
+    eventResult.rows[0]?.window_start ?? referenceTime;
+const slo = monitoringCoverageInsufficient
+    ? {
+        target_percent: 99.9,
+        allowed_downtime_minutes: 43.2,
+        observed_downtime_minutes: null,
+        remaining_budget_minutes: null,
+        status: 'insufficient_data'
+    }
+    : calculateSlo(
+        eventResult.rows,
+        {
+            now: referenceTime,
+            windowStart
+        }
+    );
+
+
+return res.json({
+    uptime,
+    range,
+    total_checks,
+    up_checks,
+    coverage,
+    slo
+});
+
+    } catch (err) {
+        console.error(err);
+        return res.status(500).json({
+            message: 'Failed to calculate uptime'
+        });
+    }
+};
+
+const getMonitorEvents = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!validateMonitorId(id)) {
+  return res.status(400).json({ message: 'Invalid monitor ID' });
+}
+
+    const result = await db.query(
+      `
+      SELECT
+        me.id,
+        me.type,
+        me.message,
+        me.response_time_ms,
+        me.created_at
+      FROM monitor_events me
+      JOIN monitors m ON me.monitor_id = m.id
+      WHERE me.monitor_id = $1
+        AND m.user_id = $2
+      ORDER BY me.created_at DESC
+      LIMIT 100
+      `,
+      [id, req.user.id]
+    );
+
+    res.json(result.rows);
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      message: 'Failed to fetch monitor events'
+    });
+  }
+};
+
+const updateMonitor = async (req, res) => {
+    const { id } = req.params;
+    if (!validateMonitorId(id)) {
+        return res.status(400).json({ message: 'Invalid monitor ID' });
+    }
+
+    try {
+        const body = req.body || {};
+const allowed = [
+    'name', 'url', 'tcp_host', 'tcp_port',
+    'dns_hostname', 'dns_record_type', 'tags',
+    'interval_seconds', 'renotify_minutes', 'failure_threshold',
+    'method', 'headers', 'body', 'timeout_ms',
+    'expected_status_codes', 'expected_keyword', 'max_response_time_ms',
+    'heartbeat_grace_seconds'
+];
+        const keys = Object.keys(body);
+
+        if (!keys.length || keys.some(key => !allowed.includes(key))) {
+            return res.status(400).json({
+                message: 'Provide supported monitor fields'
+            });
+        }
+
+        const current = await db.query(
+            'SELECT * FROM monitors WHERE id = $1 AND user_id = $2',
+            [Number(id), req.user.id]
+        );
+
+        if (!current.rows.length) {
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        const monitor = current.rows[0];
+        const type = monitor.monitor_type || 'HTTP';
+
+        if (
+            type !== 'HEARTBEAT' &&
+            Object.hasOwn(body, 'heartbeat_grace_seconds')
+        ) {
+            return res.status(400).json({
+                message: 'heartbeat_grace_seconds is only supported for HEARTBEAT monitors'
+            });
+        }
+
+        const heartbeatGraceSeconds = Object.hasOwn(body, 'heartbeat_grace_seconds')
+            ? body.heartbeat_grace_seconds
+            : (monitor.heartbeat_grace_seconds ?? 60);
+
+        if (
+            type === 'HEARTBEAT' &&
+            !validateHeartbeatGraceSeconds(heartbeatGraceSeconds)
+        ) {
+            return res.status(400).json({ message: HEARTBEAT_GRACE_ERROR });
+        }
+
+        if (
+            type === 'HEARTBEAT' &&
+            ['url', 'tcp_host', 'tcp_port', 'dns_hostname', 'dns_record_type']
+                .some(key => Object.hasOwn(body, key))
+        ) {
+            return res.status(400).json({
+                message: 'Heartbeat monitors do not support URL, TCP, or DNS target fields'
+            });
+        }
+
+        const hasTcpFields =
+            Object.hasOwn(body, 'tcp_host') ||
+            Object.hasOwn(body, 'tcp_port');
+        const hasDnsFields =
+            Object.hasOwn(body, 'dns_hostname') ||
+            Object.hasOwn(body, 'dns_record_type');
+
+        const hasHttpSettings = [
+    'method', 'headers', 'body', 'timeout_ms',
+    'expected_status_codes', 'expected_keyword', 'max_response_time_ms'
+].some(key => Object.hasOwn(body, key));
+
+if (type !== 'HTTP' && hasHttpSettings) {
+    return res.status(400).json({
+        message: HTTP_SETTINGS_ERROR
+    });
+}
+
+        if (type === 'HTTP' && (hasTcpFields || hasDnsFields)) {
+            return res.status(400).json({
+                message: 'TCP and DNS fields cannot be changed on an HTTP monitor'
+            });
+        }
+
+        if (type === 'TCP' && Object.hasOwn(body, 'url')) {
+            return res.status(400).json({
+                message: 'The URL cannot be changed on a TCP monitor; update tcp_host and tcp_port instead'
+            });
+        }
+
+        if (type === 'TCP' && hasDnsFields) {
+            return res.status(400).json({
+                message: 'DNS fields cannot be changed on a TCP monitor'
+            });
+        }
+
+        if (type === 'DNS' && (Object.hasOwn(body, 'url') || hasTcpFields)) {
+            return res.status(400).json({
+                message: 'Update dns_hostname and dns_record_type on a DNS monitor; URL and TCP fields are not supported'
+            });
+        }
+
+        const name = Object.hasOwn(body, 'name') ? body.name : monitor.name;
+        const interval = Object.hasOwn(body, 'interval_seconds')
+            ? body.interval_seconds : monitor.interval_seconds;
+        const renotify = Object.hasOwn(body, 'renotify_minutes')
+            ? body.renotify_minutes : monitor.renotify_minutes;
+        const failureThreshold = Object.hasOwn(body, 'failure_threshold')
+            ? body.failure_threshold : monitor.failure_threshold;
+
+        const method = Object.hasOwn(body, 'method')
+    ? body.method : (monitor.method || 'GET');
+const headers = Object.hasOwn(body, 'headers')
+    ? body.headers : (monitor.headers || {});
+const requestBody = Object.hasOwn(body, 'body')
+    ? body.body : (monitor.body ?? null);
+const timeoutMs = Object.hasOwn(body, 'timeout_ms')
+    ? body.timeout_ms : (monitor.timeout_ms ?? 10000);
+const expectedStatusCodes = Object.hasOwn(body, 'expected_status_codes')
+    ? body.expected_status_codes : (monitor.expected_status_codes ?? null);
+const expectedKeyword = Object.hasOwn(body, 'expected_keyword')
+    ? body.expected_keyword : (monitor.expected_keyword ?? null);
+const maxResponseTimeMs = Object.hasOwn(body, 'max_response_time_ms')
+    ? body.max_response_time_ms : (monitor.max_response_time_ms ?? null);
+
+if (type === 'HTTP') {
+    if (!validateHttpMethod(method)) {
+        return res.status(400).json({
+            message: 'method must be a supported HTTP method'
+        });
+    }
+
+    if (!validateHttpHeaders(headers)) {
+        return res.status(400).json({
+            message: 'headers must be an object with valid string header names and values'
+        });
+    }
+
+    if (!validateHttpBody(requestBody)) {
+        return res.status(400).json({
+            message: 'body must be a string or null and cannot exceed 1 MB'
+        });
+    }
+
+    if (!validateTimeout(timeoutMs)) {
+        return res.status(400).json({
+            message: 'timeout_ms must be an integer between 1 and 30000'
+        });
+    }
+    if (!validateExpectedStatusCodes(expectedStatusCodes)) {
+        return res.status(400).json({ message: EXPECTED_STATUS_CODES_ERROR });
+    }
+    if (!validateExpectedKeyword(expectedKeyword)) {
+        return res.status(400).json({ message: EXPECTED_KEYWORD_ERROR });
+    }
+    if (!validateMaxResponseTime(maxResponseTimeMs)) {
+        return res.status(400).json({ message: MAX_RESPONSE_TIME_ERROR });
+    }
+}
+
+        const nameError = validateName(name);
+        if (nameError) {
+            return res.status(400).json({ message: nameError });
+        }
+
+        if (!validateInterval(interval)) {
+            return res.status(400).json({
+                message: 'interval_seconds must be an integer between 30 and 3600'
+            });
+        }
+
+        if (!validateRenotify(renotify)) {
+            return res.status(400).json({ message: RENOTIFY_ERROR });
+        }
+
+                if (!validateFailureThreshold(failureThreshold)) {
+            return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
+        }
+
+        let url;
+        let tcpHost = null;
+        let tcpPort = null;
+        let dnsHostname = null;
+        let dnsRecordType = 'A';
+
+        if (type === 'TCP') {
+            const requestedHost = Object.hasOwn(body, 'tcp_host')
+                ? body.tcp_host : monitor.tcp_host;
+            const requestedPort = Object.hasOwn(body, 'tcp_port')
+                ? body.tcp_port : monitor.tcp_port;
+
+            let target;
+            try {
+                target = await validateMonitorTcpTarget(requestedHost, requestedPort);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid TCP target'
+                });
+            }
+
+            tcpHost = target.hostname;
+            tcpPort = target.port;
+
+            const displayHost = tcpHost.includes(':')
+                ? `[${tcpHost}]`
+                : tcpHost;
+
+            url = `tcp://${displayHost}:${tcpPort}`;
+        } else if (type === 'DNS') {
+            const requestedHost = Object.hasOwn(body, 'dns_hostname')
+                ? body.dns_hostname : monitor.dns_hostname;
+            const requestedRecordType = Object.hasOwn(body, 'dns_record_type')
+                ? body.dns_record_type : (monitor.dns_record_type || 'A');
+
+            let target;
+            try {
+                target = validateDnsTarget(requestedHost, requestedRecordType);
+            } catch (error) {
+                return res.status(400).json({
+                    message: error.message || 'Invalid DNS target'
+                });
+            }
+
+            dnsHostname = target.hostname;
+            dnsRecordType = target.recordType;
+            url = `dns://${dnsHostname}/${dnsRecordType}`;
+        } else if (type === 'HEARTBEAT') {
+            url = monitor.url;
+        } else {
+            url = Object.hasOwn(body, 'url') ? body.url : monitor.url;
+            const urlError = validateUrl(url);
+            if (urlError) {
+                return res.status(400).json({ message: urlError });
+            }
+            url = url.trim();
+        }
+
+        let tags = monitor.tags || [];
+        if (Object.hasOwn(body, 'tags')) {
+            try {
+                tags = normalizeTags(body.tags);
+            } catch (error) {
+                return res.status(400).json({ message: error.message });
+            }
+        }
+
+
+        const result = await db.query(
+            `UPDATE monitors
+             SET name = $1, url = $2, tags = $3, interval_seconds = $4,
+                 renotify_minutes = $5, failure_threshold = $6,
+                 tcp_host = $7, tcp_port = $8,
+                 dns_hostname = $9, dns_record_type = $10,
+                 method = $11, headers = $12, body = $13, timeout_ms = $14,
+                 expected_status_codes = $15::jsonb,
+                 expected_keyword = $16, max_response_time_ms = $17,
+                 heartbeat_grace_seconds = $18
+             WHERE id = $19 AND user_id = $20
+             RETURNING *`,
+            [
+                name.trim(),
+                url,
+                tags,
+                interval,
+                renotify,
+                failureThreshold,
+                tcpHost,
+                tcpPort,
+                dnsHostname,
+                dnsRecordType,
+                type === 'HTTP' ? method.trim().toUpperCase() : 'GET',
+                type === 'HTTP' ? headers : {},
+                type === 'HTTP' ? requestBody : null,
+                type === 'HTTP' ? timeoutMs : 10000,
+                type === 'HTTP' && expectedStatusCodes !== null
+                    ? JSON.stringify(expectedStatusCodes) : null,
+                type === 'HTTP' && expectedKeyword !== null
+                    ? expectedKeyword.trim() : null,
+                type === 'HTTP' ? maxResponseTimeMs : null,
+                type === 'HEARTBEAT' ? heartbeatGraceSeconds : 60,
+                Number(id),
+                req.user.id
+            ]
+        );
+
+
+        return res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Update monitor failed:', error);
+        return res.status(500).json({
+            message: 'Failed to update monitor'
+        });
+    }
+};
+const deleteMonitor = async (req, res) => {
+    const { id } = req.params;
+    if (!validateMonitorId(id)) return res.status(400).json({ message: 'Invalid monitor ID' });
+
+    try {
+        const result = await db.query(
+            'DELETE FROM monitors WHERE id = $1 AND user_id = $2 RETURNING id',
+            [Number(id), req.user.id]
+        );
+        if (!result.rows.length) return res.status(404).json({ message: 'Monitor not found' });
+        return res.json({ message: 'Monitor deleted' });
+    } catch (error) {
+        console.error('Delete monitor failed:', error);
+        return res.status(500).json({ message: 'Failed to delete monitor' });
+    }
+};
+
+const setMonitorActive = async (req, res, isActive) => {
+    const { id } = req.params;
+    if (!validateMonitorId(id)) return res.status(400).json({ message: 'Invalid monitor ID' });
+
+    try {
+        const result = await db.query(
+            `UPDATE monitors SET is_active = $1
+             WHERE id = $2 AND user_id = $3 RETURNING *`,
+            [isActive, Number(id), req.user.id]
+        );
+        if (!result.rows.length) return res.status(404).json({ message: 'Monitor not found' });
+        return res.json(result.rows[0]);
+    } catch (error) {
+        console.error('Change monitor state failed:', error);
+        return res.status(500).json({ message: 'Failed to change monitor state' });
+    }
+};
+
+const pauseMonitor = (req, res) => setMonitorActive(req, res, false);
+const resumeMonitor = (req, res) => setMonitorActive(req, res, true);
+
+const getMonitorLocations = async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+
+        if (!validateMonitorId(req.params.id)) {
+            return res.status(400).json({ message: 'Invalid monitor ID' });
+        }
+
+        const monitor = await db.query(
+            'SELECT id, interval_seconds FROM monitors WHERE id = $1 AND user_id = $2',
+            [id, req.user.id]
+        );
+
+        if (!monitor.rows.length) {
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        const result = await db.query(
+            `SELECT
+                h.id AS host_id,
+                h.name AS host_name,
+                h.last_seen_at,
+                CASE
+                    WHEN h.last_seen_at IS NULL THEN 'pending'
+                    WHEN h.last_seen_at < NOW() -
+                        ($2::int * INTERVAL '1 second') THEN 'offline'
+                    ELSE 'online'
+                END AS agent_status,
+                ml.created_at AS assigned_at,
+                latest.status AS last_status,
+                latest.checked_at AS last_checked_at,
+                COALESCE(
+                    latest.checked_at >= NOW() - (
+                        GREATEST(60, $3::int * 2) * INTERVAL '1 second'
+                    ),
+                    FALSE
+                ) AS result_is_fresh
+             FROM monitor_locations ml
+             JOIN hosts h ON h.id = ml.host_id
+             LEFT JOIN LATERAL (
+                SELECT status, checked_at
+                FROM monitor_location_results
+                WHERE monitor_id = ml.monitor_id
+                  AND host_id = ml.host_id
+                ORDER BY checked_at DESC, id DESC
+                LIMIT 1
+             ) latest ON true
+             WHERE ml.monitor_id = $1
+             ORDER BY h.name`,
+            [id, OFFLINE_THRESHOLD_SECONDS, monitor.rows[0].interval_seconds]
+        );
+
+        const quorum = await db.query(
+            'SELECT quorum FROM monitors WHERE id = $1',
+            [id]
+        );
+
+        return res.json({
+            quorum: quorum.rows[0].quorum,
+            locations: result.rows
+        });
+    } catch (error) {
+        console.error('Get monitor locations failed:', error);
+        return res.status(500).json({
+            message: 'Failed to fetch monitor locations'
+        });
+    }
+};
+
+const updateMonitorLocations = async (req, res) => {
+    const client = await db.connect();
+
+    try {
+        const id = Number(req.params.id);
+        const { host_ids, quorum = 1 } = req.body || {};
+
+        if (!validateMonitorId(req.params.id)) {
+            return res.status(400).json({ message: 'Invalid monitor ID' });
+        }
+
+        if (
+            !Array.isArray(host_ids) ||
+            host_ids.some(hostId =>
+                !Number.isSafeInteger(hostId) || hostId <= 0
+            ) ||
+            new Set(host_ids).size !== host_ids.length
+        ) {
+            return res.status(400).json({
+                message: 'host_ids must be an array of unique positive integers'
+            });
+        }
+
+        if (
+            !Number.isSafeInteger(quorum) ||
+            quorum < 1 ||
+            quorum > host_ids.length + 1
+        ) {
+            return res.status(400).json({
+                message: 'quorum must be between 1 and the number of assigned agents plus the central checker'
+            });
+        }
+
+        await client.query('BEGIN');
+
+        const monitor = await client.query(
+            `SELECT id, monitor_type
+             FROM monitors
+             WHERE id = $1 AND user_id = $2
+             FOR UPDATE`,
+            [id, req.user.id]
+        );
+
+        if (!monitor.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ message: 'Monitor not found' });
+        }
+
+        // A heartbeat monitor has no target to probe, so agents cannot check it.
+        if (monitor.rows[0].monitor_type === 'HEARTBEAT' && host_ids.length) {
+            await client.query('ROLLBACK');
+            return res.status(400).json({
+                message: 'Heartbeat monitors cannot use agent locations'
+            });
+        }
+
+        if (host_ids.length) {
+            const hosts = await client.query(
+                `SELECT id FROM hosts
+                 WHERE user_id = $1 AND id = ANY($2::int[])`,
+                [req.user.id, host_ids]
+            );
+
+            if (hosts.rows.length !== host_ids.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({
+                    message: 'Every host must belong to your account'
+                });
+            }
+        }
+
+        await client.query(
+            'DELETE FROM monitor_locations WHERE monitor_id = $1',
+            [id]
+        );
+
+        for (const hostId of host_ids) {
+            await client.query(
+                `INSERT INTO monitor_locations (monitor_id, host_id)
+                 VALUES ($1, $2)`,
+                [id, hostId]
+            );
+        }
+
+        await client.query(
+            'UPDATE monitors SET quorum = $1 WHERE id = $2',
+            [quorum, id]
+        );
+
+        await client.query('COMMIT');
+
+        return res.json({
+            monitor_id: id,
+            host_ids,
+            quorum
+        });
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Update monitor locations failed:', error);
+        return res.status(500).json({
+            message: 'Failed to update monitor locations'
+        });
+    } finally {
+        client.release();
+    }
+};
+
+module.exports = {
+    createMonitor,
+    updateMonitor,
+    deleteMonitor,
+    pauseMonitor,
+    resumeMonitor,
+    getMonitors,
+    getMonitorById,
+    getMonitorStatus,
+    getMonitorHistory,
+    getMonitorUptime,
+    getMonitorEvents,
+    getMonitorLocations,
+    updateMonitorLocations
+};
+
+

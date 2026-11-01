@@ -1,6 +1,7 @@
-﻿const db = require('../config/db');
+const db = require('../config/db');
 const { checkHttp } = require('./httpCheck.service');
 const nodemailer = require('nodemailer');
+const { decryptUrl } = require('./notificationChannelCrypto.service');
 
 const SEND_TIMEOUT_MS = 5000;
 
@@ -323,9 +324,33 @@ async function notifyUser(userId, event) {
         const result = await db.query(
             `SELECT id, type, name, url, email
              FROM notification_channels
-             WHERE user_id = $1 AND is_active = true
+             WHERE user_id = $1
+               AND is_active = true
+               AND (
+                   $2::INTEGER IS NULL
+                   OR NOT EXISTS (
+                       SELECT 1
+                       FROM monitor_notification_settings
+                       WHERE monitor_id = $2
+                   )
+                   OR EXISTS (
+                       SELECT 1
+                       FROM monitor_notification_settings
+                       WHERE monitor_id = $2
+                         AND routing_mode = 'ALL'
+                   )
+                   OR EXISTS (
+                       SELECT 1
+                       FROM monitor_notification_settings settings
+                       JOIN monitor_notification_channels selected
+                         ON selected.monitor_id = settings.monitor_id
+                       WHERE settings.monitor_id = $2
+                         AND settings.routing_mode = 'SELECTED'
+                         AND selected.channel_id = notification_channels.id
+                   )
+               )
              ORDER BY id`,
-            [userId]
+            [userId, event.monitor?.id ?? null]
         );
         channels = result.rows;
     } catch (error) {
@@ -334,7 +359,13 @@ async function notifyUser(userId, event) {
     }
 
     const settled = await Promise.allSettled(
-        channels.map((channel) => sendToChannel(channel, event))
+        channels.map((channel) => {
+            const deliveryChannel = channel.type === 'email'
+                ? channel
+                : { ...channel, url: decryptUrl(channel.url) };
+
+            return sendToChannel(deliveryChannel, event);
+        })
     );
 
     return settled.map((outcome, index) => {

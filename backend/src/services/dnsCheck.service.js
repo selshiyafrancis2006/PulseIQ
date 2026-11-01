@@ -1,4 +1,4 @@
-﻿
+
 const dns = require('node:dns').promises;
 const net = require('node:net');
 const { performance } = require('node:perf_hooks');
@@ -92,6 +92,72 @@ function validateDnsTarget(
     };
 }
 
+function normalizeDnsRecord(recordType, record) {
+    switch (recordType) {
+        case 'A':
+        case 'AAAA':
+            return String(record).toLowerCase();
+
+        case 'CNAME':
+        case 'NS':
+            return String(record).trim().replace(/\.$/, '').toLowerCase();
+
+        case 'MX':
+            return `${Number(record.priority)} ${String(record.exchange)
+                .trim()
+                .replace(/\.$/, '')
+                .toLowerCase()}`;
+
+        case 'TXT':
+            return Array.isArray(record) ? record.join('') : String(record);
+
+        default:
+            return String(record);
+    }
+}
+
+function normalizeExpectedDnsRecord(recordType, value) {
+    const normalized = String(value).trim();
+
+    if (recordType === 'MX') {
+        const match = normalized.match(/^(\d+)\s+(.+)$/);
+
+        if (!match) {
+            return normalized;
+        }
+
+        return normalizeDnsRecord(recordType, {
+            priority: Number(match[1]),
+            exchange: match[2]
+        });
+    }
+
+    return normalizeDnsRecord(recordType, normalized);
+}
+
+function assertExpectedDnsValues(recordType, records, expectedValues) {
+    if (!Array.isArray(expectedValues) || expectedValues.length === 0) {
+        return;
+    }
+
+    const actualValues = new Set(
+        records.map(record => normalizeDnsRecord(recordType, record))
+    );
+
+    const missingValues = expectedValues
+        .map(value => String(value).trim())
+        .filter(value => !actualValues.has(
+            normalizeExpectedDnsRecord(recordType, value)
+        ));
+
+    if (missingValues.length > 0) {
+        const error = new Error(
+            `Expected DNS ${recordType} value(s) not found: ${missingValues.join(', ')}`
+        );
+        error.code = 'DNS_EXPECTED_VALUE_MISMATCH';
+        throw error;
+    }
+}
 async function checkDns(monitor, options = {}) {
     const { hostname, recordType } = validateDnsTarget(
         monitor?.dns_hostname,
@@ -120,6 +186,12 @@ async function checkDns(monitor, options = {}) {
             error.code = 'ENODATA';
             throw error;
         }
+
+        assertExpectedDnsValues(
+            recordType,
+            records,
+            monitor?.dns_expected_values
+        );
 
         return {
             hostname,

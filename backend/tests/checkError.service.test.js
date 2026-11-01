@@ -23,6 +23,15 @@ describe('classifyCheckError', () => {
         expect(result.errorMessage.length).toBeGreaterThan(0);
     });
 
+    test('classifies DNS expected-value mismatches distinctly', () => {
+        expect(classifyCheckError({
+            code: 'DNS_EXPECTED_VALUE_MISMATCH',
+            message: 'Expected DNS A value(s) not found'
+        })).toEqual({
+            errorType: 'DNS_MISMATCH',
+            errorMessage: 'The DNS response did not contain all expected records'
+        });
+    });
     test('does not expose raw error messages', () => {
         const result = classifyCheckError({
             code: 'ECONNRESET',

@@ -62,6 +62,10 @@
         label: 'Alert History',
         path: '/alert-history',
       },
+      {
+        label: 'Maintenance',
+        path: '/maintenance',
+      },
     ],
   },
 

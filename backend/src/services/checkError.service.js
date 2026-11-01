@@ -15,6 +15,12 @@ function classifyCheckError(error) {
         };
     }
 
+if (code === 'DNS_EXPECTED_VALUE_MISMATCH') {
+        return {
+            errorType: 'DNS_MISMATCH',
+            errorMessage: 'The DNS response did not contain all expected records'
+        };
+    }
 if (
     code === 'ENOTFOUND' ||
     code === 'ENODATA' ||

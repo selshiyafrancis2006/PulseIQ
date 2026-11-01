@@ -12,6 +12,7 @@ import {
 import { apiFetch } from '../utils/apiFetch';
 import { API_BASE_URL } from '../config/api';
 import MonitorLocationsPanel from '../components/uptime/MonitorLocationsPanel';
+import MonitorNotificationRouting from '../components/uptime/MonitorNotificationRouting';
 
 const RANGES = [
   { value: '24h', label: '24 hours' },
@@ -329,6 +330,8 @@ useEffect(() => {
       {['HTTP', 'TCP', 'DNS'].includes(monitor.monitor_type) && (
         <MonitorLocationsPanel monitorId={monitor.id} />
       )}
+
+      <MonitorNotificationRouting monitorId={monitor.id} />
 
       {error && (
         <div role="alert" className="rounded-lg border border-amber-900 bg-amber-950/20 p-3 text-sm text-amber-300">

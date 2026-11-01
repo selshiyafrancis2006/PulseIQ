@@ -5,10 +5,6 @@ const router = express.Router();
 const db = require('../config/db');
 
 const {
-    checkMonitor
-} = require('../services/uptime.service');
-
-const {
     createMonitor,
     getMonitors,
     getMonitorById,
@@ -24,43 +20,23 @@ const {
     updateMonitorLocations
 } = require('../controllers/monitor.controller');
 
+const {
+    getMonitorNotificationChannels,
+    updateMonitorNotificationChannels
+} = require('../controllers/monitorNotificationChannels.controller');
+
 router.post('/', createMonitor);
 
 router.get('/', getMonitors);
 
 router.get('/status', getMonitorStatus);
 
-router.get('/test', async (req, res) => {
-    try {
-        const result = await db.query(
-            'SELECT * FROM monitors WHERE user_id = $1 LIMIT 1',
-            [req.user.id]
-        );
-
-        const monitor = result.rows[0];
-
-        if (!monitor) {
-            return res.status(404).json({
-                message: 'No monitors found'
-            });
-        }
-
-        const checkResult = await checkMonitor(monitor);
-
-        res.json(checkResult);
-
-    } catch (error) {
-        console.error(error);
-
-        res.status(500).json({
-            message: 'Test failed'
-        });
-    }
-});
-
 router.get('/:id/locations', getMonitorLocations);
 
 router.put('/:id/locations', updateMonitorLocations);
+
+router.get('/:id/notification-channels', getMonitorNotificationChannels);
+router.put('/:id/notification-channels', updateMonitorNotificationChannels);
 
 router.get('/:id', getMonitorById);
 
@@ -117,4 +93,3 @@ router.post('/:id/heartbeat-token', async (req, res) => {
     }
 });
 module.exports = router;
-

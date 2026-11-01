@@ -294,6 +294,58 @@ expect(result).toEqual({
         );
     });
 
+    test('preserves certificate metadata and processes expiry alerts after a TLS verification failure', async () => {
+        const certificateExpiresAt = '2026-10-31T12:00:00.000Z';
+        const tlsError = Object.assign(
+            new Error('Certificate has expired'),
+            {
+                code: 'CERT_HAS_EXPIRED',
+                certificateExpiresAt,
+                certificateDaysRemaining: -1
+            }
+        );
+
+        const monitor = {
+            id: 601,
+            user_id: 55,
+            url: 'https://example.com'
+        };
+
+        checkHttp.mockRejectedValue(tlsError);
+        classifyCheckError.mockReturnValue({
+            errorType: 'CERTIFICATE',
+            errorMessage: 'The TLS certificate is invalid'
+        });
+
+        const result = await checkMonitor(monitor);
+
+        expect(result).toEqual({
+            status: 'DOWN',
+            responseTime: null,
+            statusCode: null
+        });
+
+        expect(db.query).toHaveBeenCalledWith(
+            expect.stringContaining('INSERT INTO monitor_results'),
+            expect.arrayContaining([
+                601,
+                'DOWN',
+                'CERTIFICATE',
+                'The TLS certificate is invalid',
+                certificateExpiresAt,
+                -1
+            ])
+        );
+
+        expect(processCertificateAlert).toHaveBeenCalledWith(
+            monitor,
+            expect.objectContaining({
+                status: 'DOWN',
+                certificateExpiresAt,
+                certificateDaysRemaining: -1
+            })
+        );
+    });
     test('records an outage event only on a transition to DOWN', async () => {
         checkHttp.mockResolvedValue({
             statusCode: 503,
@@ -405,15 +457,20 @@ checkHttp.mockResolvedValue({
             id: 10,
             monitor_type: 'TCP',
             tcp_host: 'example.com',
-            tcp_port: 443
+            tcp_port: 443,
+            timeout_ms: 5000
         });
 
-        expect(checkTcp).toHaveBeenCalledWith({
-            id: 10,
-            monitor_type: 'TCP',
-            tcp_host: 'example.com',
-            tcp_port: 443
-        });
+        expect(checkTcp).toHaveBeenCalledWith(
+            expect.objectContaining({
+                id: 10,
+                monitor_type: 'TCP',
+                tcp_host: 'example.com',
+                tcp_port: 443,
+                timeout_ms: 5000
+            }),
+            { timeoutMs: 5000 }
+        );
         expect(checkHttp).not.toHaveBeenCalled();
 
         expect(result).toEqual({

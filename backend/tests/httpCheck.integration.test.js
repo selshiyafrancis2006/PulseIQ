@@ -340,27 +340,52 @@ describe('checkHttp real HTTPS certificate integration', () => {
         expect(result.certificateDaysRemaining).toBeLessThanOrEqual(30);
     });
 
-    test('rejects an untrusted self-signed certificate', async () => {
-        await expect(
-            checkHttp(
+    test('rejects an untrusted self-signed certificate and captures its expiry', async () => {
+        let requestError;
+
+        try {
+            await checkHttp(
                 { url: baseUrl },
                 { validateUrl: validateTestHttpsServer }
-            )
-        ).rejects.toThrow();
+            );
+        } catch (error) {
+            requestError = error;
+        }
+
+        expect(requestError).toBeDefined();
+        expect(requestError.certificateExpiresAt).toBe(
+            new Date(Date.parse(certificateInfo.validTo)).toISOString()
+        );
+        expect(requestError.certificateDaysRemaining).toEqual(
+            expect.any(Number)
+        );
     });
 
-    test('rejects a hostname mismatch even when the certificate is trusted', async () => {
+    test('rejects a hostname mismatch and captures the peer certificate expiry', async () => {
         const wrongHostnameUrl =
             `https://wrong.example.com:${server.address().port}`;
 
-        await expect(
-            checkHttp(
+        let requestError;
+
+        try {
+            await checkHttp(
                 { url: wrongHostnameUrl },
                 {
                     validateUrl: validateTestHttpsServer,
                     tlsCa: certificate
                 }
-            )
-        ).rejects.toThrow(/hostname|altname/i);
+            );
+        } catch (error) {
+            requestError = error;
+        }
+
+        expect(requestError).toBeDefined();
+        expect(requestError.message).toMatch(/hostname|altname/i);
+        expect(requestError.certificateExpiresAt).toBe(
+            new Date(Date.parse(certificateInfo.validTo)).toISOString()
+        );
+        expect(requestError.certificateDaysRemaining).toEqual(
+            expect.any(Number)
+        );
     });
 });
