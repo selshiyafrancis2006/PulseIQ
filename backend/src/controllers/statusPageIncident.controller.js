@@ -52,13 +52,13 @@ async function createIncident(req, res) {
     const monitorIds = body.monitor_ids === undefined ? [] : body.monitor_ids;
 
     if (typeof title !== 'string' || !title.trim() || title.trim().length > 160) {
-        return res.status(400).json({ message: 'title must be 1–160 characters' });
+        return res.status(400).json({ message: 'title must be 1-160 characters' });
     }
     if (!IMPACTS.includes(impact)) {
         return res.status(400).json({ message: 'impact must be minor, major, or critical' });
     }
     if (typeof message !== 'string' || !message.trim() || message.trim().length > 5000) {
-        return res.status(400).json({ message: 'message must be 1–5000 characters' });
+        return res.status(400).json({ message: 'message must be 1-5000 characters' });
     }
     if (!Array.isArray(monitorIds) || monitorIds.length > 100 ||
         monitorIds.some(id => !Number.isSafeInteger(id) || id <= 0) ||
@@ -141,7 +141,7 @@ async function addIncidentUpdate(req, res) {
         return res.status(400).json({ message: 'Invalid incident status' });
     }
     if (typeof message !== 'string' || !message.trim() || message.trim().length > 5000) {
-        return res.status(400).json({ message: 'message must be 1–5000 characters' });
+        return res.status(400).json({ message: 'message must be 1-5000 characters' });
     }
 
     let client;
@@ -170,11 +170,14 @@ async function addIncidentUpdate(req, res) {
             });
         }
 
+        // $1 is cast to varchar in both places. Without the casts Postgres
+        // infers varchar for the column and text for the comparison and
+        // rejects the query ("inconsistent types deduced for parameter $1").
         const updated = await client.query(
             `UPDATE status_page_incidents
-             SET status = $1,
+             SET status = $1::varchar,
                  updated_at = NOW(),
-                 resolved_at = CASE WHEN $1 = 'resolved' THEN NOW() ELSE NULL END
+                 resolved_at = CASE WHEN $1::varchar = 'resolved' THEN NOW() ELSE NULL END
              WHERE id = $2
              RETURNING id, title, impact, status, created_at, updated_at, resolved_at`,
             [status, incidentId]
@@ -202,5 +205,3 @@ async function addIncidentUpdate(req, res) {
 }
 
 module.exports = { getIncidents, createIncident, addIncidentUpdate };
-
-

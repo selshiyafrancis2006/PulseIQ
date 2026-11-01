@@ -186,7 +186,7 @@ test('returns assigned locations and latest result', async () => {
     });
 });
 
-test('does not expose another user's monitor locations', async () => {
+test("does not expose another user's monitor locations", async () => {
     const response = await request(app)
         .get(`/api/monitors/${monitorId}/locations`)
         .set(authHeader(otherUserToken));

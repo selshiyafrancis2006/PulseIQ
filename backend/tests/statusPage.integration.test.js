@@ -92,7 +92,7 @@ test('publishes a page containing only the selected owned monitors', async () =>
     expect(publicPage.body.monitors.some(m => m.id === otherMonitor)).toBe(false);
 });
 
-test('rejects attempts to publish another user's monitor', async () => {
+test("rejects attempts to publish another user's monitor", async () => {
     const saved = await request(app)
         .put('/api/status-pages')
         .set(authHeader(owner.token))
