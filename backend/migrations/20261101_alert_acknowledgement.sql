@@ -1,0 +1,8 @@
+BEGIN;
+
+ALTER TABLE alerts
+    ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS acknowledged_by INTEGER
+        REFERENCES users(id) ON DELETE SET NULL;
+
+COMMIT;

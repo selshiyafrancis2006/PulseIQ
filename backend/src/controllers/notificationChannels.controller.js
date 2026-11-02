@@ -23,7 +23,21 @@ function maskEmail(value) {
 // Webhook URLs and email recipients are sensitive.
 // Never return their full values from the API.
 function toPublic(row) {
-    const url = row.type !== 'email' && row.url ? decryptUrl(row.url) : '';
+    let url = '';
+
+    if (row.type !== 'email' && row.url) {
+        try {
+            url = decryptUrl(row.url);
+        } catch (error) {
+            // A plain-text legacy URL or a key mismatch must not break the
+            // whole list; the channel is shown without a URL hint.
+            console.error(
+                `Channel URL unreadable (channel_id: ${row.id}):`,
+                error.message
+            );
+        }
+    }
+
     let host = '';
 
     try {

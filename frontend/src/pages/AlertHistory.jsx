@@ -9,6 +9,8 @@ export default function AlertHistory() {
 
   const [alerts, setAlerts] = useState([]);
   const [filter, setFilter] = useState("all");
+  const [acknowledgingIds, setAcknowledgingIds] = useState([]);
+  const [acknowledgementErrors, setAcknowledgementErrors] = useState({});
 
 
   useEffect(() => {
@@ -45,6 +47,52 @@ export default function AlertHistory() {
 
 
 
+  const handleAcknowledge = async (alertId) => {
+    if (acknowledgingIds.includes(alertId)) return;
+
+    setAcknowledgingIds(current => [...current, alertId]);
+    setAcknowledgementErrors(current => {
+      const next = { ...current };
+      delete next[alertId];
+      return next;
+    });
+
+    try {
+      const res = await apiFetch(
+        `${API_BASE_URL}/api/alerts/${alertId}/acknowledge`,
+        { method: "POST" }
+      );
+
+      if (!res.ok) {
+        throw new Error("Failed to acknowledge alert");
+      }
+
+      const data = await res.json();
+
+      setAlerts(current =>
+        current.map(alert =>
+          alert.id === alertId
+            ? {
+                ...alert,
+                acknowledged_at: data.acknowledged_at,
+                acknowledged_by: data.acknowledged_by,
+              }
+            : alert
+        )
+      );
+    } catch (error) {
+      console.error("Failed to acknowledge alert", error);
+      setAcknowledgementErrors(current => ({
+        ...current,
+        [alertId]: "Could not acknowledge this alert. Please try again.",
+      }));
+    } finally {
+      setAcknowledgingIds(current =>
+        current.filter(id => id !== alertId)
+      );
+    }
+  };
+
   const filteredAlerts =
     filter === "all"
       ? alerts
@@ -76,7 +124,7 @@ export default function AlertHistory() {
   setFilter={setFilter}
 />
 
-      <AlertList alerts={filteredAlerts}/>
+      <AlertList alerts={filteredAlerts} onAcknowledge={handleAcknowledge} acknowledgingIds={acknowledgingIds} acknowledgementErrors={acknowledgementErrors}/>
 
 
     </div>

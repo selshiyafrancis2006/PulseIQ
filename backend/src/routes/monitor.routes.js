@@ -12,6 +12,7 @@ const {
     getMonitorHistory,
     getMonitorUptime,
     getMonitorEvents,
+    acknowledgeMonitorEvent,
     updateMonitor,
     deleteMonitor,
     pauseMonitor,
@@ -25,6 +26,11 @@ const {
     updateMonitorNotificationChannels
 } = require('../controllers/monitorNotificationChannels.controller');
 
+const {
+    getMonitorEscalation,
+    updateMonitorEscalation
+} = require('../controllers/monitorEscalation.controller');
+
 router.post('/', createMonitor);
 
 router.get('/', getMonitors);
@@ -37,6 +43,8 @@ router.put('/:id/locations', updateMonitorLocations);
 
 router.get('/:id/notification-channels', getMonitorNotificationChannels);
 router.put('/:id/notification-channels', updateMonitorNotificationChannels);
+router.get('/:id/escalation', getMonitorEscalation);
+router.put('/:id/escalation', updateMonitorEscalation);
 
 router.get('/:id', getMonitorById);
 
@@ -45,6 +53,7 @@ router.get('/:id/history', getMonitorHistory);
 router.get('/:id/uptime', getMonitorUptime);
 
 router.get('/:id/events', getMonitorEvents);
+router.patch('/:id/events/:eventId/acknowledge', acknowledgeMonitorEvent);
 
 router.patch('/:id', updateMonitor);
 router.delete('/:id', deleteMonitor);
@@ -93,3 +102,4 @@ router.post('/:id/heartbeat-token', async (req, res) => {
     }
 });
 module.exports = router;
+

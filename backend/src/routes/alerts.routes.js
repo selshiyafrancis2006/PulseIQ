@@ -4,10 +4,12 @@ const router = express.Router();
 const {
     getAlerts,
     getRules,
-    putRule
+    putRule,
+    postAcknowledgeAlert
 } = require('../controllers/alerts.controller');
 
 router.get('/alerts', getAlerts);
+router.post('/alerts/:id/acknowledge', postAcknowledgeAlert);
 
 router.get('/alert-rules', getRules);
 

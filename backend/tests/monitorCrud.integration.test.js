@@ -1267,3 +1267,94 @@ test('rejects heartbeat grace period on non-heartbeat monitors', async () => {
 
     expect(updated.status).toBe(400);
 });
+
+
+test('monitor creation stores default SLO configuration', async () => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token, 'slo-defaults');
+
+    expect(Number(monitor.slo_target_percent)).toBe(99.9);
+    expect(monitor.slo_window_days).toBe(30);
+});
+
+test('monitor creation stores custom SLO configuration', async () => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'slo-custom',
+            url: 'https://example.com',
+            slo_target_percent: 99.5,
+            slo_window_days: 7
+        });
+
+    expect(response.status).toBe(201);
+    expect(Number(response.body.slo_target_percent)).toBe(99.5);
+    expect(response.body.slo_window_days).toBe(7);
+});
+
+test('monitor update stores SLO settings and preserves omitted values', async () => {
+    const user = await createUser();
+    const created = await createMonitor(user.token, 'slo-update');
+
+    const targetUpdate = await request(app)
+        .patch(`/api/monitors/${created.id}`)
+        .set(authHeader(user.token))
+        .send({ slo_target_percent: 99.5 });
+
+    expect(targetUpdate.status).toBe(200);
+    expect(Number(targetUpdate.body.slo_target_percent)).toBe(99.5);
+    expect(targetUpdate.body.slo_window_days).toBe(30);
+
+    const windowUpdate = await request(app)
+        .patch(`/api/monitors/${created.id}`)
+        .set(authHeader(user.token))
+        .send({ slo_window_days: 7 });
+
+    expect(windowUpdate.status).toBe(200);
+    expect(Number(windowUpdate.body.slo_target_percent)).toBe(99.5);
+    expect(windowUpdate.body.slo_window_days).toBe(7);
+});
+
+test.each([
+    ['target below minimum', { slo_target_percent: 89.99 }],
+    ['target above maximum', { slo_target_percent: 100.01 }],
+    ['target with excessive precision', { slo_target_percent: 99.999 }],
+    ['window below minimum', { slo_window_days: 0 }],
+    ['window above maximum', { slo_window_days: 366 }],
+    ['fractional window', { slo_window_days: 1.5 }]
+])('monitor creation rejects invalid SLO settings: %s', async (_description, settings) => {
+    const user = await createUser();
+
+    const response = await request(app)
+        .post('/api/monitors')
+        .set(authHeader(user.token))
+        .send({
+            name: 'invalid-slo-create',
+            url: 'https://example.com',
+            ...settings
+        });
+
+    expect(response.status).toBe(400);
+});
+
+test.each([
+    ['target below minimum', { slo_target_percent: 89.99 }],
+    ['target above maximum', { slo_target_percent: 100.01 }],
+    ['target with excessive precision', { slo_target_percent: 99.999 }],
+    ['window below minimum', { slo_window_days: 0 }],
+    ['window above maximum', { slo_window_days: 366 }],
+    ['fractional window', { slo_window_days: 1.5 }]
+])('monitor update rejects invalid SLO settings: %s', async (_description, settings) => {
+    const user = await createUser();
+    const monitor = await createMonitor(user.token, 'invalid-slo-update');
+
+    const response = await request(app)
+        .patch(`/api/monitors/${monitor.id}`)
+        .set(authHeader(user.token))
+        .send(settings);
+
+    expect(response.status).toBe(400);
+});

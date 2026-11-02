@@ -39,6 +39,9 @@ function buildSlackPayload(event) {
         case 'STILL_DOWN':
             lines.push(`:red_circle: *${name}* is still DOWN`);
             break;
+        case 'ESCALATION':
+            lines.push(`:rotating_light: *${name}* escalation stage ${event.escalationStage}`);
+            break;
         case 'UP':
             lines.push(`:large_green_circle: *${name}* recovered`);
             break;
@@ -79,6 +82,13 @@ function buildSlackPayload(event) {
         lines.push('Alerts for this monitor have resumed.');
     }
 
+    if (event.type === 'ESCALATION') {
+        lines.push(event.message || 'The monitor remains DOWN.');
+        if (event.downForSeconds != null) {
+            lines.push(`Outage duration: ${formatDuration(event.downForSeconds)}`);
+        }
+    }
+
     if (event.errorMessage) {
         lines.push(`Reason: ${escapeSlack(event.errorMessage)}`);
     }
@@ -117,6 +127,13 @@ function buildWebhookPayload(event) {
         payload.down_for_seconds = event.downForSeconds;
     }
 
+    if (event.type === 'ESCALATION') {
+        payload.escalation = {
+            stage: event.escalationStage ?? null,
+            down_for_seconds: event.downForSeconds ?? null
+        };
+    }
+
     if (event.type === 'FLAPPING') {
         payload.flapping = {
             transitions: event.transitions ?? null,
@@ -144,6 +161,9 @@ function buildEmailMessage(event) {
             break;
         case 'STILL_DOWN':
             subject = `${subjectPrefix} Monitor still DOWN: ${monitorName}`;
+            break;
+        case 'ESCALATION':
+            subject = `${subjectPrefix} Monitor escalation stage ${event.escalationStage}: ${monitorName}`;
             break;
         case 'UP':
             subject = `${subjectPrefix} Monitor recovered: ${monitorName}`;
@@ -188,6 +208,10 @@ function buildEmailMessage(event) {
             `${event.type === 'UP' ? 'Downtime' : 'Down for'}: ` +
             formatDuration(event.downForSeconds)
         );
+    }
+
+    if (event.type === 'ESCALATION') {
+        lines.push(`Escalation stage: ${event.escalationStage ?? 'Unknown'}`);
     }
 
     if (event.type === 'FLAPPING') {
@@ -317,7 +341,7 @@ async function sendToChannel(channel, event) {
 
 // Fan out to every active channel the user owns. Never throws:
 // a broken channel must not break monitor checking.
-async function notifyUser(userId, event) {
+async function notifyUser(userId, event, channelIdsOverride = null, bypassMonitorRouting = false) {
     let channels;
 
     try {
@@ -327,30 +351,43 @@ async function notifyUser(userId, event) {
              WHERE user_id = $1
                AND is_active = true
                AND (
-                   $2::INTEGER IS NULL
-                   OR NOT EXISTS (
-                       SELECT 1
-                       FROM monitor_notification_settings
-                       WHERE monitor_id = $2
-                   )
-                   OR EXISTS (
-                       SELECT 1
-                       FROM monitor_notification_settings
-                       WHERE monitor_id = $2
-                         AND routing_mode = 'ALL'
-                   )
-                   OR EXISTS (
-                       SELECT 1
-                       FROM monitor_notification_settings settings
-                       JOIN monitor_notification_channels selected
-                         ON selected.monitor_id = settings.monitor_id
-                       WHERE settings.monitor_id = $2
-                         AND settings.routing_mode = 'SELECTED'
-                         AND selected.channel_id = notification_channels.id
+                   NOT $4::BOOLEAN
+                   OR $3::INTEGER[] IS NULL
+                   OR notification_channels.id = ANY($3::INTEGER[])
+               )
+               AND (
+                   $4::BOOLEAN
+                   OR (
+                       $2::INTEGER IS NULL
+                       OR NOT EXISTS (
+                           SELECT 1
+                           FROM monitor_notification_settings
+                           WHERE monitor_id = $2
+                       )
+                       OR EXISTS (
+                           SELECT 1
+                           FROM monitor_notification_settings
+                           WHERE monitor_id = $2
+                             AND routing_mode = 'ALL'
+                       )
+                       OR EXISTS (
+                           SELECT 1
+                           FROM monitor_notification_settings settings
+                           JOIN monitor_notification_channels selected
+                             ON selected.monitor_id = settings.monitor_id
+                           WHERE settings.monitor_id = $2
+                             AND settings.routing_mode = 'SELECTED'
+                             AND selected.channel_id = notification_channels.id
+                       )
                    )
                )
              ORDER BY id`,
-            [userId, event.monitor?.id ?? null]
+            [
+                userId,
+                event.monitor?.id ?? null,
+                channelIdsOverride,
+                bypassMonitorRouting
+            ]
         );
         channels = result.rows;
     } catch (error) {
@@ -359,7 +396,9 @@ async function notifyUser(userId, event) {
     }
 
     const settled = await Promise.allSettled(
-        channels.map((channel) => {
+        // async so a URL that cannot be decrypted rejects only its own
+        // channel instead of throwing out of notifyUser.
+        channels.map(async (channel) => {
             const deliveryChannel = channel.type === 'email'
                 ? channel
                 : { ...channel, url: decryptUrl(channel.url) };

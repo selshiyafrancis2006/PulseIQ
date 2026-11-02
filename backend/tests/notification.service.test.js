@@ -118,7 +118,7 @@ describe('notifyUser delivery', () => {
 
         expect(db.query).toHaveBeenCalledWith(
             expect.stringContaining('WHERE user_id = $1'),
-            [7, 12]
+            [7, 12, null, false]
         );
         expect(db.query.mock.calls[0][0]).toContain('monitor_notification_settings');
         expect(db.query.mock.calls[0][0]).toContain("settings.routing_mode = 'SELECTED'");
@@ -145,7 +145,7 @@ describe('notifyUser delivery', () => {
 
         expect(db.query).toHaveBeenCalledWith(
             expect.stringContaining('SELECT id, type, name, url, email'),
-            [7, 12]
+            [7, 12, null, false]
         );
         expect(db.query.mock.calls[0][0]).toContain("settings.routing_mode = 'SELECTED'");
         expect(db.query.mock.calls[0][0]).toContain('selected.channel_id = notification_channels.id');
@@ -737,7 +737,7 @@ describe('notifyUser email channel delivery', () => {
 
         expect(db.query).toHaveBeenCalledWith(
             expect.stringContaining('SELECT id, type, name, url, email'),
-            [7, 12]
+            [7, 12, null, false]
         );
 
         expect(nodemailer.createTransport).toHaveBeenCalledTimes(1);
@@ -756,3 +756,4 @@ describe('notifyUser email channel delivery', () => {
         ]);
     });
 });
+

@@ -259,4 +259,84 @@ describe('AlertHistory page', () => {
 
     expect(apiFetch).toHaveBeenCalledTimes(1);
   });
+  test('acknowledges an alert and updates its card', async () => {
+    render(<AlertHistory />);
+
+    await screen.findByText('HOST OFFLINE');
+
+    const acknowledgedAt = '2026-11-01T06:00:00.000Z';
+
+    apiFetch.mockResolvedValueOnce({
+      ok: true,
+      json: vi.fn().mockResolvedValue({
+        acknowledged_at: acknowledgedAt,
+        acknowledged_by: 42,
+      }),
+    });
+
+    fireEvent.click(
+      screen.getAllByRole('button', { name: 'Acknowledge' })[0]
+    );
+
+    await waitFor(() => {
+      expect(screen.getAllByText(/Acknowledged/)).toHaveLength(1);
+    });
+
+    expect(apiFetch).toHaveBeenCalledWith(
+      'http://localhost:5000/api/alerts/1/acknowledge',
+      { method: 'POST' }
+    );
+
+    expect(
+      screen.getAllByRole('button', { name: 'Acknowledge' })
+    ).toHaveLength(3);
+  });
+
+  test('keeps acknowledgement available and displays an error when the request fails', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    render(<AlertHistory />);
+
+    await screen.findByText('HOST OFFLINE');
+
+    apiFetch.mockResolvedValueOnce({ ok: false });
+
+    fireEvent.click(
+      screen.getAllByRole('button', { name: 'Acknowledge' })[0]
+    );
+
+    expect(
+      await screen.findByRole('alert')
+    ).toHaveTextContent(
+      'Could not acknowledge this alert. Please try again.'
+    );
+
+    expect(
+      screen.getAllByRole('button', { name: 'Acknowledge' })
+    ).toHaveLength(4);
+  });
+
+  test('shows acknowledged status without an acknowledge button for an already acknowledged alert', async () => {
+    mockAlertsResponse(
+      alerts.map(alert =>
+        alert.id === 1
+          ? {
+              ...alert,
+              acknowledged_at: '2026-11-01T06:00:00.000Z',
+              acknowledged_by: 42,
+            }
+          : alert
+      )
+    );
+
+    render(<AlertHistory />);
+
+    await screen.findByText('CPU USAGE');
+
+    expect(screen.getAllByText(/Acknowledged/)).toHaveLength(1);
+    expect(
+      screen.getAllByRole('button', { name: 'Acknowledge' })
+    ).toHaveLength(3);
+  });
+
 });

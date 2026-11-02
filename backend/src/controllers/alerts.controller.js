@@ -1,10 +1,16 @@
-const { fetchAlerts, fetchRules, updateRule } = require('../services/alert.service');
+const { fetchAlerts, fetchRules, updateRule, acknowledgeAlert } = require('../services/alert.service');
 
 const getAlerts = async (req, res) => {
     try {
         const { host_id, limit: rawLimit, offset: rawOffset } = req.query;
 
-        if (!host_id || !/^\d+$/.test(String(host_id)) || Number(host_id) < 1) {
+        if (
+            host_id !== undefined &&
+            (
+                !/^[1-9]\d*$/.test(String(host_id)) ||
+                !Number.isSafeInteger(Number(host_id))
+            )
+        ) {
             return res.status(400).json({ error: 'A valid host_id is required' });
         }
 
@@ -24,7 +30,7 @@ const getAlerts = async (req, res) => {
         }
 
         const alerts = await fetchAlerts(
-            Number(host_id),
+            host_id === undefined ? null : Number(host_id),
             req.user.id,
             limit,
             offset
@@ -64,4 +70,28 @@ const putRule = async (req, res) => {
     }
 };
 
-module.exports = { getAlerts, getRules, putRule };
+
+const postAcknowledgeAlert = async (req, res) => {
+    try {
+        const { id } = req.params;
+
+        if (!/^[1-9]\d*$/.test(String(id)) || !Number.isSafeInteger(Number(id))) {
+            return res.status(400).json({ error: 'A valid alert id is required' });
+        }
+
+        const alert = await acknowledgeAlert(Number(id), req.user.id);
+
+        if (!alert) {
+            return res.status(404).json({ error: 'Alert not found' });
+        }
+
+        res.json({
+            message: 'Alert acknowledged',
+            ...alert
+        });
+    } catch (err) {
+        console.error('Failed to acknowledge alert:', err);
+        res.status(500).json({ error: 'Failed to acknowledge alert' });
+    }
+};
+module.exports = { getAlerts, getRules, putRule, postAcknowledgeAlert };

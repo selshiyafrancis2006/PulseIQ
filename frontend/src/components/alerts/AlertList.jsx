@@ -1,7 +1,7 @@
 import AlertCard from "./AlertCard";
 
 
-export default function AlertList({ alerts }) {
+export default function AlertList({ alerts, onAcknowledge, acknowledgingIds = [], acknowledgementErrors = {} }) {
 
 
   return (
@@ -14,6 +14,9 @@ export default function AlertList({ alerts }) {
           <AlertCard
             key={alert.id}
             alert={alert}
+            onAcknowledge={onAcknowledge}
+            isAcknowledging={acknowledgingIds.includes(alert.id)}
+            acknowledgementError={acknowledgementErrors[alert.id]}
           />
 
         ))

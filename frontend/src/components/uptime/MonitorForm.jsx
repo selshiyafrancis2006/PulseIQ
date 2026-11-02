@@ -32,6 +32,8 @@ const EMPTY_FORM = {
   expected_status_codes: '',
   expected_keyword: '',
   max_response_time_ms: '',
+  slo_target_percent: 99.9,
+  slo_window_days: 30,
 };
 
 const NUMERIC_FIELDS = [
@@ -41,6 +43,8 @@ const NUMERIC_FIELDS = [
   'failure_threshold',
   'heartbeat_grace_seconds',
   'timeout_ms',
+  'slo_target_percent',
+  'slo_window_days',
 ];
 
 function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
@@ -72,6 +76,8 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
       : '',
     expected_keyword: monitor.expected_keyword ?? '',
     max_response_time_ms: monitor.max_response_time_ms ?? '',
+    slo_target_percent: monitor.slo_target_percent ?? 99.9,
+    slo_window_days: monitor.slo_window_days ?? 30,
   } : { ...EMPTY_FORM });
   const [error, setError] = useState('');
 
@@ -173,6 +179,21 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
         (!Number.isInteger(form.heartbeat_grace_seconds) ||
           form.heartbeat_grace_seconds < 0 || form.heartbeat_grace_seconds > 86400)) {
       setError('Heartbeat grace period must be an integer between 0 and 86400 seconds.');
+      return;
+    }
+
+    if (
+      !Number.isFinite(form.slo_target_percent) ||
+      form.slo_target_percent < 90 ||
+      form.slo_target_percent > 100 ||
+      Math.abs(form.slo_target_percent * 100 - Math.round(form.slo_target_percent * 100)) > 1e-8
+    ) {
+      setError('SLO target must be between 90 and 100 with at most 2 decimal places.');
+      return;
+    }
+
+    if (!Number.isInteger(form.slo_window_days) || form.slo_window_days < 1 || form.slo_window_days > 365) {
+      setError('SLO window must be an integer between 1 and 365 days.');
       return;
     }
 
@@ -303,6 +324,8 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
       interval_seconds: form.interval_seconds,
       renotify_minutes: form.renotify_minutes,
       failure_threshold: form.failure_threshold,
+      slo_target_percent: form.slo_target_percent,
+      slo_window_days: form.slo_window_days,
     };
 
     if (monitorType === 'HTTP') {
@@ -660,6 +683,22 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
             </div>
           </>
         )}
+
+        <div className="rounded-lg border border-[#303030] bg-[#111] p-4">
+          <h3 className="mb-3 text-sm font-semibold text-white">Service Level Objective (SLO)</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className={labelClass} htmlFor="monitor-slo-target">SLO target (%)</label>
+              <input id="monitor-slo-target" name="slo_target_percent" type="number" min={90} max={100} step={0.01} value={form.slo_target_percent} onChange={handleChange} required className={inputClass} />
+              <p className="mt-1 text-xs text-gray-500">Allowed range: 90–100%, up to 2 decimal places.</p>
+            </div>
+            <div>
+              <label className={labelClass} htmlFor="monitor-slo-window">SLO window (days)</label>
+              <input id="monitor-slo-window" name="slo_window_days" type="number" min={1} max={365} step={1} value={form.slo_window_days} onChange={handleChange} required className={inputClass} />
+              <p className="mt-1 text-xs text-gray-500">Rolling measurement window: 1–365 days.</p>
+            </div>
+          </div>
+        </div>
 
         <div>
           <label className={labelClass} htmlFor="monitor-tags">Tags</label>

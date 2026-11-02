@@ -104,6 +104,41 @@ export default function MonitorDetails() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
+  const [acknowledgingEventId, setAcknowledgingEventId] = useState(null);
+  const [eventActionError, setEventActionError] = useState('');
+
+  const handleAcknowledgeEvent = async (eventId) => {
+    setAcknowledgingEventId(eventId);
+    setEventActionError('');
+
+    try {
+      const response = await apiFetch(
+        `${API_BASE_URL}/api/monitors/${id}/events/${eventId}/acknowledge`,
+        { method: 'PATCH' }
+      );
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.message || 'Unable to acknowledge incident.');
+      }
+
+      setEvents((previous) =>
+        previous.map((event) =>
+          String(event.id) === String(eventId)
+            ? {
+                ...event,
+                acknowledged_at: data.acknowledged_at,
+                acknowledged_by: data.acknowledged_by,
+              }
+            : event
+        )
+      );
+    } catch (err) {
+      setEventActionError(err.message || 'Unable to acknowledge incident.');
+    } finally {
+      setAcknowledgingEventId(null);
+    }
+  };
 
  const fetchData = useCallback(async (showLoading = false, isActive = () => true) => {
     if (showLoading) setLoading(true);
@@ -370,7 +405,7 @@ useEffect(() => {
           note={uptime ? `${RANGES.find((range) => range.value === timeRange)?.label || timeRange}` : 'Waiting for data'}
         />
         <MetricCard
-          label="SLO (30 days)"
+          label={`SLO (${uptime?.slo?.window_days ?? monitor?.slo_window_days ?? 30} days)`}
           value={
             uptime?.slo?.status === 'insufficient_data'
               ? 'Insufficient data'
@@ -540,6 +575,11 @@ const hasCertificateData =
       </Panel>
 
       <Panel title="Incident timeline" subtitle="DOWN events are paired with the next recovery event when one exists.">
+        {eventActionError && (
+          <p role="alert" className="mb-3 text-sm text-red-400">
+            {eventActionError}
+          </p>
+        )}
         {incidentTimeline.length === 0 ? (
           <p className="py-4 text-sm text-gray-500">No recorded DOWN incidents in the available event history.</p>
         ) : (
@@ -564,6 +604,24 @@ const hasCertificateData =
                 <p className="ml-5 mt-2 text-sm text-gray-400">
                   Duration: {incident.duration == null ? 'Ongoing or unavailable' : formatDuration(incident.duration)}
                 </p>
+                <div className="ml-5 mt-3">
+                  {incident.acknowledged_at ? (
+                    <p className="text-xs text-emerald-400">
+                      Acknowledged {formatDateTime(incident.acknowledged_at)}
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => void handleAcknowledgeEvent(incident.id)}
+                      disabled={String(acknowledgingEventId) === String(incident.id)}
+                      className="rounded-md border border-emerald-800 px-3 py-1.5 text-xs text-emerald-400 hover:bg-emerald-950/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {String(acknowledgingEventId) === String(incident.id)
+                        ? 'Acknowledging...'
+                        : 'Acknowledge'}
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>

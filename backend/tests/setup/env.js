@@ -38,3 +38,11 @@ if (!process.env.DB_PASSWORD) {
         'Test database password is missing. Set TEST_DB_PASSWORD or POSTGRES_PASSWORD.'
     );
 }
+
+
+// Channel tests store encrypted webhook URLs, so they need a key. A random
+// per-process key keeps a fresh clone or CI run working without a .env file.
+if (!process.env.NOTIFICATION_ENCRYPTION_KEY) {
+    process.env.NOTIFICATION_ENCRYPTION_KEY =
+        require('crypto').randomBytes(32).toString('base64');
+}

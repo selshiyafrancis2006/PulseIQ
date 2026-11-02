@@ -381,3 +381,111 @@ describe('MonitorForm - G5.4 DNS expected values', () => {
     );
   });
 });
+
+// G5 - Service Level Objective configuration
+describe('MonitorForm - SLO configuration', () => {
+  it('submits the default SLO target and window', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+
+    render(<MonitorForm saving={false} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+    fillHttpForm();
+    submitForm('Create Monitor');
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      slo_target_percent: 99.9,
+      slo_window_days: 30,
+    }));
+  });
+
+  it('submits custom SLO settings', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+
+    render(<MonitorForm saving={false} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+    fillHttpForm();
+
+    fireEvent.change(screen.getByLabelText('SLO target (%)'), {
+      target: { value: '99.95' },
+    });
+    fireEvent.change(screen.getByLabelText('SLO window (days)'), {
+      target: { value: '90' },
+    });
+
+    submitForm('Create Monitor');
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({
+      slo_target_percent: 99.95,
+      slo_window_days: 90,
+    }));
+  });
+
+  it.each([89, 100.01, 99.999])(
+    'rejects invalid SLO target %s',
+    async (targetPercent) => {
+      const onSubmit = vi.fn();
+
+      render(<MonitorForm saving={false} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+      fillHttpForm();
+
+      fireEvent.change(screen.getByLabelText('SLO target (%)'), {
+        target: { value: String(targetPercent) },
+      });
+
+      submitForm('Create Monitor');
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'SLO target must be between 90 and 100 with at most 2 decimal places.'
+      );
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([0, 366, 1.5])(
+    'rejects invalid SLO window %s',
+    async (windowDays) => {
+      const onSubmit = vi.fn();
+
+      render(<MonitorForm saving={false} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+      fillHttpForm();
+
+      fireEvent.change(screen.getByLabelText('SLO window (days)'), {
+        target: { value: String(windowDays) },
+      });
+
+      submitForm('Create Monitor');
+
+      expect(await screen.findByRole('alert')).toHaveTextContent(
+        'SLO window must be an integer between 1 and 365 days.'
+      );
+      expect(onSubmit).not.toHaveBeenCalled();
+    }
+  );
+
+  it('loads saved SLO settings when editing', () => {
+    render(
+      <MonitorForm
+        monitor={{
+          id: 40,
+          name: 'Existing API',
+          monitor_type: 'HTTP',
+          url: 'https://example.com/health',
+          slo_target_percent: 99.95,
+          slo_window_days: 90,
+        }}
+        saving={false}
+        onSubmit={vi.fn()}
+        onCancel={vi.fn()}
+      />
+    );
+
+    expect(screen.getByLabelText('SLO target (%)')).toHaveValue(99.95);
+    expect(screen.getByLabelText('SLO window (days)')).toHaveValue(90);
+  });
+});

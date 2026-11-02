@@ -131,3 +131,45 @@ describe('calculateSlo', () => {
     });
 
 });
+
+describe('calculateSlo with custom configuration', () => {
+    test('uses a custom target and window to calculate the downtime budget', () => {
+        const result = calculateSlo([], {
+            now: NOW,
+            targetPercent: 99.5,
+            windowDays: 7
+        });
+
+        expect(result.target_percent).toBe(99.5);
+        expect(result.window_days).toBe(7);
+        expect(result.allowed_downtime_minutes).toBe(50.4);
+        expect(result.status).toBe('insufficient_data');
+    });
+
+    test('calculates downtime against the configured window budget', () => {
+        const result = calculateSlo(
+            [
+                {
+                    type: 'UP',
+                    created_at: new Date(
+                        NOW.getTime() - 8 * 24 * 60 * 60 * 1000
+                    )
+                },
+                event('DOWN', 20),
+                event('UP', 10)
+            ],
+            {
+                now: NOW,
+                targetPercent: 99.9,
+                windowDays: 7
+            }
+        );
+
+        expect(result.target_percent).toBe(99.9);
+        expect(result.window_days).toBe(7);
+        expect(result.allowed_downtime_minutes).toBe(10.08);
+        expect(result.observed_downtime_minutes).toBe(10);
+        expect(result.remaining_budget_minutes).toBe(0.08);
+        expect(result.status).toBe('within_budget');
+    });
+});

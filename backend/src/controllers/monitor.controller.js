@@ -73,6 +73,24 @@ function validateHeartbeatGraceSeconds(value) {
 const HEARTBEAT_GRACE_ERROR =
     'heartbeat_grace_seconds must be an integer between 0 and 86400';
 
+function validateSloTargetPercent(value) {
+    return typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value >= 90 &&
+        value <= 100 &&
+        Math.abs(value * 100 - Math.round(value * 100)) < 1e-8;
+}
+
+function validateSloWindowDays(value) {
+    return Number.isInteger(value) && value >= 1 && value <= 365;
+}
+
+const SLO_TARGET_ERROR =
+    'slo_target_percent must be a number between 90 and 100 with at most 2 decimal places';
+
+const SLO_WINDOW_ERROR =
+    'slo_window_days must be an integer between 1 and 365';
+
 const DNS_EXPECTED_VALUES_ERROR =
     'dns_expected_values must be an array of at most 20 valid, non-empty strings (maximum 1024 characters each)';
 
@@ -254,7 +272,9 @@ const {
     expected_status_codes = null,
     expected_keyword = null,
     max_response_time_ms = null,
-    heartbeat_grace_seconds = 60
+    heartbeat_grace_seconds = 60,
+    slo_target_percent = 99.9,
+    slo_window_days = 30
 } = body;
 
 
@@ -279,6 +299,14 @@ const {
 
         if (!validateFailureThreshold(failure_threshold)) {
             return res.status(400).json({ message: FAILURE_THRESHOLD_ERROR });
+        }
+
+        if (!validateSloTargetPercent(slo_target_percent)) {
+            return res.status(400).json({ message: SLO_TARGET_ERROR });
+        }
+
+        if (!validateSloWindowDays(slo_window_days)) {
+            return res.status(400).json({ message: SLO_WINDOW_ERROR });
         }
 
         if (
@@ -466,10 +494,11 @@ if (monitor_type === 'HTTP') {
      tcp_host, tcp_port, dns_hostname, dns_record_type,
      method, headers, body, timeout_ms,
      expected_status_codes, expected_keyword, max_response_time_ms,
-     heartbeat_grace_seconds, dns_expected_values)
+     heartbeat_grace_seconds, dns_expected_values,
+     slo_target_percent, slo_window_days)
  VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
          $9, $10, $11, $12, $13, $14, $15, $16,
-         $17::jsonb, $18, $19, $20, $21)
+         $17::jsonb, $18, $19, $20, $21, $22, $23)
  RETURNING *`,
 [
     name.trim(),
@@ -494,7 +523,9 @@ if (monitor_type === 'HTTP') {
         ? expected_keyword.trim() : null,
     monitor_type === 'HTTP' ? max_response_time_ms : null,
     monitor_type === 'HEARTBEAT' ? heartbeat_grace_seconds : 60,
-    monitor_type === 'DNS' ? dns_expected_values.map(value => value.trim()) : []
+    monitor_type === 'DNS' ? dns_expected_values.map(value => value.trim()) : [],
+                slo_target_percent,
+                slo_window_days
 ]
             );
 
@@ -993,11 +1024,13 @@ const coverageResult = await db.query(
     `WITH bounds AS (
         SELECT
             GREATEST(
-                NOW() - INTERVAL '30 days',
+                NOW() - (m.slo_window_days * INTERVAL '1 day'),
                 m.created_at
             ) AS window_start,
             NOW() AS window_end,
-            m.interval_seconds * 3 AS gap_threshold_seconds
+            m.interval_seconds * 3 AS gap_threshold_seconds,
+            m.slo_target_percent,
+            m.slo_window_days
         FROM monitors m
         WHERE m.id = $1
           AND m.user_id = $2
@@ -1071,6 +1104,8 @@ const coverageResult = await db.query(
     )
     SELECT
         COUNT(*) FILTER (WHERE in_window)::int AS check_count,
+        (SELECT slo_target_percent FROM bounds) AS slo_target_percent,
+        (SELECT slo_window_days FROM bounds) AS slo_window_days,
 
         COALESCE(
             BOOL_OR(
@@ -1194,6 +1229,8 @@ const {
     check_count,
     has_gap,
     is_stale,
+    slo_target_percent,
+    slo_window_days,
     has_initial_gap
 } = coverageResult.rows[0];
 
@@ -1211,7 +1248,7 @@ const eventResult = await db.query(
         SELECT
             NOW() AS now,
             GREATEST(
-                NOW() - INTERVAL '30 days',
+                NOW() - (m.slo_window_days * INTERVAL '1 day'),
                 m.created_at
             ) AS window_start
         FROM monitors m
@@ -1255,10 +1292,23 @@ const referenceTime =
 
 const windowStart =
     eventResult.rows[0]?.window_start ?? referenceTime;
+
+const sloTargetPercent = Number(slo_target_percent);
+const sloWindowDays = Number(slo_window_days);
+
+const allowedDowntimeMinutes = Number(
+    (
+        sloWindowDays *
+        24 * 60 *
+        (1 - sloTargetPercent / 100)
+    ).toFixed(2)
+);
+
 const slo = monitoringCoverageInsufficient
     ? {
-        target_percent: 99.9,
-        allowed_downtime_minutes: 43.2,
+        target_percent: sloTargetPercent,
+        window_days: sloWindowDays,
+        allowed_downtime_minutes: allowedDowntimeMinutes,
         observed_downtime_minutes: null,
         remaining_budget_minutes: null,
         status: 'insufficient_data'
@@ -1266,6 +1316,8 @@ const slo = monitoringCoverageInsufficient
     : calculateSlo(
         eventResult.rows,
         {
+            targetPercent: sloTargetPercent,
+            windowDays: sloWindowDays,
             now: referenceTime,
             windowStart
         }
@@ -1304,7 +1356,9 @@ const getMonitorEvents = async (req, res) => {
         me.type,
         me.message,
         me.response_time_ms,
-        me.created_at
+        me.created_at,
+        me.acknowledged_at,
+        me.acknowledged_by
       FROM monitor_events me
       JOIN monitors m ON me.monitor_id = m.id
       WHERE me.monitor_id = $1
@@ -1325,6 +1379,75 @@ const getMonitorEvents = async (req, res) => {
   }
 };
 
+const acknowledgeMonitorEvent = async (req, res) => {
+  try {
+    const { id, eventId } = req.params;
+
+    if (!validateMonitorId(id)) {
+      return res.status(400).json({ message: 'Invalid monitor ID' });
+    }
+
+    if (!validateMonitorId(eventId)) {
+      return res.status(400).json({ message: 'Invalid monitor event ID' });
+    }
+
+    const eventResult = await db.query(
+      `
+      SELECT me.id, me.type
+      FROM monitor_events me
+      JOIN monitors m ON me.monitor_id = m.id
+      WHERE me.id = $1
+        AND me.monitor_id = $2
+        AND m.user_id = $3
+      `,
+      [eventId, id, req.user.id]
+    );
+
+    if (eventResult.rows.length === 0) {
+      return res.status(404).json({ message: 'Monitor event not found' });
+    }
+
+    if (eventResult.rows[0].type !== 'DOWN') {
+      return res.status(409).json({
+        message: 'Only DOWN monitor events can be acknowledged'
+      });
+    }
+
+    const result = await db.query(
+      `
+      UPDATE monitor_events me
+      SET acknowledged_at = COALESCE(me.acknowledged_at, NOW()),
+          acknowledged_by = COALESCE(me.acknowledged_by, $3)
+      FROM monitors m
+      WHERE me.id = $1
+        AND me.monitor_id = $2
+        AND m.id = me.monitor_id
+        AND m.user_id = $3
+        AND me.type = 'DOWN'
+      RETURNING
+        me.id,
+        me.monitor_id,
+        me.acknowledged_at,
+        me.acknowledged_by
+      `,
+      [eventId, id, req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Monitor event not found' });
+    }
+
+    return res.json({
+      message: 'Monitor event acknowledged',
+      ...result.rows[0]
+    });
+  } catch (error) {
+    console.error('Acknowledge monitor event failed:', error);
+    return res.status(500).json({
+      message: 'Failed to acknowledge monitor event'
+    });
+  }
+};
 const updateMonitor = async (req, res) => {
     const { id } = req.params;
     if (!validateMonitorId(id)) {
@@ -1339,7 +1462,7 @@ const allowed = [
     'interval_seconds', 'renotify_minutes', 'failure_threshold',
     'method', 'headers', 'body', 'timeout_ms',
     'expected_status_codes', 'expected_keyword', 'max_response_time_ms',
-    'heartbeat_grace_seconds'
+    'heartbeat_grace_seconds', 'slo_target_percent', 'slo_window_days'
 ];
         const keys = Object.keys(body);
 
@@ -1360,6 +1483,22 @@ const allowed = [
 
         const monitor = current.rows[0];
         const type = monitor.monitor_type || 'HTTP';
+
+        const sloTargetPercent = Object.hasOwn(body, 'slo_target_percent')
+            ? body.slo_target_percent
+            : Number(monitor.slo_target_percent ?? 99.9);
+
+        const sloWindowDays = Object.hasOwn(body, 'slo_window_days')
+            ? body.slo_window_days
+            : Number(monitor.slo_window_days ?? 30);
+
+        if (!validateSloTargetPercent(sloTargetPercent)) {
+            return res.status(400).json({ message: SLO_TARGET_ERROR });
+        }
+
+        if (!validateSloWindowDays(sloWindowDays)) {
+            return res.status(400).json({ message: SLO_WINDOW_ERROR });
+        }
 
         if (
             type !== 'HEARTBEAT' &&
@@ -1614,8 +1753,10 @@ if (type === 'HTTP') {
                  expected_status_codes = $15::jsonb,
                  expected_keyword = $16, max_response_time_ms = $17,
                  heartbeat_grace_seconds = $18,
-                 dns_expected_values = $19
-             WHERE id = $20 AND user_id = $21
+                 dns_expected_values = $19,
+                  slo_target_percent = $20,
+                  slo_window_days = $21
+             WHERE id = $22 AND user_id = $23
              RETURNING *`,
             [
                 name.trim(),
@@ -1639,6 +1780,8 @@ if (type === 'HTTP') {
                 type === 'HTTP' ? maxResponseTimeMs : null,
                 type === 'HEARTBEAT' ? heartbeatGraceSeconds : 60,
                 dnsExpectedValues,
+                sloTargetPercent,
+                sloWindowDays,
                 Number(id),
                 req.user.id
             ]
@@ -1879,8 +2022,8 @@ module.exports = {
     getMonitorHistory,
     getMonitorUptime,
     getMonitorEvents,
+    acknowledgeMonitorEvent,
     getMonitorLocations,
     updateMonitorLocations
 };
-
 

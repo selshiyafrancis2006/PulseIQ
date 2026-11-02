@@ -1,4 +1,4 @@
-const { Client } = require('pg');
+﻿const { Client } = require('pg');
 
 module.exports = async function globalSetup() {
     const database = process.env.TEST_DB_NAME || 'pulseiq_test';
@@ -27,6 +27,20 @@ module.exports = async function globalSetup() {
 
     try {
         await client.connect();
+
+        await client.query(`
+            ALTER TABLE alerts
+                ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS acknowledged_by INTEGER
+                    REFERENCES users(id) ON DELETE SET NULL;
+        `);
+        await client.query(`
+            ALTER TABLE monitor_events
+                ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ,
+                ADD COLUMN IF NOT EXISTS acknowledged_by INTEGER
+                    REFERENCES users(id) ON DELETE SET NULL;
+        `);
+
         await client.query(`
             ALTER TABLE monitor_results
                 ADD COLUMN IF NOT EXISTS certificate_expires_at TIMESTAMPTZ,
@@ -60,7 +74,33 @@ ALTER TABLE monitors
     ADD COLUMN IF NOT EXISTS expected_status_codes JSONB,
     ADD COLUMN IF NOT EXISTS expected_keyword VARCHAR(500),
     ADD COLUMN IF NOT EXISTS max_response_time_ms INTEGER,
-    ADD COLUMN IF NOT EXISTS heartbeat_grace_seconds INTEGER NOT NULL DEFAULT 60;
+    ADD COLUMN IF NOT EXISTS heartbeat_grace_seconds INTEGER NOT NULL DEFAULT 60,
+    ADD COLUMN IF NOT EXISTS slo_target_percent NUMERIC(5,2) NOT NULL DEFAULT 99.90,
+    ADD COLUMN IF NOT EXISTS slo_window_days INTEGER NOT NULL DEFAULT 30;
+
+DO $migration$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitors_slo_target_percent_check'
+          AND conrelid = 'public.monitors'::regclass
+    ) THEN
+        ALTER TABLE public.monitors
+            ADD CONSTRAINT monitors_slo_target_percent_check
+            CHECK (slo_target_percent >= 90.00 AND slo_target_percent <= 100.00);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitors_slo_window_days_check'
+          AND conrelid = 'public.monitors'::regclass
+    ) THEN
+        ALTER TABLE public.monitors
+            ADD CONSTRAINT monitors_slo_window_days_check
+            CHECK (slo_window_days BETWEEN 1 AND 365);
+    END IF;
+END
+$migration$;
 
 DO $$
 BEGIN
@@ -406,9 +446,74 @@ CREATE TABLE IF NOT EXISTS monitor_notification_channels (
 CREATE INDEX IF NOT EXISTS idx_monitor_notification_channels_channel
     ON monitor_notification_channels (channel_id);
         `);
+        await client.query(`
+ALTER TABLE monitor_alert_state
+    ADD COLUMN IF NOT EXISTS outage_started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS escalation_stage SMALLINT NOT NULL DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS escalation_paused_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS escalation_paused_seconds INTEGER NOT NULL DEFAULT 0;
+
+DO $migration$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitor_alert_state_escalation_stage_check'
+          AND conrelid = 'public.monitor_alert_state'::regclass
+    ) THEN
+        ALTER TABLE monitor_alert_state
+            ADD CONSTRAINT monitor_alert_state_escalation_stage_check
+            CHECK (escalation_stage BETWEEN 0 AND 5);
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'monitor_alert_state_escalation_paused_seconds_check'
+          AND conrelid = 'public.monitor_alert_state'::regclass
+    ) THEN
+        ALTER TABLE monitor_alert_state
+            ADD CONSTRAINT monitor_alert_state_escalation_paused_seconds_check
+            CHECK (escalation_paused_seconds >= 0);
+    END IF;
+END
+$migration$;
+
+CREATE TABLE IF NOT EXISTS monitor_escalation_stages (
+    id BIGSERIAL PRIMARY KEY,
+    monitor_id INTEGER NOT NULL
+        REFERENCES monitors(id) ON DELETE CASCADE,
+    stage_number SMALLINT NOT NULL
+        CHECK (stage_number BETWEEN 1 AND 5),
+    delay_minutes INTEGER NOT NULL
+        CHECK (delay_minutes BETWEEN 1 AND 10080),
+    routing_mode VARCHAR(10) NOT NULL DEFAULT 'ALL'
+        CHECK (routing_mode IN ('ALL', 'SELECTED')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT monitor_escalation_stages_monitor_stage_unique
+        UNIQUE (monitor_id, stage_number),
+    CONSTRAINT monitor_escalation_stages_id_monitor_unique
+        UNIQUE (id, monitor_id)
+);
+
+CREATE TABLE IF NOT EXISTS monitor_escalation_stage_channels (
+    stage_id BIGINT NOT NULL
+        REFERENCES monitor_escalation_stages(id) ON DELETE CASCADE,
+    channel_id INTEGER NOT NULL
+        REFERENCES notification_channels(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (stage_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_escalation_stages_monitor
+    ON monitor_escalation_stages (monitor_id, stage_number);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_escalation_stage_channels_channel
+    ON monitor_escalation_stage_channels (channel_id);
+        `);
     } finally {
         await client.end();
     }
 };
+
 
 

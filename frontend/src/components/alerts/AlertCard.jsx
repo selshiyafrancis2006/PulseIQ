@@ -1,7 +1,7 @@
 
 import { severityConfig } from "../../config/alertSeverity";
 
-export default function AlertCard({ alert }) {
+export default function AlertCard({ alert, onAcknowledge, isAcknowledging = false, acknowledgementError }) {
   const severity =
     severityConfig[
       (alert.severity || "info").toLowerCase()
@@ -81,6 +81,28 @@ export default function AlertCard({ alert }) {
           </div>
         </div>
       )}
+
+      {acknowledgementError && (
+        <p role="alert" className="mt-3 text-red-400 text-sm">
+          {acknowledgementError}
+        </p>
+      )}
+      <div className="mt-4 flex items-center justify-end">
+        {alert.acknowledged_at ? (
+          <span className="text-emerald-400 text-sm">
+            Acknowledged · {new Date(alert.acknowledged_at).toLocaleString()}
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onAcknowledge?.(alert.id)}
+            disabled={isAcknowledging}
+            className="px-4 py-2 rounded-lg border border-emerald-700 text-emerald-400 text-sm font-medium hover:bg-emerald-950 disabled:opacity-50 disabled:cursor-not-allowed transition"
+          >
+            {isAcknowledging ? "Acknowledging..." : "Acknowledge"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

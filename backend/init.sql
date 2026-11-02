@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS users (
+﻿CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -42,7 +42,9 @@ CREATE TABLE IF NOT EXISTS alerts (
   average_value FLOAT,
   severity VARCHAR(20) NOT NULL DEFAULT 'Warning',
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,
-  timestamp TIMESTAMPTZ DEFAULT NOW()
+  timestamp TIMESTAMPTZ DEFAULT NOW(),
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_alerts_host_timestamp
@@ -76,6 +78,8 @@ CREATE TABLE IF NOT EXISTS monitors (
   url VARCHAR(500) NOT NULL,
   user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
   is_active BOOLEAN DEFAULT true,
+  slo_target_percent NUMERIC(5,2) NOT NULL DEFAULT 99.90 CHECK (slo_target_percent >= 90.00 AND slo_target_percent <= 100.00),
+  slo_window_days INTEGER NOT NULL DEFAULT 30 CHECK (slo_window_days BETWEEN 1 AND 365),
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -126,7 +130,9 @@ CREATE TABLE IF NOT EXISTS monitor_events (
   type VARCHAR(10) NOT NULL,
   message TEXT,
   response_time_ms INTEGER,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  acknowledged_at TIMESTAMPTZ,
+  acknowledged_by INTEGER REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created
@@ -516,8 +522,47 @@ CREATE TABLE IF NOT EXISTS monitor_alert_state (
   last_notified_at TIMESTAMPTZ,
   is_flapping BOOLEAN NOT NULL DEFAULT false,
   flapping_since TIMESTAMPTZ,
+  outage_started_at TIMESTAMPTZ,
+  escalation_stage SMALLINT NOT NULL DEFAULT 0
+    CHECK (escalation_stage BETWEEN 0 AND 5),
+  escalation_paused_at TIMESTAMPTZ,
+  escalation_paused_seconds INTEGER NOT NULL DEFAULT 0
+    CHECK (escalation_paused_seconds >= 0),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS monitor_escalation_stages (
+  id BIGSERIAL PRIMARY KEY,
+  monitor_id INTEGER NOT NULL
+    REFERENCES monitors(id) ON DELETE CASCADE,
+  stage_number SMALLINT NOT NULL
+    CHECK (stage_number BETWEEN 1 AND 5),
+  delay_minutes INTEGER NOT NULL
+    CHECK (delay_minutes BETWEEN 1 AND 10080),
+  routing_mode VARCHAR(10) NOT NULL DEFAULT 'ALL'
+    CHECK (routing_mode IN ('ALL', 'SELECTED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT monitor_escalation_stages_monitor_stage_unique
+    UNIQUE (monitor_id, stage_number),
+  CONSTRAINT monitor_escalation_stages_id_monitor_unique
+    UNIQUE (id, monitor_id)
+);
+
+CREATE TABLE IF NOT EXISTS monitor_escalation_stage_channels (
+  stage_id BIGINT NOT NULL
+    REFERENCES monitor_escalation_stages(id) ON DELETE CASCADE,
+  channel_id INTEGER NOT NULL
+    REFERENCES notification_channels(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (stage_id, channel_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_escalation_stages_monitor
+  ON monitor_escalation_stages (monitor_id, stage_number);
+
+CREATE INDEX IF NOT EXISTS idx_monitor_escalation_stage_channels_channel
+  ON monitor_escalation_stage_channels (channel_id);
 
 -- Re-notify interval for monitors that stay down (0 = disabled).
 ALTER TABLE monitors
@@ -901,3 +946,12 @@ CREATE INDEX IF NOT EXISTS idx_status_page_incident_updates_timeline
 
 CREATE INDEX IF NOT EXISTS idx_status_page_incident_monitors_monitor
     ON status_page_incident_monitors (monitor_id);
+
+
+-- ===== Per-monitor SLO target =====
+-- The column was only inside CREATE TABLE monitors, so databases created
+-- before it existed never received it and monitor creation failed with
+-- 'column "slo_target_percent" of relation "monitors" does not exist'.
+ALTER TABLE monitors
+  ADD COLUMN IF NOT EXISTS slo_target_percent NUMERIC(5,2) NOT NULL DEFAULT 99.90
+  CHECK (slo_target_percent >= 90.00 AND slo_target_percent <= 100.00);

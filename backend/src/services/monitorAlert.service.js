@@ -1,5 +1,6 @@
 const db = require('../config/db');
 const { notifyUser } = require('./notification.service');
+const { processEscalation } = require('./monitorEscalation.service');
 
 function readPositiveNumber(value, fallback) {
     const parsed = Number(value);
@@ -152,7 +153,7 @@ async function processCheckOutcome(monitor, result, transition) {
         secondsSinceNotified: state.seconds_since_notified
     });
 
-    if (!decision.notify) return;
+    if (decision.notify) {
 
     // Persist first: at worst a crash drops one message, it never
     // sends the same alert twice.
@@ -230,6 +231,17 @@ async function processCheckOutcome(monitor, result, transition) {
     }
 
     dispatch(monitor, event);
+    }
+
+    // Escalation timing is independent of ordinary notifications.
+    const escalationIsFlapping =
+        decision.next?.isFlapping ?? state.is_flapping;
+
+    await processEscalation(
+        monitor,
+        result,
+        escalationIsFlapping
+    );
 }
 
 module.exports = {

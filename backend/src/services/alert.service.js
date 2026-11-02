@@ -1,4 +1,4 @@
-﻿
+
 const pool = require('../config/db');
 
 function getAlertSeverity(metricName, value) {
@@ -163,11 +163,11 @@ async function fetchAlerts(hostId, userId, limit = 20, offset = 0) {
         SELECT a.*
         FROM alerts a
         JOIN hosts h ON h.id = a.host_id
-        WHERE h.id = $1
-          AND h.user_id = $2
+        WHERE h.user_id = $1
+          AND ($2::int IS NULL OR h.id = $2)
         ORDER BY a.timestamp DESC, a.id DESC
         LIMIT $3 OFFSET $4
-    `, [hostId, userId, limit, offset]);
+    `, [userId, hostId, limit, offset]);
 
     return result.rows.map(alert => ({
         id: alert.id,
@@ -176,8 +176,28 @@ async function fetchAlerts(hostId, userId, limit = 20, offset = 0) {
         threshold_value: alert.average_value,
         host_id: alert.host_id,
         severity: alert.severity || getAlertSeverity(alert.metric_name, alert.metric_value),
-        timestamp: alert.timestamp
+        timestamp: alert.timestamp,
+        acknowledged_at: alert.acknowledged_at,
+        acknowledged_by: alert.acknowledged_by
     }));
+}
+
+async function acknowledgeAlert(alertId, userId) {
+    const result = await pool.query(`
+        UPDATE alerts a
+        SET acknowledged_at = COALESCE(a.acknowledged_at, NOW()),
+            acknowledged_by = COALESCE(a.acknowledged_by, $2)
+        FROM hosts h
+        WHERE a.id = $1
+          AND a.host_id = h.id
+          AND h.user_id = $2
+        RETURNING
+            a.id,
+            a.acknowledged_at,
+            a.acknowledged_by
+    `, [alertId, userId]);
+
+    return result.rows[0] || null;
 }
 
 async function fetchRules(userId) {
@@ -199,4 +219,10 @@ async function updateRule(id, userId, threshold, is_active) {
     return result.rows[0] || null;
 }
 
-module.exports = { evaluateAlerts, fetchAlerts, fetchRules, updateRule };
+module.exports = {
+    evaluateAlerts,
+    fetchAlerts,
+    acknowledgeAlert,
+    fetchRules,
+    updateRule
+};

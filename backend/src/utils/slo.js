@@ -1,18 +1,29 @@
-
-const SLO_TARGET_PERCENT = 99.9;
-const WINDOW_MINUTES = 30 * 24 * 60;
+﻿const SLO_TARGET_PERCENT = 99.9;
+const DEFAULT_WINDOW_DAYS = 30;
+const WINDOW_MINUTES = DEFAULT_WINDOW_DAYS * 24 * 60;
 const ALLOWED_DOWNTIME_MINUTES = Number(
     (WINDOW_MINUTES * (1 - SLO_TARGET_PERCENT / 100)).toFixed(2)
 );
 
 function calculateSlo(events, options = {}) {
-    const now = options.now ? new Date(options.now) : new Date();
-    const defaultWindowStart = new Date(
-        now.getTime() - WINDOW_MINUTES * 60 * 1000
+    const targetPercent = options.targetPercent ?? SLO_TARGET_PERCENT;
+    const windowDays = options.windowDays ?? DEFAULT_WINDOW_DAYS;
+    const windowMinutes = windowDays * 24 * 60;
+
+    const allowedDowntimeMinutes = Number(
+        (windowMinutes * (1 - targetPercent / 100)).toFixed(2)
     );
+
+    const now = options.now ? new Date(options.now) : new Date();
+
+    const defaultWindowStart = new Date(
+        now.getTime() - windowMinutes * 60 * 1000
+    );
+
     const requestedWindowStart = options.windowStart
         ? new Date(options.windowStart)
         : defaultWindowStart;
+
     const windowStart = new Date(Math.max(
         defaultWindowStart.getTime(),
         requestedWindowStart.getTime()
@@ -39,28 +50,29 @@ function calculateSlo(events, options = {}) {
     );
 
     const baseResult = {
-        target_percent: SLO_TARGET_PERCENT,
-        allowed_downtime_minutes: ALLOWED_DOWNTIME_MINUTES,
+        target_percent: targetPercent,
+        window_days: windowDays,
+        allowed_downtime_minutes: allowedDowntimeMinutes,
         observed_downtime_minutes: null,
         remaining_budget_minutes: null,
         status: 'insufficient_data'
     };
 
-if (!previousEvent) {
-    const firstEvent = windowEvents[0];
+    if (!previousEvent) {
+        const firstEvent = windowEvents[0];
 
-    const upAtWindowStart =
-        options.windowStart &&
-        firstEvent?.type === 'UP' &&
-        firstEvent.created_at.getTime() === windowStart.getTime();
+        const upAtWindowStart =
+            options.windowStart &&
+            firstEvent?.type === 'UP' &&
+            firstEvent.created_at.getTime() === windowStart.getTime();
 
-    if (
-        !firstEvent ||
-        (firstEvent.type !== 'DOWN' && !upAtWindowStart)
-    ) {
-        return baseResult;
+        if (
+            !firstEvent ||
+            (firstEvent.type !== 'DOWN' && !upAtWindowStart)
+        ) {
+            return baseResult;
+        }
     }
-}
 
     let state = previousEvent?.type ?? null;
     let observedDowntimeMs = 0;
@@ -92,7 +104,7 @@ if (!previousEvent) {
     const remainingBudgetMinutes = Number(
         Math.max(
             0,
-            ALLOWED_DOWNTIME_MINUTES - observedDowntimeMinutes
+            allowedDowntimeMinutes - observedDowntimeMinutes
         ).toFixed(2)
     );
 
@@ -100,7 +112,7 @@ if (!previousEvent) {
         ...baseResult,
         observed_downtime_minutes: observedDowntimeMinutes,
         remaining_budget_minutes: remainingBudgetMinutes,
-        status: observedDowntimeMinutes >= ALLOWED_DOWNTIME_MINUTES
+        status: observedDowntimeMinutes >= allowedDowntimeMinutes
             ? 'exhausted'
             : 'within_budget'
     };
