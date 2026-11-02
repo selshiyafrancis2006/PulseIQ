@@ -89,6 +89,43 @@ describe('POST /api/agent/metrics - storing', () => {
         expect(await countMetrics(otherHostId)).toBe(0);
     });
 
+    test('preserves the agent collection time separately from server receipt time', async () => {
+        const collectedAt = '2026-11-02T10:00:00.000Z';
+        const res = await send({
+            ...validMetrics,
+            sample_id: '123e4567-e89b-42d3-a456-426614174000',
+            collected_at: collectedAt
+        });
+
+        expect(res.status).toBe(201);
+        expect(new Date(res.body.collected_at).toISOString()).toBe(collectedAt);
+        expect(new Date(res.body.timestamp).getTime()).toBeGreaterThan(
+            new Date(collectedAt).getTime()
+        );
+    });
+
+    test('does not insert or process a duplicate sample_id twice', async () => {
+        const sampleId = '123e4567-e89b-42d3-a456-426614174001';
+
+        const first = await send({
+            ...validMetrics,
+            sample_id: sampleId,
+            collected_at: '2026-11-02T10:00:00.000Z'
+        });
+
+        const duplicate = await send({
+            ...validMetrics,
+            cpu_usage: 99,
+            sample_id: sampleId,
+            collected_at: '2026-11-02T10:00:00.000Z'
+        });
+
+        expect(first.status).toBe(201);
+        expect(duplicate.status).toBe(200);
+        expect(duplicate.body.id).toBe(first.body.id);
+        expect(duplicate.body.cpu_usage).toBe(first.body.cpu_usage);
+        expect(await countMetrics(hostId)).toBe(1);
+    });
     test('uses the server clock, not a timestamp sent by the agent', async () => {
         const res = await send({ ...validMetrics, timestamp: '2001-01-01T00:00:00Z' });
 
@@ -157,6 +194,19 @@ describe('POST /api/agent/metrics - validation', () => {
         expect(await countMetrics(hostId)).toBe(0);
     });
 
+    test.each([
+        ['malformed UUID', { sample_id: 'not-a-uuid' }],
+        ['timestamp without timezone', { collected_at: '2026-11-02T10:00:00' }],
+        ['invalid calendar date', { collected_at: '2026-02-30T10:00:00Z' }],
+        ['timestamp too far in the future', {
+            collected_at: new Date(Date.now() + 10 * 60 * 1000).toISOString()
+        }]
+    ])('rejects %s without storing a metric', async (_label, override) => {
+        const res = await send({ ...validMetrics, ...override });
+
+        expect(res.status).toBe(400);
+        expect(await countMetrics(hostId)).toBe(0);
+    });
     test('rejects an empty body', async () => {
         const res = await send({});
 

@@ -10,6 +10,10 @@ import {
   Legend
 } from 'chart.js'
 import { useState } from 'react'
+import {
+  buildMetricChartPoints,
+  getMetricTimestamp
+} from '../../utils/metricChartData'
 
 ChartJS.register(
   CategoryScale,
@@ -56,10 +60,12 @@ export default function MetricsChart({
   // Unknown range: show everything the API returned rather than nothing
   const filteredMetrics = range
     ? metrics.filter(metric =>
-        new Date(metric.timestamp).getTime() >=
-                now - range.minutes * 60 * 1000
+        getMetricTimestamp(metric) >=
+          now - range.minutes * 60 * 1000
       )
     : metrics
+
+  const chartPoints = buildMetricChartPoints(filteredMetrics, timeRange)
 
   // Day-or-longer ranges need the date too, or labels repeat ambiguously
   const formatLabel = (timestamp) => {
@@ -75,8 +81,8 @@ export default function MetricsChart({
       : date.toLocaleTimeString()
   }
 
-  const labels = filteredMetrics.map(metric =>
-    formatLabel(metric.timestamp)
+  const labels = chartPoints.map(point =>
+    formatLabel(point.timestamp)
   )
 
   const datasets = selectedMetrics.map(metric => ({
@@ -85,9 +91,12 @@ export default function MetricsChart({
       .replace('_', ' ')
       .toUpperCase(),
 
-    data: filteredMetrics.map(item =>
-      parseFloat(item[metric])
-    ),
+    data: chartPoints.map(point => {
+      if (!point.metric) return null
+
+      const value = Number.parseFloat(point.metric[metric])
+      return Number.isFinite(value) ? value : null
+    }),
 
     borderColor: metricColors[metric],
 
@@ -99,6 +108,7 @@ export default function MetricsChart({
 
     pointRadius: 0,
     pointHoverRadius: 4,
+    spanGaps: false,
     tension: 0.35
 
   }))

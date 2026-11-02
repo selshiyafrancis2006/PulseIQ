@@ -1,4 +1,4 @@
-﻿const { Client } = require('pg');
+const { Client } = require('pg');
 
 module.exports = async function globalSetup() {
     const database = process.env.TEST_DB_NAME || 'pulseiq_test';
@@ -28,6 +28,17 @@ module.exports = async function globalSetup() {
     try {
         await client.connect();
 
+        await client.query(`
+            ALTER TABLE metrics
+                ADD COLUMN IF NOT EXISTS sample_id UUID,
+                ADD COLUMN IF NOT EXISTS collected_at TIMESTAMPTZ;
+
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_host_sample_id_unique
+                ON metrics (host_id, sample_id);
+
+            CREATE INDEX IF NOT EXISTS idx_metrics_host_collected_at
+                ON metrics (host_id, (COALESCE(collected_at, timestamp)) DESC);
+        `);
         await client.query(`
             ALTER TABLE alerts
                 ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ,

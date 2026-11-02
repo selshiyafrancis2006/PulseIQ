@@ -69,8 +69,8 @@ afterEach(() => {
     errorSpy.mockRestore();
 });
 
-const send = () =>
-    request(app).post('/api/agent/metrics').set('x-api-key', apiKey).send(validMetrics);
+const send = (body = validMetrics) =>
+    request(app).post('/api/agent/metrics').set('x-api-key', apiKey).send(body);
 
 const storedCount = async () =>
     Number((await pool.query(
@@ -91,6 +91,25 @@ test('runs all three post-ingestion steps with the saved row', async () => {
     }
 });
 
+test('a duplicate retry does not repeat post-ingestion side effects', async () => {
+    const payload = {
+        ...validMetrics,
+        sample_id: '123e4567-e89b-42d3-a456-426614174002',
+        collected_at: '2026-11-02T10:00:00.000Z'
+    };
+
+    const first = await send(payload);
+    const retry = await send(payload);
+
+    expect(first.status).toBe(201);
+    expect(retry.status).toBe(200);
+    expect(retry.body.id).toBe(first.body.id);
+    expect(await storedCount()).toBe(1);
+
+    for (const step of [evaluateAlerts, detectAnomalies, broadcastMetrics]) {
+        expect(step).toHaveBeenCalledTimes(1);
+    }
+});
 test('a failing alert evaluation does not fail ingestion or skip the other steps', async () => {
     evaluateAlerts.mockRejectedValue(new Error('alert engine down'));
 

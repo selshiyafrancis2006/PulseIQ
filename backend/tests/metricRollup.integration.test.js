@@ -170,6 +170,67 @@ describe('rollup5Minute', () => {
         expect(rows[0].cpu_usage_max).toBe(50);
     });
 
+    test('recovers raw metric buckets older than the 15-minute lookback', async () => {
+        const missedBucket = await bucketStart(12);
+
+        await insertRawAt(hostA, offset(missedBucket, 30), { cpu: 25 });
+        await insertRawAt(hostA, offset(missedBucket, 90), { cpu: 75 });
+
+        await rollup5Minute();
+
+        const rows = await fiveMinuteRows(hostA);
+
+        expect(rows).toHaveLength(1);
+        expect(new Date(rows[0].bucket_start).getTime())
+            .toBe(missedBucket.getTime());
+        expect(rows[0].cpu_usage_avg).toBe(50);
+        expect(rows[0].sample_count).toBe(2);
+
+        // A late sample in this old bucket must refine its existing rollup.
+        await insertRawAt(hostA, offset(missedBucket, 150), { cpu: 50 });
+        await rollup5Minute();
+
+        const refinedRows = await fiveMinuteRows(hostA);
+        expect(refinedRows).toHaveLength(1);
+        expect(refinedRows[0].sample_count).toBe(3);
+        expect(refinedRows[0].cpu_usage_avg).toBe(50);
+        expect(refinedRows[0].cpu_usage_max).toBe(75);
+    });
+    test('places delayed samples into their original collection-time bucket', async () => {
+        const recentBucket = await bucketStart(1);
+
+        await insertRawAt(hostA, offset(recentBucket, 30), { cpu: 10 });
+        await rollup5Minute();
+
+        const collectedAt = new Date(Date.now() - 90 * 60 * 1000);
+
+        await pool.query(
+            `INSERT INTO metrics
+                (host_id, timestamp, collected_at, cpu_usage, memory_usage, disk_usage, network_in, network_out)
+             VALUES ($1, NOW(), $2, 75, 50, 60, 100, 200)`,
+            [hostA, collectedAt]
+        );
+
+        const expectedBucket = await pool.query(
+            `SELECT to_timestamp(
+                floor(extract(epoch FROM $1::timestamptz) / 300) * 300
+             ) AS bucket_start`,
+            [collectedAt]
+        );
+
+        await rollup5Minute();
+
+        const rows = await fiveMinuteRows(hostA);
+        const delayedRow = rows.find(
+            (row) => new Date(row.bucket_start).getTime() ===
+                new Date(expectedBucket.rows[0].bucket_start).getTime()
+        );
+
+        expect(delayedRow).toEqual(expect.objectContaining({
+            cpu_usage_avg: 75,
+            sample_count: 1
+        }));
+    });
     test('creates nothing when there are no raw rows', async () => {
         await rollup5Minute();
 

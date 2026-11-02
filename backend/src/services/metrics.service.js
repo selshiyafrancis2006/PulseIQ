@@ -50,10 +50,20 @@ const fetchRollup = async (table, interval, hostId) => {
             host_id,
             bucket_start AS timestamp,
             cpu_usage_avg AS cpu_usage,
+            cpu_usage_min,
+            cpu_usage_max,
             memory_usage_avg AS memory_usage,
+            memory_usage_min,
+            memory_usage_max,
             disk_usage_avg AS disk_usage,
+            disk_usage_min,
+            disk_usage_max,
             network_in_avg AS network_in,
-            network_out_avg AS network_out
+            network_in_min,
+            network_in_max,
+            network_out_avg AS network_out,
+            network_out_min,
+            network_out_max
          FROM ${table}
          WHERE host_id = $1
            AND bucket_start >= NOW() - INTERVAL '${interval}'
@@ -80,8 +90,8 @@ const fetchMetrics = async (range, hostId) => {
         `SELECT *
          FROM metrics
          WHERE host_id = $1
-           AND timestamp >= NOW() - INTERVAL '${interval}'
-         ORDER BY timestamp ASC`,
+           AND COALESCE(collected_at, timestamp) >= NOW() - INTERVAL '${interval}'
+         ORDER BY COALESCE(collected_at, timestamp) ASC`,
         [hostId]
     );
 
@@ -94,7 +104,7 @@ const fetchLatestMetric = async (hostId) => {
         `SELECT *
          FROM metrics
          WHERE host_id = $1
-         ORDER BY timestamp DESC
+         ORDER BY COALESCE(collected_at, timestamp) DESC
          LIMIT 1`,
         [hostId]
     );

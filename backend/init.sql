@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -141,6 +141,16 @@ CREATE INDEX IF NOT EXISTS idx_monitor_events_monitor_created
 ALTER TABLE metrics
   ADD COLUMN IF NOT EXISTS host_id INTEGER
   REFERENCES hosts(id) ON DELETE CASCADE;
+
+ALTER TABLE metrics
+  ADD COLUMN IF NOT EXISTS sample_id UUID,
+  ADD COLUMN IF NOT EXISTS collected_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_metrics_host_sample_id_unique
+  ON metrics (host_id, sample_id);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_host_collected_at
+  ON metrics (host_id, (COALESCE(collected_at, timestamp)) DESC);
 
 CREATE INDEX IF NOT EXISTS idx_metrics_host_timestamp
   ON metrics (host_id, timestamp DESC);

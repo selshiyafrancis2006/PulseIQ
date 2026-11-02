@@ -2,6 +2,8 @@ require('dotenv').config();
 
 const si = require('systeminformation');
 const axios = require('axios');
+const { randomUUID } = require('crypto');
+const { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { version: AGENT_VERSION } = require('./package.json');
 
 const METADATA_INTERVAL_MS = 5 * 60 * 1000;
@@ -76,7 +78,47 @@ function loadConfig() {
 const config = loadConfig();
 
 let lastMetadataSentAt = 0;
-let sending = false;
+let collecting = false;
+
+const metricQueue = new MetricDeliveryQueue({
+    maxSize: 100,
+    maxAttempts: 5,
+    baseDelayMs: 1000,
+    maxDelayMs: 8000,
+    send: async (payload) => {
+        let response;
+
+        try {
+            response = await axios.post(
+                config.metricsUrl,
+                payload,
+                {
+                    headers: {
+                        'X-API-Key': config.apiKey,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: REQUEST_TIMEOUT_MS
+                }
+            );
+        } catch (error) {
+            if (error.response?.status === 401) {
+                console.error(
+                    '[PulseIQ Agent] API key rejected (401) — check that API_KEY matches the key shown when this host was registered'
+                );
+            }
+
+            throw error;
+        }
+
+        if (payload.metadata) {
+            lastMetadataSentAt = Date.now();
+        }
+
+        console.log(
+            `[${new Date().toISOString()}] Delivered metrics — host_id: ${response.data?.host_id ?? 'unknown'}${payload.metadata ? ' (+ metadata)' : ''}`
+        );
+    }
+});
 
 async function collectMetadata() {
 
@@ -123,17 +165,19 @@ async function collectMetadata() {
 }
 
 async function collectAndSend() {
+    // Avoid overlapping system-information collection.
+    // Network delivery runs independently through the queue.
+    if (collecting) return;
+    collecting = true;
 
-    // Skip this tick if the previous send is still in flight
-    if (sending) return;
-    sending = true;
 
     try {
-
         const cpuLoad = await si.currentLoad();
         const mem = await si.mem();
         const disk = await si.fsSize();
         const network = await si.networkStats();
+
+        const collectedAt = new Date().toISOString();
 
         const cpu_usage = Number(cpuLoad.currentLoad.toFixed(2));
 
@@ -154,6 +198,8 @@ async function collectAndSend() {
             : 0;
 
         const payload = {
+            sample_id: randomUUID(),
+            collected_at: collectedAt,
             cpu_usage,
             memory_usage,
             disk_usage,
@@ -166,52 +212,23 @@ async function collectAndSend() {
 
         if (metadataDue) {
             const metadata = await collectMetadata();
+
             if (metadata) {
                 payload.metadata = metadata;
             }
         }
 
-        const response = await axios.post(
-            config.metricsUrl,
-            payload,
-            {
-                headers: {
-                    'X-API-Key': config.apiKey,
-                    'Content-Type': 'application/json'
-                },
-                timeout: REQUEST_TIMEOUT_MS
-            }
-        );
-
-        if (payload.metadata) {
-            lastMetadataSentAt = Date.now();
-        }
-
-        console.log(
-            `[${new Date().toISOString()}] Sent metrics — host_id: ${response.data.host_id}${payload.metadata ? ' (+ metadata)' : ''}`
-        );
+        metricQueue.enqueue(payload);
 
     } catch (err) {
-
-        if (err.response?.status === 401) {
-            console.error(
-                `[${new Date().toISOString()}] API key rejected (401) — check that API_KEY matches the key shown when this host was registered`
-            );
-        } else {
-            console.error(
-                `[${new Date().toISOString()}] Failed to send metrics:`,
-                err.response?.data || err.message
-            );
-        }
-
+        console.error(
+            `[${new Date().toISOString()}] Failed to collect metrics:`,
+            err.message
+        );
     } finally {
-
-        sending = false;
-
+        collecting = false;
     }
-
 }
-
 console.log(
     `PulseIQ Agent v${AGENT_VERSION} starting — sending to ${config.metricsUrl} every ${config.intervalMs}ms`
 );

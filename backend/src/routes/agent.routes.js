@@ -219,10 +219,12 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             memory_usage,
             disk_usage,
             network_in,
-            network_out
+            network_out,
+            sample_id,
+            collected_at
         } = req.body;
 
-                const metricValues = {
+        const metricValues = {
             cpu_usage,
             memory_usage,
             disk_usage,
@@ -242,7 +244,72 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
                 });
             }
         }
-        
+
+        if (
+            sample_id !== undefined &&
+            (
+                typeof sample_id !== 'string' ||
+                !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sample_id)
+            )
+        ) {
+            return res.status(400).json({ error: 'Invalid sample_id' });
+        }
+
+        let collectedAt = null;
+
+        if (collected_at !== undefined) {
+            const timestampParts = typeof collected_at === 'string'
+                ? collected_at.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d{1,9})?(Z|([+-])(\d{2}):(\d{2}))$/i)
+                : null;
+
+            if (!timestampParts) {
+                return res.status(400).json({ error: 'Invalid collected_at' });
+            }
+
+            const year = Number(timestampParts[1]);
+            const month = Number(timestampParts[2]);
+            const day = Number(timestampParts[3]);
+            const hour = Number(timestampParts[4]);
+            const minute = Number(timestampParts[5]);
+            const second = Number(timestampParts[6]);
+            const offsetHour = Number(timestampParts[9] || 0);
+            const offsetMinute = Number(timestampParts[10] || 0);
+
+            const isLeapYear =
+                year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+
+            const daysInMonth = [
+                31, isLeapYear ? 29 : 28, 31, 30, 31, 30,
+                31, 31, 30, 31, 30, 31
+            ];
+
+            if (
+                year < 1 ||
+                month < 1 ||
+                month > 12 ||
+                day < 1 ||
+                day > daysInMonth[month - 1] ||
+                hour > 23 ||
+                minute > 59 ||
+                second > 59 ||
+                offsetHour > 23 ||
+                offsetMinute > 59
+            ) {
+                return res.status(400).json({ error: 'Invalid collected_at' });
+            }
+
+            const parsedDate = new Date(collected_at);
+
+            if (
+                Number.isNaN(parsedDate.getTime()) ||
+                parsedDate.getTime() > Date.now() + 5 * 60 * 1000
+            ) {
+                return res.status(400).json({ error: 'Invalid collected_at' });
+            }
+
+            collectedAt = parsedDate.toISOString();
+        }
+
         const result = await pool.query(
             `INSERT INTO metrics (
                 cpu_usage,
@@ -250,9 +317,12 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
                 disk_usage,
                 network_in,
                 network_out,
-                host_id
+                host_id,
+                sample_id,
+                collected_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (host_id, sample_id) DO NOTHING
             RETURNING *`,
             [
                 cpu_usage,
@@ -260,16 +330,37 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
                 disk_usage,
                 network_in,
                 network_out,
-                req.agentHost.id
+                req.agentHost.id,
+                sample_id || null,
+                collectedAt
             ]
         );
-        const savedMetric = result.rows[0];
+
+        let savedMetric = result.rows[0];
+        const isDuplicate = !savedMetric;
+
+        if (isDuplicate) {
+            const existing = await pool.query(
+                `SELECT *
+                 FROM metrics
+                 WHERE host_id = $1 AND sample_id = $2`,
+                [req.agentHost.id, sample_id]
+            );
+
+            if (!existing.rows[0]) {
+                throw new Error('Conflicting metric sample could not be retrieved');
+            }
+
+            savedMetric = existing.rows[0];
+            return res.status(200).json(savedMetric);
+        }
 
         await pool.query(
-    'UPDATE hosts SET last_seen_at = NOW() WHERE id = $1',
-    [req.agentHost.id]
-);
-        // Host metadata is optional and must never break metric ingestion
+            'UPDATE hosts SET last_seen_at = NOW() WHERE id = $1',
+            [req.agentHost.id]
+        );
+
+        // Host metadata is optional and must never break metric ingestion.
         const metadata = sanitizeMetadata(req.body.metadata);
         if (metadata) {
             try {
@@ -279,9 +370,7 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             }
         }
 
-               // The metric is already saved. Alerting, anomaly detection and the
-        // live broadcast are side effects: a failure in one must not make
-        // the agent think ingestion failed, nor skip the others.
+        // Run side effects only for newly inserted samples.
         const sideEffects = [
             ['evaluateAlerts', () => evaluateAlerts(savedMetric)],
             ['detectAnomalies', () => detectAnomalies(savedMetric)],
@@ -307,7 +396,6 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         });
     }
 });
-
 router.post('/traces', authenticateAgent, async (req, res) => {
     try {
         const body = req.body;

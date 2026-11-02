@@ -1,4 +1,4 @@
-﻿const pool = require('../config/db');
+const pool = require('../config/db');
 
 // Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
 // buckets. Uses ON CONFLICT to upsert, so it's safe to re-run every 5
@@ -15,18 +15,35 @@ async function rollup5Minute() {
             network_out_avg, network_out_min, network_out_max,
             sample_count
         )
+        WITH latest_rollups AS MATERIALIZED (
+            SELECT
+                host_id,
+                MAX(bucket_start) AS latest_bucket
+            FROM metric_rollups_5m
+            GROUP BY host_id
+        )
         SELECT
-            host_id,
-            to_timestamp(floor(extract(epoch FROM timestamp) / 300) * 300) AS bucket_start,
-            AVG(cpu_usage), MIN(cpu_usage), MAX(cpu_usage),
-            AVG(memory_usage), MIN(memory_usage), MAX(memory_usage),
-            AVG(disk_usage), MIN(disk_usage), MAX(disk_usage),
-            AVG(network_in), MIN(network_in), MAX(network_in),
-            AVG(network_out), MIN(network_out), MAX(network_out),
+            m.host_id,
+            to_timestamp(floor(extract(epoch FROM COALESCE(m.collected_at, m.timestamp)) / 300) * 300) AS bucket_start,
+            AVG(m.cpu_usage), MIN(m.cpu_usage), MAX(m.cpu_usage),
+            AVG(m.memory_usage), MIN(m.memory_usage), MAX(m.memory_usage),
+            AVG(m.disk_usage), MIN(m.disk_usage), MAX(m.disk_usage),
+            AVG(m.network_in), MIN(m.network_in), MAX(m.network_in),
+            AVG(m.network_out), MIN(m.network_out), MAX(m.network_out),
             COUNT(*)
-        FROM metrics
-        WHERE timestamp >= NOW() - INTERVAL '15 minutes'
-        GROUP BY host_id, bucket_start
+        FROM metrics m
+        LEFT JOIN latest_rollups lr ON lr.host_id = m.host_id
+        WHERE COALESCE(m.collected_at, m.timestamp) >= GREATEST(
+            NOW() - INTERVAL '3 days',
+            LEAST(
+                NOW() - INTERVAL '2 hours',
+                COALESCE(
+                    lr.latest_bucket - INTERVAL '5 minutes',
+                    NOW() - INTERVAL '3 days'
+                )
+            )
+        )
+        GROUP BY m.host_id, bucket_start
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
             cpu_usage_avg = EXCLUDED.cpu_usage_avg,
             cpu_usage_min = EXCLUDED.cpu_usage_min,
@@ -102,7 +119,7 @@ async function rollup1Hour() {
 // The data isn't lost â€” it already lives on in the 5m/1h rollups.
 async function cleanupRawMetrics() {
     const result = await pool.query(
-        `DELETE FROM metrics WHERE timestamp < NOW() - INTERVAL '3 days'`
+        `DELETE FROM metrics WHERE COALESCE(collected_at, timestamp) < NOW() - INTERVAL '3 days'`
     );
     return result.rowCount;
 }

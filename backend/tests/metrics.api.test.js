@@ -44,10 +44,19 @@ async function insertRollup(table, hostId, hoursAgo, cpuAvg) {
     await pool.query(
         `INSERT INTO ${table}
             (host_id, bucket_start,
-             cpu_usage_avg, memory_usage_avg, disk_usage_avg,
-             network_in_avg, network_out_avg, sample_count)
+             cpu_usage_avg, cpu_usage_min, cpu_usage_max,
+             memory_usage_avg, memory_usage_min, memory_usage_max,
+             disk_usage_avg, disk_usage_min, disk_usage_max,
+             network_in_avg, network_in_min, network_in_max,
+             network_out_avg, network_out_min, network_out_max,
+             sample_count)
          VALUES ($1, date_trunc('hour', NOW()) - ($2 || ' hours')::interval,
-                 $3, 41, 51, 1001, 2001, 10)`,
+                 $3::double precision, $3::double precision - 5, $3::double precision + 5,
+                 41, 36, 46,
+                 51, 46, 56,
+                 1001, 996, 1006,
+                 2001, 1996, 2006,
+                 10)`,
         [hostId, String(hoursAgo), cpuAvg]
     );
 }
@@ -75,6 +84,16 @@ describe('GET /api/metrics - access and validation', () => {
         const res = await request(app).get(`/api/metrics?host_id=${hostA}`);
 
         expect(res.status).toBe(401);
+    });
+
+    test('returns 400 for an unsupported metrics range', async () => {
+        const res = await request(app)
+            .get('/api/metrics?host_id=' + hostA + '&range=10m')
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/Invalid range/);
+        expect(res.body.error).toContain('90d');
     });
 
     test.each([
@@ -181,7 +200,17 @@ describe('GET /api/metrics - rollup ranges', () => {
             memory_usage: 41,
             disk_usage: 51,
             network_in: 1001,
-            network_out: 2001
+            network_out: 2001,
+            cpu_usage_min: 28,
+            cpu_usage_max: 38,
+            memory_usage_min: 36,
+            memory_usage_max: 46,
+            disk_usage_min: 46,
+            disk_usage_max: 56,
+            network_in_min: 996,
+            network_in_max: 1006,
+            network_out_min: 1996,
+            network_out_max: 2006
         }));
         expect(res.body[0].timestamp).toBeDefined();
     });
@@ -221,6 +250,20 @@ describe('GET /api/metrics - rollup ranges', () => {
             .set(authHeader(userA.token));
 
         expect(threeDays.body.map((row) => row.cpu_usage)).toEqual([24]);
+
+        expect(threeDays.body[0]).toEqual(expect.objectContaining({
+            cpu_usage: 24,
+            cpu_usage_min: 19,
+            cpu_usage_max: 29,
+            memory_usage_min: 36,
+            memory_usage_max: 46,
+            disk_usage_min: 46,
+            disk_usage_max: 56,
+            network_in_min: 996,
+            network_in_max: 1006,
+            network_out_min: 1996,
+            network_out_max: 2006
+        }));
         expect(sevenDays.body.map((row) => row.cpu_usage)).toEqual([50, 24]);
         expect(thirtyDays.body.map((row) => row.cpu_usage)).toEqual([20, 90, 50, 24]);
         expect(ninetyDays.body.map((row) => row.cpu_usage)).toEqual([80, 40, 20, 90, 50, 24]);

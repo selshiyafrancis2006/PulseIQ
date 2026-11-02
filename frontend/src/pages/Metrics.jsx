@@ -33,8 +33,11 @@ export default function Metrics() {
           `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
         )
 
-        const data = await res.json()
+        if (!res.ok) {
+          throw new Error('Metrics request failed: ' + res.status)
+        }
 
+        const data = await res.json()
         setMetrics(data)
 
       } catch (err) {

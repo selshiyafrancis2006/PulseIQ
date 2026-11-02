@@ -11,6 +11,7 @@ import {
 } from 'chart.js'
 import { apiFetch } from '../../utils/apiFetch'
 import { API_BASE_URL } from '../../config/api'
+import { buildMetricChartPoints } from '../../utils/metricChartData'
 
 ChartJS.register(
   CategoryScale,
@@ -43,6 +44,10 @@ export default function MetricChartWidget({ hostId, metric, hostName, timeRange 
         const res = await apiFetch(
           `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${hostId}`
         )
+        if (!res.ok) {
+          throw new Error('Metrics request failed: ' + res.status)
+        }
+
         const data = await res.json()
         setMetrics(data)
       } catch (err) {
@@ -59,18 +64,28 @@ export default function MetricChartWidget({ hostId, metric, hostName, timeRange 
 
   }, [hostId, metric, timeRange])
 
-  const color = '#10b981' // emerald — one consistent color across every widget, matches app theme
+  const color = '#10b981' // emerald - one consistent color across every widget, matches app theme
+
+  const chartPoints = buildMetricChartPoints(metrics, timeRange)
 
   const data = {
-    labels: metrics.map((m) => new Date(m.timestamp).toLocaleTimeString()),
+    labels: chartPoints.map((point) =>
+      new Date(point.timestamp).toLocaleTimeString()
+    ),
     datasets: [
       {
-        data: metrics.map((m) => parseFloat(m[metric])),
+        data: chartPoints.map((point) => {
+          if (!point.metric) return null
+
+          const value = Number.parseFloat(point.metric[metric])
+          return Number.isFinite(value) ? value : null
+        }),
         borderColor: color,
         backgroundColor: color + '20',
         borderWidth: 2,
         fill: true,
         pointRadius: 0,
+        spanGaps: false,
         tension: 0.35
       }
     ]
@@ -91,7 +106,7 @@ export default function MetricChartWidget({ hostId, metric, hostName, timeRange 
     <div className="h-full flex flex-col p-3">
       <div className="flex items-center gap-2 mb-2">
         <p className="text-sm text-white truncate">
-          {metricLabels[metric] || metric} · {hostName}
+          {metricLabels[metric] || metric} - {hostName}
         </p>
         {!loading && metrics.length > 0 && (
           <span className="relative flex h-2 w-2 shrink-0" title="Live">
