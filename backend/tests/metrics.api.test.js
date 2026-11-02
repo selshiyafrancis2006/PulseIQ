@@ -197,10 +197,14 @@ describe('GET /api/metrics - rollup ranges', () => {
         expect(res.body.map((row) => row.cpu_usage)).toEqual([20]);
     });
 
-    test('3d and 7d are served from the hourly rollups', async () => {
+    test('3d, 7d, 30d and 90d are served from the hourly rollups', async () => {
         await insertRollup('metric_rollups_1h', hostA, 24, 24);
         await insertRollup('metric_rollups_1h', hostA, 24 * 5, 50);
         await insertRollup('metric_rollups_1h', hostA, 24 * 9, 90);
+        await insertRollup('metric_rollups_1h', hostA, 24 * 20, 20);
+        await insertRollup('metric_rollups_1h', hostA, 24 * 40, 40);
+        await insertRollup('metric_rollups_1h', hostA, 24 * 80, 80);
+        await insertRollup('metric_rollups_1h', hostA, 24 * 95, 95);
         await insertRollup('metric_rollups_5m', hostA, 1, 1); // wrong table, must be ignored
 
         const threeDays = await request(app)
@@ -209,9 +213,17 @@ describe('GET /api/metrics - rollup ranges', () => {
         const sevenDays = await request(app)
             .get(`/api/metrics?host_id=${hostA}&range=7d`)
             .set(authHeader(userA.token));
+        const thirtyDays = await request(app)
+            .get(`/api/metrics?host_id=${hostA}&range=30d`)
+            .set(authHeader(userA.token));
+        const ninetyDays = await request(app)
+            .get(`/api/metrics?host_id=${hostA}&range=90d`)
+            .set(authHeader(userA.token));
 
         expect(threeDays.body.map((row) => row.cpu_usage)).toEqual([24]);
         expect(sevenDays.body.map((row) => row.cpu_usage)).toEqual([50, 24]);
+        expect(thirtyDays.body.map((row) => row.cpu_usage)).toEqual([20, 90, 50, 24]);
+        expect(ninetyDays.body.map((row) => row.cpu_usage)).toEqual([80, 40, 20, 90, 50, 24]);
     });
 });
 

@@ -18,9 +18,18 @@ const ROLLUP_5M_RANGES = {
 
 const ROLLUP_1H_RANGES = {
     '3d': '3 days',
-    '7d': '7 days'
+    '7d': '7 days',
+    '30d': '30 days',
+    '90d': '90 days'
 };
 
+const isSupportedRange = (range) => {
+    return (
+        Object.prototype.hasOwnProperty.call(RAW_RANGES, range) ||
+        Object.prototype.hasOwnProperty.call(ROLLUP_5M_RANGES, range) ||
+        Object.prototype.hasOwnProperty.call(ROLLUP_1H_RANGES, range)
+    );
+};
 const verifyHostOwnership = async (hostId, userId) => {
 
     const result = await pool.query(
@@ -94,6 +103,7 @@ const fetchLatestMetric = async (hostId) => {
 };
 
 module.exports = {
+    isSupportedRange,
     verifyHostOwnership,
     fetchMetrics,
     fetchLatestMetric

@@ -13,8 +13,13 @@ const getMetrics = async (req, res) => {
 
     try {
 
-        const range =
-            req.query.range || '1m';
+        const range = req.query.range || '1m';
+
+        if (!metricsService.isSupportedRange(range)) {
+            return res.status(400).json({
+                error: 'Invalid range. Supported ranges: 1m, 5m, 15m, 1h, 6h, 24h, 3d, 7d, 30d, 90d'
+            });
+        }
 
         const hostId = parseHostId(req.query.host_id);
 
