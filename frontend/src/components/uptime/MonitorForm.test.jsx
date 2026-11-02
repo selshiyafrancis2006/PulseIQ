@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+﻿import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import MonitorForm from './MonitorForm';
 
@@ -127,7 +127,7 @@ describe('MonitorForm - G5.1', () => {
     submitForm('Create Monitor');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Expected status codes must be 1–20 unique codes between 100 and 599.'
+      'Expected status codes must be 1â€“20 unique codes between 100 and 599.'
     );
     expect(onSubmit).not.toHaveBeenCalled();
   });
@@ -168,9 +168,38 @@ describe('MonitorForm - G5.1', () => {
 
     expect(payload).not.toHaveProperty('method');
     expect(payload).not.toHaveProperty('headers');
-    expect(payload).not.toHaveProperty('timeout_ms');
+    expect(payload.timeout_ms).toBe(10000);
   });
 
+  it('submits a custom TCP timeout and rejects one below 1000 ms', async () => {
+    const onSubmit = vi.fn().mockResolvedValue(undefined);
+
+    render(<MonitorForm saving={false} onSubmit={onSubmit} onCancel={vi.fn()} />);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Redis' } });
+    fireEvent.change(screen.getByLabelText('Monitor type'), { target: { value: 'TCP' } });
+    fireEvent.change(screen.getByLabelText('Hostname or IP address'), {
+      target: { value: 'cache.example.com' },
+    });
+
+    fireEvent.change(screen.getByLabelText('TCP timeout (milliseconds)'), {
+      target: { value: '500' },
+    });
+    submitForm('Create Monitor');
+    expect(await screen.findByText(/TCP timeout must be between 1000 and 30000/)).toBeTruthy();
+    expect(onSubmit).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText('TCP timeout (milliseconds)'), {
+      target: { value: '3000' },
+    });
+    submitForm('Create Monitor');
+
+    await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
+    expect(onSubmit.mock.calls[0][0]).toEqual(expect.objectContaining({
+      monitor_type: 'TCP',
+      timeout_ms: 3000,
+    }));
+  });
   it('loads existing HTTP settings when editing', () => {
     render(
       <MonitorForm
