@@ -1,9 +1,35 @@
 const pool = require('../config/db');
 
-// Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
-// buckets. Uses ON CONFLICT to upsert, so it's safe to re-run every 5
-// minutes â€” the current (partial) bucket gets refined until it's complete,
-// and re-processing already-complete buckets is a no-op.
+function intFromEnv(name, fallback, min) {
+    const value = Number.parseInt(process.env[name], 10);
+    return Number.isInteger(value) && value >= min ? value : fallback;
+}
+
+// Retention windows (days). A value below its minimum is ignored and the
+// default is used, because each window must outlive what reads from it:
+//   raw      - feeds the 5-minute rollup
+//   5m       - read by the 6h/24h ranges and by rollup1Hour (7-day window)
+//   1h       - read by the 3d-90d ranges
+// The values are validated integers, so they are safe to put in the SQL.
+const RAW_RETENTION_DAYS = intFromEnv('METRICS_RAW_RETENTION_DAYS', 3, 1);
+const ROLLUP_5M_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_5M_RETENTION_DAYS', 8, 8);
+const ROLLUP_1H_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_1H_RETENTION_DAYS', 90, 90);
+const ANOMALY_RETENTION_DAYS = intFromEnv('ANOMALY_RETENTION_DAYS', 30, 1);
+const TRACE_RETENTION_DAYS = intFromEnv('TRACE_RETENTION_DAYS', 7, 1);
+
+// Aggregates raw `metrics` rows into 5-minute buckets, using the agent's
+// collection time (collected_at) when present and the server time otherwise.
+//
+// Which raw rows are re-read on each run (per host):
+//   - at least the last 2 hours, so the current bucket keeps being refined;
+//   - further back, to the last bucket already rolled up, so buckets missed
+//     while the job was down or failing get filled in;
+//   - never further back than the raw retention window.
+// Both ends are aligned to bucket boundaries. The start is rounded DOWN, so
+// the oldest bucket is read in full instead of being rebuilt from part of its
+// rows. The retention cap is rounded UP, so a bucket whose older raw rows may
+// already be deleted is never rebuilt from what is left of it.
+// Uses ON CONFLICT to upsert, so re-running is safe and idempotent.
 async function rollup5Minute() {
     await pool.query(`
         INSERT INTO metric_rollups_5m (
@@ -34,13 +60,19 @@ async function rollup5Minute() {
         FROM metrics m
         LEFT JOIN latest_rollups lr ON lr.host_id = m.host_id
         WHERE COALESCE(m.collected_at, m.timestamp) >= GREATEST(
-            NOW() - INTERVAL '3 days',
-            LEAST(
-                NOW() - INTERVAL '2 hours',
-                COALESCE(
-                    lr.latest_bucket - INTERVAL '5 minutes',
-                    NOW() - INTERVAL '3 days'
-                )
+            to_timestamp(
+                ceil(extract(epoch FROM NOW() - INTERVAL '${RAW_RETENTION_DAYS} days') / 300) * 300
+            ),
+            to_timestamp(
+                floor(
+                    extract(epoch FROM LEAST(
+                        NOW() - INTERVAL '2 hours',
+                        COALESCE(
+                            lr.latest_bucket - INTERVAL '5 minutes',
+                            NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'
+                        )
+                    )) / 300
+                ) * 300
             )
         )
         GROUP BY m.host_id, bucket_start
@@ -64,9 +96,12 @@ async function rollup5Minute() {
     `);
 }
 
-// Aggregates `metric_rollups_5m` rows from the last 3 hours into 1-hour
-// buckets. Averages are sample-count-weighted so a partially-filled 5m
-// bucket doesn't skew the hourly average.
+// Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
+// buckets. The window starts on a whole hour, so the oldest hour is always
+// aggregated from all twelve of its 5-minute buckets. Starting mid-hour would
+// rebuild that hour from only some of them and overwrite its correct values.
+// Averages are sample-count-weighted so a partially-filled 5m bucket doesn't
+// skew the hourly average.
 async function rollup1Hour() {
     await pool.query(`
         INSERT INTO metric_rollups_1h (
@@ -93,7 +128,7 @@ async function rollup1Hour() {
             MIN(network_out_min), MAX(network_out_max),
             SUM(sample_count)
         FROM metric_rollups_5m
-        WHERE bucket_start >= NOW() - INTERVAL '7 days'
+        WHERE bucket_start >= date_trunc('hour', NOW() - INTERVAL '7 days', 'UTC')
         GROUP BY host_id, date_trunc('hour', bucket_start, 'UTC')
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
             cpu_usage_avg = EXCLUDED.cpu_usage_avg,
@@ -116,36 +151,36 @@ async function rollup1Hour() {
 }
 
 // Deletes raw high-resolution metric rows older than the retention window.
-// The data isn't lost â€” it already lives on in the 5m/1h rollups.
+// The data isn't lost - it already lives on in the 5m/1h rollups.
 async function cleanupRawMetrics() {
     const result = await pool.query(
-        `DELETE FROM metrics WHERE COALESCE(collected_at, timestamp) < NOW() - INTERVAL '3 days'`
+        `DELETE FROM metrics
+         WHERE COALESCE(collected_at, timestamp) < NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'`
     );
     return result.rowCount;
 }
-
 
 async function cleanupHistoricalData() {
     const cleanupQueries = [
         {
             name: '5-minute rollups',
             sql: `DELETE FROM metric_rollups_5m
-                  WHERE bucket_start < NOW() - INTERVAL '8 days'`
+                  WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_5M_RETENTION_DAYS} days'`
         },
         {
             name: 'hourly rollups',
             sql: `DELETE FROM metric_rollups_1h
-                  WHERE bucket_start < NOW() - INTERVAL '90 days'`
+                  WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_1H_RETENTION_DAYS} days'`
         },
         {
             name: 'anomalies',
             sql: `DELETE FROM anomalies
-                  WHERE timestamp < NOW() - INTERVAL '30 days'`
+                  WHERE timestamp < NOW() - INTERVAL '${ANOMALY_RETENTION_DAYS} days'`
         },
         {
             name: 'traces',
             sql: `DELETE FROM traces
-                  WHERE timestamp < NOW() - INTERVAL '7 days'`
+                  WHERE timestamp < NOW() - INTERVAL '${TRACE_RETENTION_DAYS} days'`
         }
     ];
 
@@ -163,5 +198,10 @@ module.exports = {
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,
-    cleanupHistoricalData
+    cleanupHistoricalData,
+    RAW_RETENTION_DAYS,
+    ROLLUP_5M_RETENTION_DAYS,
+    ROLLUP_1H_RETENTION_DAYS,
+    ANOMALY_RETENTION_DAYS,
+    TRACE_RETENTION_DAYS
 };

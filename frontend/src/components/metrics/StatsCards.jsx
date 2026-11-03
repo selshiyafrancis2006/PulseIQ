@@ -1,27 +1,66 @@
+// null (not 0 or NaN) for a missing value
+const toNumber = (value) => {
+
+  if (value === null || value === undefined) return null
+
+  const number = Number(value)
+
+  return Number.isFinite(number) ? number : null
+
+}
+
 export default function StatsCards({
   metrics,
   selectedMetric
 }) {
 
-  if (!metrics.length) return null;
+  if (!metrics.length) return null
 
-console.log('Selected Metric:', selectedMetric);
-console.log('First Metric Object:', metrics[0]);
-console.log('Value:', metrics[0][selectedMetric]);
+  // One entry per row. Rollup rows carry <metric>_min / <metric>_max and a
+  // sample_count; raw rows don't, so their min/max is the value itself and
+  // each counts once.
+  const points = metrics
+    .map(metric => {
 
-  const values = metrics.map(metric =>
-    parseFloat(metric[selectedMetric])
-  );
+      const average = toNumber(metric[selectedMetric])
 
-  const latest = values[values.length - 1];
+      const samples = toNumber(metric.sample_count)
+
+      return {
+        average,
+        minimum: toNumber(metric[`${selectedMetric}_min`]) ?? average,
+        maximum: toNumber(metric[`${selectedMetric}_max`]) ?? average,
+        weight: samples !== null && samples > 0 ? samples : 1
+      }
+
+    })
+    .filter(point => point.average !== null)
+
+  if (!points.length) return null
+
+  const latest = points[points.length - 1].average
+
+  // Weighted by sample count so a half-filled bucket doesn't skew the average
+  const totalWeight = points.reduce(
+    (sum, point) => sum + point.weight,
+    0
+  )
 
   const average =
-    values.reduce((sum, value) => sum + value, 0) /
-    values.length;
+    points.reduce(
+      (sum, point) => sum + point.average * point.weight,
+      0
+    ) / totalWeight
 
-  const maximum = Math.max(...values);
+  const maximum = points.reduce(
+    (best, point) => Math.max(best, point.maximum),
+    -Infinity
+  )
 
-  const minimum = Math.min(...values);
+  const minimum = points.reduce(
+    (best, point) => Math.min(best, point.minimum),
+    Infinity
+  )
 
   const stats = [
     {
@@ -40,7 +79,7 @@ console.log('Value:', metrics[0][selectedMetric]);
       label: 'Minimum',
       value: minimum
     }
-  ];
+  ]
 
   return (
 
@@ -73,6 +112,6 @@ console.log('Value:', metrics[0][selectedMetric]);
 
     </div>
 
-  );
+  )
 
 }

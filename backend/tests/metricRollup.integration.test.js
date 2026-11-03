@@ -376,3 +376,110 @@ describe('cleanupRawMetrics', () => {
         expect(await fiveMinuteRows(hostA)).toHaveLength(1);
     });
 });
+
+// ===== Step 2: rollup window alignment and catch-up =====
+describe('rollup windows: catch-up and edge alignment', () => {
+    const {
+        RAW_RETENTION_DAYS
+    } = require('../src/services/metricRollup.service');
+
+    async function insertFiveMinuteRow(hostId, bucket, { cpu, count }) {
+        await pool.query(
+            `INSERT INTO metric_rollups_5m
+                (host_id, bucket_start,
+                 cpu_usage_avg, cpu_usage_min, cpu_usage_max,
+                 memory_usage_avg, memory_usage_min, memory_usage_max,
+                 disk_usage_avg, disk_usage_min, disk_usage_max,
+                 network_in_avg, network_in_min, network_in_max,
+                 network_out_avg, network_out_min, network_out_max,
+                 sample_count)
+             VALUES ($1, $2, $3, $3, $3,
+                     $3, $3, $3, $3, $3, $3, $3, $3, $3, $3, $3, $3, $4)`,
+            [hostId, bucket, cpu, count]
+        );
+    }
+
+    test('one run fills in buckets that earlier skipped runs missed', async () => {
+        const recent = await bucketStart(1);
+        const missed = await bucketStart(24); // about 2 hours ago
+
+        await insertRawAt(hostA, offset(recent, 30), { cpu: 10 });
+        await insertRawAt(hostA, offset(missed, 30), { cpu: 70 });
+
+        await rollup5Minute();
+
+        const rows = await fiveMinuteRows(hostA);
+        expect(rows.map((row) => row.cpu_usage_avg)).toEqual([70, 10]);
+    });
+
+    test('catches up from the last rolled bucket after a long outage', async () => {
+        const lastRolled = await bucketStart(60); // about 5 hours ago
+        const missed = await bucketStart(48);     // about 4 hours ago
+
+        await insertFiveMinuteRow(hostA, lastRolled, { cpu: 5, count: 1 });
+        await insertRawAt(hostA, offset(missed, 30), { cpu: 60 });
+
+        await rollup5Minute();
+
+        const rows = await fiveMinuteRows(hostA);
+        expect(rows.map((row) => row.cpu_usage_avg)).toEqual([5, 60]);
+    });
+
+    test('a bucket at the start of the 2-hour window is read in full, not partially', async () => {
+        // A recent rollup makes the 2-hour minimum window the active one
+        await insertFiveMinuteRow(hostA, await bucketStart(1), { cpu: 1, count: 1 });
+
+        const edgeResult = await pool.query(
+            `SELECT to_timestamp(
+                 floor(extract(epoch FROM NOW() - INTERVAL '2 hours') / 300) * 300
+             ) AS b`
+        );
+        const edge = edgeResult.rows[0].b;
+
+        await insertRawAt(hostA, offset(edge, 1), { cpu: 10 });
+        await insertRawAt(hostA, offset(edge, 100), { cpu: 20 });
+        await insertRawAt(hostA, offset(edge, 200), { cpu: 30 });
+
+        await rollup5Minute();
+
+        const edgeRow = (await fiveMinuteRows(hostA)).find(
+            (row) => new Date(row.bucket_start).getTime() === edge.getTime()
+        );
+        expect(edgeRow).toBeDefined();
+        expect(edgeRow.sample_count).toBe(3);
+        expect(edgeRow.cpu_usage_avg).toBe(20);
+    });
+
+    test('raw rows older than the retention window are not rolled up', async () => {
+        const oldResult = await pool.query(
+            `SELECT NOW() - $1::int * INTERVAL '1 day' AS t`,
+            [RAW_RETENTION_DAYS + 1]
+        );
+
+        await insertRawAt(hostA, oldResult.rows[0].t, { cpu: 99 });
+
+        await rollup5Minute();
+
+        expect(await fiveMinuteRows(hostA)).toEqual([]);
+    });
+
+    test('rollup1Hour keeps the oldest hour complete at the edge of its 7-day window', async () => {
+        const hourResult = await pool.query(
+            `SELECT date_trunc('hour', NOW() - INTERVAL '7 days', 'UTC') AS h`
+        );
+        const h = hourResult.rows[0].h;
+
+        // All twelve 5-minute buckets of the hour that contains "7 days ago"
+        for (let i = 0; i < 12; i += 1) {
+            await insertFiveMinuteRow(hostA, offset(h, i * 300), { cpu: 40, count: 10 });
+        }
+
+        await rollup1Hour();
+
+        const rows = await hourRows(hostA);
+        expect(rows).toHaveLength(1);
+        expect(rows[0].sample_count).toBe(120);
+        expect(rows[0].cpu_usage_avg).toBe(40);
+    });
+});
+// ===== end Step 2 =====

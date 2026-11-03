@@ -42,7 +42,16 @@ const RANGES = {
   '6h': { minutes: 360, label: '6 hours' },
   '24h': { minutes: 1440, label: '24 hours' },
   '3d': { minutes: 4320, label: '3 days' },
-  '7d': { minutes: 10080, label: '7 days' }
+  '7d': { minutes: 10080, label: '7 days' },
+  '30d': { minutes: 43200, label: '30 days' },
+  '90d': { minutes: 129600, label: '90 days' }
+}
+
+// null (not 0 or NaN) for a missing value, so the chart shows a gap
+const toNumber = (value) => {
+  const number = Number.parseFloat(value)
+
+  return Number.isFinite(number) ? number : null
 }
 
 export default function MetricsChart({
@@ -55,7 +64,7 @@ export default function MetricsChart({
 
   if (!metrics.length) return null
 
-   const range = RANGES[timeRange]
+  const range = RANGES[timeRange]
 
   // Unknown range: show everything the API returned rather than nothing
   const filteredMetrics = range
@@ -65,6 +74,8 @@ export default function MetricsChart({
       )
     : metrics
 
+  // Points include empty placeholders where samples are missing, so the
+  // line breaks across an outage instead of joining over it
   const chartPoints = buildMetricChartPoints(filteredMetrics, timeRange)
 
   // Day-or-longer ranges need the date too, or labels repeat ambiguously
@@ -85,33 +96,91 @@ export default function MetricsChart({
     formatLabel(point.timestamp)
   )
 
-  const datasets = selectedMetrics.map(metric => ({
+  // The min-max band is drawn for one metric at a time, and only when the
+  // rows carry min/max (rollup ranges: 6h and longer).
+  const bandMetric =
+    selectedMetrics.length === 1 ? selectedMetrics[0] : null
 
-    label: metric
+  const showBand =
+    bandMetric !== null &&
+    chartPoints.some(point =>
+      point.metric &&
+      toNumber(point.metric[`${bandMetric}_max`]) !== null
+    )
+
+  const datasets = selectedMetrics.map(metric => {
+
+    const name = metric
       .replace('_', ' ')
-      .toUpperCase(),
+      .toUpperCase()
 
-    data: chartPoints.map(point => {
-      if (!point.metric) return null
+    return {
 
-      const value = Number.parseFloat(point.metric[metric])
-      return Number.isFinite(value) ? value : null
-    }),
+      label: showBand ? `${name} (AVG)` : name,
 
-    borderColor: metricColors[metric],
+      data: chartPoints.map(point =>
+        point.metric ? toNumber(point.metric[metric]) : null
+      ),
 
-    backgroundColor: metricColors[metric] + '20',
+      borderColor: metricColors[metric],
 
-    borderWidth: 2,
+      backgroundColor: metricColors[metric] + '20',
 
-    fill: false,
+      borderWidth: 2,
 
-    pointRadius: 0,
-    pointHoverRadius: 4,
-    spanGaps: false,
-    tension: 0.35
+      fill: false,
 
-  }))
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      spanGaps: false,
+      tension: 0.35,
+
+      // Lower order is drawn on top, so the line stays above the band
+      order: 0
+
+    }
+
+  })
+
+  if (showBand) {
+
+    const color = metricColors[bandMetric]
+
+    // "Max" is an invisible line; "Min" fills up to it ('-1' = the dataset
+    // before it), which draws the shaded band between the two.
+    datasets.push({
+      label: 'Max',
+      data: chartPoints.map(point =>
+        point.metric ? toNumber(point.metric[`${bandMetric}_max`]) : null
+      ),
+      borderColor: 'transparent',
+      backgroundColor: 'transparent',
+      borderWidth: 0,
+      fill: false,
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      spanGaps: false,
+      tension: 0.35,
+      order: 1
+    })
+
+    datasets.push({
+      label: 'Min',
+      data: chartPoints.map(point =>
+        point.metric ? toNumber(point.metric[`${bandMetric}_min`]) : null
+      ),
+      borderColor: 'transparent',
+      backgroundColor: color + '26',
+      borderWidth: 0,
+      fill: '-1',
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      spanGaps: false,
+      tension: 0.35,
+      order: 1
+    })
+
+  }
 
   const data = {
 
@@ -129,12 +198,19 @@ export default function MetricsChart({
 
     animation: false,
 
+    // With a band, hovering shows average, max and min together
+    interaction: showBand
+      ? { mode: 'index', intersect: false }
+      : undefined,
+
     plugins: {
 
       legend: {
         display: true,
         labels: {
-          color: '#ffffff'
+          color: '#ffffff',
+          // The band datasets are explained in the subtitle, not the legend
+          filter: (item) => item.text !== 'Max' && item.text !== 'Min'
         }
       }
 
@@ -186,6 +262,7 @@ export default function MetricsChart({
 
       <p className="text-xs text-gray-500 -mt-4 mb-5">
         Last {range ? range.label : timeRange}
+        {showBand && ' · shaded area shows the min–max within each time bucket'}
       </p>
 
       <div className="h-[420px]">

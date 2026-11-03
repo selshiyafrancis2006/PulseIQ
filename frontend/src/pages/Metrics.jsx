@@ -9,14 +9,31 @@ import StatsCards from '../components/metrics/StatsCards'
 import MetricsChart from '../components/metrics/MetricsChart'
 import MetricsTable from '../components/metrics/MetricsTable'
 
+// Quote a CSV field when it contains a comma, quote or newline
+const csvField = (value) => {
+
+  if (value === null || value === undefined) return ''
+
+  const text = String(value)
+
+  return /[",\r\n]/.test(text)
+    ? `"${text.replace(/"/g, '""')}"`
+    : text
+
+}
+
+const safeFilePart = (text) =>
+  String(text).replace(/[^a-zA-Z0-9_-]+/g, '_')
+
 export default function Metrics() {
 
   const { hosts, selectedHostId, setSelectedHostId } = useHosts()
 
   const [metrics, setMetrics] = useState([])
+  const [error, setError] = useState(null)
   const [selectedMetrics, setSelectedMetrics] = useState([
-  'cpu_usage'
-])
+    'cpu_usage'
+  ])
   const [timeRange, setTimeRange] = useState('1m')
 
   useEffect(() => {
@@ -24,6 +41,14 @@ export default function Metrics() {
     if (!selectedHostId) {
       return
     }
+
+    // Set when this effect is replaced (host/range changed or unmounted),
+    // so a slow response for the old selection can't overwrite new data.
+    let ignore = false
+
+    // Don't show the previous host/range's data while the new one loads
+    setMetrics([])
+    setError(null)
 
     const fetchMetrics = async () => {
 
@@ -34,11 +59,40 @@ export default function Metrics() {
         )
 
         if (!res.ok) {
-          throw new Error('Metrics request failed: ' + res.status)
+
+          console.error(
+            'Failed to fetch metrics',
+            new Error('Metrics request failed: ' + res.status)
+          )
+
+          let message = `Failed to load metrics (HTTP ${res.status})`
+
+          try {
+            const body = await res.json()
+            if (body && typeof body.error === 'string') {
+              message = body.error
+            }
+          } catch {
+            // body was not JSON - keep the generic message
+          }
+
+          if (!ignore) setError(message)
+
+          return
+
         }
 
         const data = await res.json()
-        setMetrics(data)
+
+        if (!Array.isArray(data)) {
+          if (!ignore) setError('Unexpected response from the server')
+          return
+        }
+
+        if (!ignore) {
+          setMetrics(data)
+          setError(null)
+        }
 
       } catch (err) {
 
@@ -46,6 +100,10 @@ export default function Metrics() {
           'Failed to fetch metrics',
           err
         )
+
+        if (!ignore) {
+          setError('Could not reach the server')
+        }
 
       }
 
@@ -58,7 +116,10 @@ export default function Metrics() {
       5000
     )
 
-    return () => clearInterval(interval)
+    return () => {
+      ignore = true
+      clearInterval(interval)
+    }
 
   }, [timeRange, selectedHostId])
 
@@ -66,20 +127,31 @@ export default function Metrics() {
 
     if (!metrics.length) return
 
-    const csv = [
+    const host = hosts.find(h => h.id === selectedHostId)
 
-      ['Timestamp', 'Value'],
+    // Rollup ranges also carry <metric>_min / <metric>_max: export them too
+    const columns = ['timestamp']
 
-      ...metrics.map(metric => [
+    selectedMetrics.forEach(name => {
 
-        metric.timestamp,
+      columns.push(name)
 
-        metric[selectedMetrics[0]]
+      if (metrics.some(row => row[`${name}_max`] !== undefined)) {
+        columns.push(`${name}_min`, `${name}_max`)
+      }
 
-      ])
+    })
 
-    ]
-      .map(row => row.join(','))
+    const rows = metrics.map(row =>
+      columns.map(column =>
+        column === 'timestamp'
+          ? (row.collected_at ?? row.timestamp)
+          : row[column]
+      )
+    )
+
+    const csv = [columns, ...rows]
+      .map(row => row.map(csvField).join(','))
       .join('\n')
 
     const blob = new Blob(
@@ -98,7 +170,7 @@ export default function Metrics() {
     link.href = url
 
     link.download =
-      `${selectedMetrics[0]}.csv`
+      `${safeFilePart(host?.name ?? `host_${selectedHostId}`)}_${timeRange}_metrics.csv`
 
     link.click()
 
@@ -134,9 +206,12 @@ export default function Metrics() {
 
           <button
             onClick={exportCSV}
+            disabled={!metrics.length}
             className="
               bg-emerald-600
               hover:bg-emerald-700
+              disabled:opacity-50
+              disabled:cursor-not-allowed
               px-5
               py-2
               rounded-lg
@@ -151,11 +226,30 @@ export default function Metrics() {
       </div>
 
       <MetricSelector
-  selectedMetrics={selectedMetrics}
-  setSelectedMetrics={setSelectedMetrics}
-  timeRange={timeRange}
-  setTimeRange={setTimeRange}
-/>
+        selectedMetrics={selectedMetrics}
+        setSelectedMetrics={setSelectedMetrics}
+        timeRange={timeRange}
+        setTimeRange={setTimeRange}
+      />
+
+      {error && (
+        <div
+          role="alert"
+          className="
+            mb-6
+            px-4
+            py-3
+            rounded-lg
+            border
+            border-red-500/40
+            bg-red-500/10
+            text-red-300
+            text-sm
+          "
+        >
+          {error}
+        </div>
+      )}
 
       <StatsCards
         metrics={metrics}
@@ -165,11 +259,12 @@ export default function Metrics() {
       <MetricsChart
         metrics={metrics}
         selectedMetrics={selectedMetrics}
+        timeRange={timeRange}
       />
 
       <MetricsTable
         metrics={metrics}
-        selectedMetrics={selectedMetrics[0]}
+        selectedMetric={selectedMetrics[0]}
       />
 
     </div>

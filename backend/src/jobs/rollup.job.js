@@ -3,7 +3,8 @@ const {
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,
-    cleanupHistoricalData
+    cleanupHistoricalData,
+    RAW_RETENTION_DAYS
 } = require('../services/metricRollup.service');
 // F1: monitor_results rollups + retention
 const {
@@ -46,7 +47,7 @@ cron.schedule('0 3 * * *', async () => {
     try {
         const deletedRawMetrics = await cleanupRawMetrics();
         console.log(
-            `Retention cleanup: removed ${deletedRawMetrics} raw metric rows older than 3 days`
+            `Retention cleanup: removed ${deletedRawMetrics} raw metric rows older than ${RAW_RETENTION_DAYS} days`
         );
     } catch (err) {
         console.error('Raw metric retention cleanup error:', err);

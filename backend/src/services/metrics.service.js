@@ -40,8 +40,10 @@ const verifyHostOwnership = async (hostId, userId) => {
     return result.rows.length > 0;
 };
 
-// Rollup rows are renamed to the raw column names (using each bucket's
-// average) so every chart and table that reads raw metrics works unchanged.
+// Rollup rows use the raw column names for each bucket's average, so every
+// chart and table that reads raw metrics works unchanged. They also carry
+// each metric's <name>_min / <name>_max and the bucket's sample_count, so
+// short spikes stay visible on long ranges. Raw rows have none of these.
 const fetchRollup = async (table, interval, hostId) => {
 
     const result = await pool.query(
@@ -63,7 +65,8 @@ const fetchRollup = async (table, interval, hostId) => {
             network_in_max,
             network_out_avg AS network_out,
             network_out_min,
-            network_out_max
+            network_out_max,
+            sample_count
          FROM ${table}
          WHERE host_id = $1
            AND bucket_start >= NOW() - INTERVAL '${interval}'
@@ -86,6 +89,7 @@ const fetchMetrics = async (range, hostId) => {
 
     const interval = RAW_RANGES[range] || '1 minute';
 
+    // Raw rows are placed by the agent's collection time when it sent one
     const result = await pool.query(
         `SELECT *
          FROM metrics

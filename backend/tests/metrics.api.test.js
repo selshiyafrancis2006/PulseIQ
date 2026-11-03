@@ -631,3 +631,84 @@ describe('GET /api/metrics/query - access and validation', () => {
             network_out: 485
         }));
     });});
+// ===== Step 3: min/max on rollup ranges =====
+describe('GET /api/metrics - min/max on rollup ranges', () => {
+    async function insertRollupWithBounds(table, hostId, hoursAgo) {
+        await pool.query(
+            `INSERT INTO ${table}
+                (host_id, bucket_start,
+                 cpu_usage_avg, cpu_usage_min, cpu_usage_max,
+                 memory_usage_avg, memory_usage_min, memory_usage_max,
+                 disk_usage_avg, disk_usage_min, disk_usage_max,
+                 network_in_avg, network_in_min, network_in_max,
+                 network_out_avg, network_out_min, network_out_max,
+                 sample_count)
+             VALUES ($1, date_trunc('hour', NOW()) - ($2 || ' hours')::interval,
+                     40, 10, 90,
+                     41, 11, 91,
+                     51, 21, 81,
+                     1001, 101, 9001,
+                     2001, 201, 8001,
+                     12)`,
+            [hostId, String(hoursAgo)]
+        );
+    }
+
+    test('5-minute rollup ranges return min, max and sample_count next to the average', async () => {
+        await insertRollupWithBounds('metric_rollups_5m', hostA, 1);
+
+        const res = await request(app)
+            .get(`/api/metrics?host_id=${hostA}&range=6h`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveLength(1);
+        expect(res.body[0]).toEqual(expect.objectContaining({
+            cpu_usage: 40,
+            cpu_usage_min: 10,
+            cpu_usage_max: 90,
+            memory_usage: 41,
+            memory_usage_min: 11,
+            memory_usage_max: 91,
+            disk_usage: 51,
+            disk_usage_min: 21,
+            disk_usage_max: 81,
+            network_in: 1001,
+            network_in_min: 101,
+            network_in_max: 9001,
+            network_out: 2001,
+            network_out_min: 201,
+            network_out_max: 8001,
+            sample_count: 12
+        }));
+    });
+
+    test('hourly rollup ranges return min and max too', async () => {
+        await insertRollupWithBounds('metric_rollups_1h', hostA, 24);
+
+        const res = await request(app)
+            .get(`/api/metrics?host_id=${hostA}&range=7d`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveLength(1);
+        expect(res.body[0].cpu_usage_min).toBe(10);
+        expect(res.body[0].cpu_usage_max).toBe(90);
+        expect(res.body[0].sample_count).toBe(12);
+    });
+
+    test('raw ranges have no min/max fields', async () => {
+        await insertRaw(hostA, 10, 33);
+
+        const res = await request(app)
+            .get(`/api/metrics?host_id=${hostA}&range=5m`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveLength(1);
+        expect(res.body[0].cpu_usage).toBe(33);
+        expect(res.body[0]).not.toHaveProperty('cpu_usage_min');
+        expect(res.body[0]).not.toHaveProperty('cpu_usage_max');
+    });
+});
+// ===== end Step 3 =====
