@@ -1,6 +1,53 @@
 const metricsService =
     require('../services/metrics.service');
 
+const metricsQueryService =
+    require('../services/metricsQuery.service');
+
+const MAX_QUERY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
+
+const parseHostIds = (value) => {
+    if (typeof value !== 'string' || !value.trim()) {
+        return null;
+    }
+
+    const parts = value.split(',');
+    const ids = parts.map((part) => {
+        const trimmed = part.trim();
+
+        if (!/^[1-9]\d*$/.test(trimmed)) {
+            return null;
+        }
+
+        const id = Number(trimmed);
+
+        return Number.isSafeInteger(id) ? id : null;
+    });
+
+    if (ids.some((id) => id === null)) {
+        return null;
+    }
+
+    if (new Set(ids).size !== ids.length) {
+        return null;
+    }
+
+    return ids;
+};
+
+const parseIsoTimestamp = (value) => {
+    if (
+        typeof value !== 'string' ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?(?:Z|[+-]\d{2}:\d{2})$/.test(value)
+    ) {
+        return null;
+    }
+
+    const timestamp = new Date(value);
+
+    return Number.isNaN(timestamp.getTime()) ? null : timestamp;
+};
+
 function parseHostId(value) {
 
     const id = Number(value);
@@ -97,7 +144,116 @@ const getLatestMetric = async (req, res) => {
 
 };
 
+const getMetricsQuery = async (req, res) => {
+    try {
+        const hostIds = parseHostIds(req.query.host_ids);
+        const from = parseIsoTimestamp(req.query.from);
+        const to = parseIsoTimestamp(req.query.to);
+        const { step, agg } = req.query;
+
+        if (!hostIds) {
+            return res.status(400).json({
+                error: 'Valid comma-separated host_ids are required'
+            });
+        }
+
+        if (!from || !to || from >= to) {
+            return res.status(400).json({
+                error: 'Valid from and to ISO timestamps are required, and from must be before to'
+            });
+        }
+
+        if (to.getTime() > Date.now()) {
+            return res.status(400).json({
+                error: 'The to timestamp cannot be in the future'
+            });
+        }
+
+        if (to.getTime() - from.getTime() > MAX_QUERY_WINDOW_MS) {
+            return res.status(400).json({
+                error: 'The maximum query window is 90 days'
+            });
+        }
+
+        if (!Object.prototype.hasOwnProperty.call(
+            metricsQueryService.QUERY_STEPS,
+            step
+        )) {
+            return res.status(400).json({
+                error: 'Unsupported step. Supported steps: 1m, 5m, 15m, 1h, 6h, 1d'
+            });
+        }
+
+        if (!['avg', 'min', 'max', 'p95'].includes(agg)) {
+            return res.status(400).json({
+                error: 'Unsupported aggregation. Supported aggregations: avg, min, max, p95'
+            });
+        }
+
+        const source = metricsQueryService.getQuerySource(from);
+
+        if (agg === 'p95' && source.type !== 'raw') {
+            return res.status(400).json({
+                error: 'P95 aggregation is only supported for raw metrics within the last 3 days'
+            });
+        }
+
+        if (!metricsQueryService.isStepCompatible(step, source)) {
+            return res.status(400).json({
+                error: `Step ${step} is too small for the selected ${source.type} data resolution`
+            });
+        }
+
+        if (
+            source.type !== 'raw' &&
+            (
+                from.getTime() % source.resolutionMs !== 0 ||
+                to.getTime() % source.resolutionMs !== 0
+            )
+        ) {
+            return res.status(400).json({
+                error: `from and to must align to ${source.type === '5m' ? '5-minute' : 'hourly'} UTC boundaries`
+            });
+        }
+
+        const ownsAllHosts =
+            await metricsQueryService.verifyHostsOwnership(
+                hostIds,
+                req.user.id
+            );
+
+        if (!ownsAllHosts) {
+            return res.status(404).json({
+                error: 'One or more hosts not found'
+            });
+        }
+
+        const data = await metricsQueryService.fetchMetricQuery({
+            hostIds,
+            from,
+            to,
+            step,
+            agg,
+            source
+        });
+
+        return res.json({
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step,
+            agg,
+            data
+        });
+    } catch (err) {
+        console.error(err);
+
+        return res.status(500).json({
+            error: 'Failed to query metrics'
+        });
+    }
+};
 module.exports = {
     getMetrics,
-    getLatestMetric
+    getLatestMetric,
+    getMetricsQuery
 };

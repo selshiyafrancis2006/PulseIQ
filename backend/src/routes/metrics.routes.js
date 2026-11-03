@@ -1,11 +1,14 @@
-const express = require('express');
+﻿const express = require('express');
 
 const router = express.Router();
 
 const {
     getMetrics,
-    getLatestMetric
+    getLatestMetric,
+    getMetricsQuery
 } = require('../controllers/metrics.controller');
+
+router.get('/metrics/query', getMetricsQuery);
 
 router.get('/metrics', getMetrics);
 

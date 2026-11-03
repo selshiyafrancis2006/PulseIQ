@@ -40,6 +40,23 @@ async function insertRaw(hostId, secondsAgo, cpu, extra = {}) {
     );
 }
 
+async function insertRawAt(hostId, timestamp, values = {}) {
+    await pool.query(
+        `INSERT INTO metrics
+            (host_id, timestamp, collected_at,
+             cpu_usage, memory_usage, disk_usage, network_in, network_out)
+         VALUES ($1, $2::timestamptz, $2::timestamptz, $3, $4, $5, $6, $7)`,
+        [
+            hostId,
+            timestamp,
+            values.cpu ?? 40,
+            values.memory ?? 50,
+            values.disk ?? 60,
+            values.netIn ?? 1000,
+            values.netOut ?? 2000
+        ]
+    );
+}
 async function insertRollup(table, hostId, hoursAgo, cpuAvg) {
     await pool.query(
         `INSERT INTO ${table}
@@ -312,3 +329,305 @@ describe('GET /api/metrics/latest', () => {
         expect(res.status).toBe(404);
     });
 });
+
+describe('GET /api/metrics/query - access and validation', () => {
+    const buildQuery = (overrides = {}) => {
+        const stepMs = 5 * 60 * 1000;
+        const to = new Date(Math.floor(Date.now() / stepMs) * stepMs);
+        const from = new Date(to.getTime() - 60 * 60 * 1000);
+
+        return new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '5m',
+            agg: 'avg',
+            ...overrides
+        }).toString();
+    };
+
+    test('rejects a request without a token', async () => {
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery());
+
+        expect(res.status).toBe(401);
+    });
+
+    test.each(['host_ids', 'from', 'to', 'step', 'agg'])(
+        'returns 400 when %s is missing', async (parameter) => {
+            const params = new URLSearchParams(buildQuery());
+            params.delete(parameter);
+
+            const res = await request(app)
+                .get('/api/metrics/query?' + params.toString())
+                .set(authHeader(userA.token));
+
+            expect(res.status).toBe(400);
+        }
+    );
+
+    test.each([
+        ['malformed host list', { host_ids: `${hostA},abc` }],
+        ['zero host ID', { host_ids: '0' }],
+        ['decimal host ID', { host_ids: '1.5' }],
+        ['invalid from timestamp', { from: 'not-a-date' }],
+        ['invalid to timestamp', { to: 'not-a-date' }],
+        ['from equal to to', (() => {
+            const value = new Date().toISOString();
+            return { from: value, to: value };
+        })()],
+        ['unsupported step', { step: 'banana' }],
+        ['unsupported aggregation', { agg: 'median' }]
+    ])('returns 400 for %s', async (_label, overrides) => {
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery(overrides))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('rejects a query window longer than 90 days', async () => {
+        const to = new Date();
+        const from = new Date(to.getTime() - 91 * 24 * 60 * 60 * 1000);
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + new URLSearchParams({
+                host_ids: String(hostA),
+                from: from.toISOString(),
+                to: to.toISOString(),
+                step: '1h',
+                agg: 'avg'
+            }).toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('rejects the entire multi-host request if any host belongs to another user', async () => {
+        const foreignHost = await registerHost(userB.token, 'metrics-foreign-host');
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery({
+                host_ids: `${hostA},${foreignHost}`
+            }))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(404);
+        expect(res.body.data).toBeUndefined();
+    });
+
+    test('returns query metadata and an empty data array for a valid empty query', async () => {
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual(expect.objectContaining({
+            step: '5m',
+            agg: 'avg',
+            data: []
+        }));
+        expect(res.body.from).toBeDefined();
+        expect(res.body.to).toBeDefined();
+    });
+
+    test('rejects misaligned 5-minute rollup boundaries', async () => {
+        const stepMs = 5 * 60 * 1000;
+        const to = new Date(Math.floor(Date.now() / stepMs) * stepMs);
+        const from = new Date(to.getTime() - 4 * 24 * 60 * 60 * 1000 + 60 * 1000);
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery({
+                from: from.toISOString(),
+                to: to.toISOString(),
+                step: '5m'
+            }))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('rejects misaligned hourly rollup boundaries', async () => {
+        const hourMs = 60 * 60 * 1000;
+        const to = new Date(Math.floor(Date.now() / hourMs) * hourMs);
+        const from = new Date(to.getTime() - 10 * 24 * 60 * 60 * 1000 + 5 * 60 * 1000);
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery({
+                from: from.toISOString(),
+                to: to.toISOString(),
+                step: '1h'
+            }))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+    test('aggregates raw metrics using the one-minute average', async () => {
+        const minuteMs = 60 * 1000;
+        const fromMs = Math.floor(Date.now() / minuteMs) * minuteMs - 2 * minuteMs;
+        const from = new Date(fromMs);
+        const to = new Date(fromMs + minuteMs);
+
+        const samples = [
+            { cpu: 10, memory: 20, disk: 30, netIn: 100, netOut: 200 },
+            { cpu: 20, memory: 30, disk: 40, netIn: 200, netOut: 300 },
+            { cpu: 30, memory: 40, disk: 50, netIn: 300, netOut: 400 },
+            { cpu: 40, memory: 50, disk: 60, netIn: 400, netOut: 500 }
+        ];
+
+        for (const [index, values] of samples.entries()) {
+            const timestamp = new Date(fromMs + (index + 1) * 10000);
+            await insertRawAt(hostA, timestamp.toISOString(), values);
+        }
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '1m',
+            agg: 'avg'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            cpu_usage: 25,
+            memory_usage: 35,
+            disk_usage: 45,
+            network_in: 250,
+            network_out: 350
+        }));
+    });
+
+    test('aggregates raw metrics using the one-minute minimum', async () => {
+        const minuteMs = 60 * 1000;
+        const fromMs = Math.floor(Date.now() / minuteMs) * minuteMs - 2 * minuteMs;
+        const from = new Date(fromMs);
+        const to = new Date(fromMs + minuteMs);
+
+        const samples = [
+            { cpu: 10, memory: 20, disk: 30, netIn: 100, netOut: 200 },
+            { cpu: 20, memory: 30, disk: 40, netIn: 200, netOut: 300 },
+            { cpu: 30, memory: 40, disk: 50, netIn: 300, netOut: 400 },
+            { cpu: 40, memory: 50, disk: 60, netIn: 400, netOut: 500 }
+        ];
+
+        for (const [index, values] of samples.entries()) {
+            const timestamp = new Date(fromMs + (index + 1) * 10000);
+            await insertRawAt(hostA, timestamp.toISOString(), values);
+        }
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '1m',
+            agg: 'min'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            cpu_usage: 10,
+            memory_usage: 20,
+            disk_usage: 30,
+            network_in: 100,
+            network_out: 200
+        }));
+    });
+    test('aggregates raw metrics using the one-minute maximum', async () => {
+        const minuteMs = 60 * 1000;
+        const fromMs = Math.floor(Date.now() / minuteMs) * minuteMs - 2 * minuteMs;
+        const from = new Date(fromMs);
+        const to = new Date(fromMs + minuteMs);
+
+        const samples = [
+            { cpu: 10, memory: 20, disk: 30, netIn: 100, netOut: 200 },
+            { cpu: 20, memory: 30, disk: 40, netIn: 200, netOut: 300 },
+            { cpu: 30, memory: 40, disk: 50, netIn: 300, netOut: 400 },
+            { cpu: 40, memory: 50, disk: 60, netIn: 400, netOut: 500 }
+        ];
+
+        for (const [index, values] of samples.entries()) {
+            const timestamp = new Date(fromMs + (index + 1) * 10000);
+            await insertRawAt(hostA, timestamp.toISOString(), values);
+        }
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '1m',
+            agg: 'max'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            cpu_usage: 40,
+            memory_usage: 50,
+            disk_usage: 60,
+            network_in: 400,
+            network_out: 500
+        }));
+    });
+    test('calculates the one-minute 95th percentile from raw metrics', async () => {
+        const minuteMs = 60 * 1000;
+        const fromMs = Math.floor(Date.now() / minuteMs) * minuteMs - 2 * minuteMs;
+        const from = new Date(fromMs);
+        const to = new Date(fromMs + minuteMs);
+
+        const samples = [
+            { cpu: 10, memory: 20, disk: 30, netIn: 100, netOut: 200 },
+            { cpu: 20, memory: 30, disk: 40, netIn: 200, netOut: 300 },
+            { cpu: 30, memory: 40, disk: 50, netIn: 300, netOut: 400 },
+            { cpu: 40, memory: 50, disk: 60, netIn: 400, netOut: 500 }
+        ];
+
+        for (const [index, values] of samples.entries()) {
+            const timestamp = new Date(fromMs + (index + 1) * 10000);
+            await insertRawAt(hostA, timestamp.toISOString(), values);
+        }
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '1m',
+            agg: 'p95'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            cpu_usage: 38.5,
+            memory_usage: 48.5,
+            disk_usage: 58.5,
+            network_in: 385,
+            network_out: 485
+        }));
+    });});
