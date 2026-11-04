@@ -76,6 +76,100 @@ describe('MetricsChart min-max band', () => {
     expect(datasets()[1].borderWidth).toBe(0);
   });
 
+  test('assigns distinct colours to every metric', () => {
+    const rows = [{
+      id: 1,
+      timestamp: secondsAgo(10),
+      cpu_usage: 40,
+      memory_usage: 50,
+      disk_usage: 60,
+      network_in: 70,
+      network_out: 80,
+    }];
+
+    render(
+      <MetricsChart
+        metrics={rows}
+        selectedMetrics={[
+          'cpu_usage',
+          'memory_usage',
+          'disk_usage',
+          'network_in',
+          'network_out',
+        ]}
+        timeRange="1m"
+      />
+    );
+
+    expect(datasets().map((dataset) => dataset.borderColor)).toEqual([
+      '#10b981',
+      '#38bdf8',
+      '#f59e0b',
+      '#a78bfa',
+      '#fb7185',
+    ]);
+
+    expect(new Set(datasets().map((dataset) => dataset.borderColor)).size).toBe(5);
+  });
+  test('assigns network metrics to the right axis and other metrics to the left', () => {
+    const rows = [{
+      id: 1,
+      timestamp: secondsAgo(10),
+      cpu_usage: 40,
+      memory_usage: 50,
+      disk_usage: 60,
+      network_in: 70,
+      network_out: 80,
+    }];
+
+    render(
+      <MetricsChart
+        metrics={rows}
+        selectedMetrics={[
+          'cpu_usage',
+          'memory_usage',
+          'disk_usage',
+          'network_in',
+          'network_out',
+        ]}
+        timeRange="1m"
+      />
+    );
+
+    expect(datasets().map((dataset) => dataset.yAxisID)).toEqual([
+      'y',
+      'y',
+      'y',
+      'yNetwork',
+      'yNetwork',
+    ]);
+    expect(chart.props.options.scales.yNetwork.position).toBe('right');
+    expect(chart.props.options.scales.yNetwork.grid.drawOnChartArea).toBe(false);
+  });
+
+  test('keeps a network min-max band on the right axis', () => {
+    const rows = [{
+      id: 1,
+      timestamp: hoursAgo(3),
+      network_in: 40,
+      network_in_min: 20,
+      network_in_max: 60,
+    }];
+
+    render(
+      <MetricsChart
+        metrics={rows}
+        selectedMetrics={['network_in']}
+        timeRange="7d"
+      />
+    );
+
+    expect(datasets().map((dataset) => dataset.yAxisID)).toEqual([
+      'yNetwork',
+      'yNetwork',
+      'yNetwork',
+    ]);
+  });
   test('hides the band datasets from the legend and lists all values on hover', () => {
     const rows = [rollupRow(1, 2, 40, 10, 90), rollupRow(2, 1, 50, 20, 80)];
 

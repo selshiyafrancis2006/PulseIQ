@@ -1,4 +1,4 @@
-﻿const express = require('express');
+const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const http = require('http');
@@ -36,6 +36,7 @@ const maintenanceWindowRoutes = require('./routes/maintenanceWindows.routes');
 const publicStatusPageRoutes = require('./routes/publicStatusPage.routes');
 const statusPageRoutes = require('./routes/statusPage.routes');
 const apiTestRoutes = require('./routes/apiTest.routes');
+const prometheusRoutes = require('./routes/prometheus.routes');
 
 const app = express();
 // Behind a TLS-terminating reverse proxy, set TRUST_PROXY=1 so req.ip and
@@ -56,6 +57,7 @@ app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use('/api/agent', agentRateLimit, agentRoutes);
 app.use(loggerMiddleware);
+app.use('/metrics', prometheusRoutes);
 
 // Routes
 // Public â€” no auth required
@@ -174,7 +176,4 @@ module.exports = {
     app,
     server
 };
-
-
-
 

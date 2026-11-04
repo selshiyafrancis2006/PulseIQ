@@ -5,12 +5,13 @@ function intFromEnv(name, fallback, min) {
     return Number.isInteger(value) && value >= min ? value : fallback;
 }
 
-// Retention windows (days). A value below its minimum is ignored and the
-// default is used, because each window must outlive what reads from it:
-//   raw      - feeds the 5-minute rollup
-//   5m       - read by the 6h/24h ranges and by rollup1Hour (7-day window)
-//   1h       - read by the 3d-90d ranges
-// The values are validated integers, so they are safe to put in the SQL.
+// Retention windows (days). Each tier supports its downstream consumers:
+//   raw - newest query data and input to the 5-minute rollup;
+//   5m  - query data between the raw and 5m retention cutovers, plus the
+//         7-day input window used by rollup1Hour;
+//   1h  - query data between the 5m and hourly retention cutovers.
+// Minimums preserve the full rollup and query windows. Values are validated
+// integers before being interpolated into SQL.
 const RAW_RETENTION_DAYS = intFromEnv('METRICS_RAW_RETENTION_DAYS', 3, 1);
 const ROLLUP_5M_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_5M_RETENTION_DAYS', 8, 8);
 const ROLLUP_1H_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_1H_RETENTION_DAYS', 90, 90);

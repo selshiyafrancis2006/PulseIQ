@@ -4,6 +4,8 @@ const metricsService =
 const metricsQueryService =
     require('../services/metricsQuery.service');
 
+const { ROLLUP_1H_RETENTION_DAYS } = require('../services/metricRollup.service');
+
 const MAX_QUERY_WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
 
 const parseHostIds = (value) => {
@@ -169,6 +171,14 @@ const getMetricsQuery = async (req, res) => {
             });
         }
 
+        const oldestAvailableTimestamp =
+            Date.now() - ROLLUP_1H_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+
+        if (from.getTime() < oldestAvailableTimestamp) {
+            return res.status(400).json({
+                error: `The from timestamp exceeds the ${ROLLUP_1H_RETENTION_DAYS}-day metrics retention limit`
+            });
+        }
         if (to.getTime() - from.getTime() > MAX_QUERY_WINDOW_MS) {
             return res.status(400).json({
                 error: 'The maximum query window is 90 days'
@@ -190,29 +200,44 @@ const getMetricsQuery = async (req, res) => {
             });
         }
 
-        const source = metricsQueryService.getQuerySource(from);
+        const sources = metricsQueryService.getQuerySources(from, to);
 
-        if (agg === 'p95' && source.type !== 'raw') {
+        if (sources.length === 0) {
+            return res.status(400).json({
+                error: 'No metric data source is available for this query range'
+            });
+        }
+
+        const coarsestSource = sources.reduce((coarsest, segment) => {
+            return segment.source.resolutionMs > coarsest.resolutionMs
+                ? segment.source
+                : coarsest;
+        }, sources[0].source);
+
+        if (agg === 'p95' && sources.some(
+            (segment) => segment.source.type !== 'raw'
+        )) {
             return res.status(400).json({
                 error: 'P95 aggregation is only supported for raw metrics within the last 3 days'
             });
         }
 
-        if (!metricsQueryService.isStepCompatible(step, source)) {
+        if (!metricsQueryService.isStepCompatible(step, coarsestSource)) {
             return res.status(400).json({
-                error: `Step ${step} is too small for the selected ${source.type} data resolution`
+                error: `Step ${step} is too small for the selected ${coarsestSource.type} data resolution`
             });
         }
 
         if (
-            source.type !== 'raw' &&
-            (
-                from.getTime() % source.resolutionMs !== 0 ||
-                to.getTime() % source.resolutionMs !== 0
-            )
+            from.getTime() % coarsestSource.resolutionMs !== 0 ||
+            to.getTime() % coarsestSource.resolutionMs !== 0
         ) {
+            const boundaryLabel = coarsestSource.type === '1h'
+                ? 'hourly'
+                : '5-minute';
+
             return res.status(400).json({
-                error: `from and to must align to ${source.type === '5m' ? '5-minute' : 'hourly'} UTC boundaries`
+                error: `from and to must align to ${boundaryLabel} UTC boundaries for this query range`
             });
         }
 
@@ -234,7 +259,7 @@ const getMetricsQuery = async (req, res) => {
             to,
             step,
             agg,
-            source
+            sources
         });
 
         return res.json({

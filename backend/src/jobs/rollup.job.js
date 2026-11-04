@@ -6,7 +6,7 @@ const {
     cleanupHistoricalData,
     RAW_RETENTION_DAYS
 } = require('../services/metricRollup.service');
-// F1: monitor_results rollups + retention
+// Monitor results rollups and retention
 const {
     rollupRecentMonitorResults,
     cleanupMonitorResults
@@ -32,7 +32,7 @@ cron.schedule('0 * * * *', async () => {
     }
 });
 
-// F1: hourly monitor_results rollup — runs at minute 5 of every hour
+// Hourly monitor results rollup — runs at minute 5 of every hour
 cron.schedule('5 * * * *', async () => {
     try {
         const buckets = await rollupRecentMonitorResults(3);
@@ -60,7 +60,7 @@ cron.schedule('0 3 * * *', async () => {
         console.error('Historical retention cleanup error:', err);
     }
 
-    // F1: monitor_results retention
+    // Monitor results retention
     try {
         const summary = await cleanupMonitorResults();
         console.log('Monitor results retention complete:', summary);

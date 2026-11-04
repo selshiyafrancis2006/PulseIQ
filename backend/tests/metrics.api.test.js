@@ -7,6 +7,12 @@ const {
     authHeader
 } = require('./helpers');
 
+const metricsQueryService = require('../src/services/metricsQuery.service');
+const {
+    RAW_RETENTION_DAYS,
+    ROLLUP_5M_RETENTION_DAYS
+} = require('../src/services/metricRollup.service');
+
 let userA;
 let userB;
 let hostA;
@@ -386,6 +392,29 @@ describe('GET /api/metrics/query - access and validation', () => {
         expect(res.status).toBe(400);
     });
 
+    test('rejects a query starting beyond the hourly retention limit even when its window is exactly 90 days', async () => {
+        const dayMs = 24 * 60 * 60 * 1000;
+        const hourMs = 60 * 60 * 1000;
+        const now = Date.now();
+
+        const to = new Date(Math.floor(now / hourMs) * hourMs);
+        const from = new Date(
+            to.getTime() - 90 * dayMs
+        );
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + new URLSearchParams({
+                host_ids: String(hostA),
+                from: from.toISOString(),
+                to: to.toISOString(),
+                step: '1h',
+                agg: 'avg'
+            }).toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+        expect(res.body.error).toMatch(/retention limit/i);
+    });
     test('rejects a query window longer than 90 days', async () => {
         const to = new Date();
         const from = new Date(to.getTime() - 91 * 24 * 60 * 60 * 1000);
@@ -712,3 +741,346 @@ describe('GET /api/metrics - min/max on rollup ranges', () => {
     });
 });
 // ===== end Step 3 =====
+// ===== Gap 5: query API aggregation on rollup sources =====
+describe('GET /api/metrics/query - rollup aggregation', () => {
+    async function insertQueryRollup(table, hostId, bucketStart, sampleCount, values) {
+        await pool.query(
+            `INSERT INTO ${table}
+                (host_id, bucket_start,
+                 cpu_usage_avg, cpu_usage_min, cpu_usage_max,
+                 memory_usage_avg, memory_usage_min, memory_usage_max,
+                 disk_usage_avg, disk_usage_min, disk_usage_max,
+                 network_in_avg, network_in_min, network_in_max,
+                 network_out_avg, network_out_min, network_out_max,
+                 sample_count)
+             VALUES (
+                 $1, $2::timestamptz,
+                 $3, $4, $5,
+                 $6, $7, $8,
+                 $9, $10, $11,
+                 $12, $13, $14,
+                 $15, $16, $17,
+                 $18
+             )`,
+            [
+                hostId,
+                bucketStart,
+                values.cpu.avg, values.cpu.min, values.cpu.max,
+                values.memory.avg, values.memory.min, values.memory.max,
+                values.disk.avg, values.disk.min, values.disk.max,
+                values.networkIn.avg, values.networkIn.min, values.networkIn.max,
+                values.networkOut.avg, values.networkOut.min, values.networkOut.max,
+                sampleCount
+            ]
+        );
+    }
+
+    const firstBucket = {
+        cpu: { avg: 10, min: 5, max: 20 },
+        memory: { avg: 20, min: 15, max: 30 },
+        disk: { avg: 30, min: 25, max: 40 },
+        networkIn: { avg: 100, min: 90, max: 200 },
+        networkOut: { avg: 200, min: 180, max: 300 }
+    };
+
+    const secondBucket = {
+        cpu: { avg: 40, min: 35, max: 50 },
+        memory: { avg: 50, min: 45, max: 60 },
+        disk: { avg: 60, min: 55, max: 70 },
+        networkIn: { avg: 400, min: 390, max: 500 },
+        networkOut: { avg: 800, min: 780, max: 900 }
+    };
+
+    const cases = [
+        {
+            label: '5-minute rollups',
+            table: 'metric_rollups_5m',
+            ageDays: 4,
+            step: '15m',
+            stepMs: 15 * 60 * 1000,
+            bucketOffsetMs: 5 * 60 * 1000,
+            firstCount: 2,
+            secondCount: 8,
+            averages: {
+                cpu_usage: 34,
+                memory_usage: 44,
+                disk_usage: 54,
+                network_in: 340,
+                network_out: 680
+            }
+        },
+        {
+            label: 'hourly rollups',
+            table: 'metric_rollups_1h',
+            ageDays: 10,
+            step: '6h',
+            stepMs: 6 * 60 * 60 * 1000,
+            bucketOffsetMs: 60 * 60 * 1000,
+            firstCount: 3,
+            secondCount: 7,
+            averages: {
+                cpu_usage: 31,
+                memory_usage: 41,
+                disk_usage: 51,
+                network_in: 310,
+                network_out: 620
+            }
+        }
+    ];
+
+    test.each(cases)('$label calculate sample-count-weighted averages', async (config) => {
+        const fromMs = Math.floor(
+            (Date.now() - config.ageDays * 24 * 60 * 60 * 1000) / config.stepMs
+        ) * config.stepMs;
+
+        const from = new Date(fromMs);
+        const secondTimestamp = new Date(fromMs + config.bucketOffsetMs);
+        const to = new Date(fromMs + config.stepMs);
+
+        await insertQueryRollup(
+            config.table, hostA, from.toISOString(),
+            config.firstCount, firstBucket
+        );
+        await insertQueryRollup(
+            config.table, hostA, secondTimestamp.toISOString(),
+            config.secondCount, secondBucket
+        );
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: config.step,
+            agg: 'avg'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            ...config.averages
+        }));
+    });
+
+    test.each(cases)('$label calculate minimum values from bucket minima', async (config) => {
+        const fromMs = Math.floor(
+            (Date.now() - config.ageDays * 24 * 60 * 60 * 1000) / config.stepMs
+        ) * config.stepMs;
+
+        const from = new Date(fromMs);
+        const secondTimestamp = new Date(fromMs + config.bucketOffsetMs);
+        const to = new Date(fromMs + config.stepMs);
+
+        await insertQueryRollup(
+            config.table, hostA, from.toISOString(),
+            config.firstCount, firstBucket
+        );
+        await insertQueryRollup(
+            config.table, hostA, secondTimestamp.toISOString(),
+            config.secondCount, secondBucket
+        );
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: config.step,
+            agg: 'min'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            cpu_usage: 5,
+            memory_usage: 15,
+            disk_usage: 25,
+            network_in: 90,
+            network_out: 180
+        }));
+    });
+
+    test.each(cases)('$label calculate maximum values from bucket maxima', async (config) => {
+        const fromMs = Math.floor(
+            (Date.now() - config.ageDays * 24 * 60 * 60 * 1000) / config.stepMs
+        ) * config.stepMs;
+
+        const from = new Date(fromMs);
+        const secondTimestamp = new Date(fromMs + config.bucketOffsetMs);
+        const to = new Date(fromMs + config.stepMs);
+
+        await insertQueryRollup(
+            config.table, hostA, from.toISOString(),
+            config.firstCount, firstBucket
+        );
+        await insertQueryRollup(
+            config.table, hostA, secondTimestamp.toISOString(),
+            config.secondCount, secondBucket
+        );
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: config.step,
+            agg: 'max'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(res.body.data[0]).toEqual(expect.objectContaining({
+            host_id: hostA,
+            timestamp: from.toISOString(),
+            cpu_usage: 50,
+            memory_usage: 60,
+            disk_usage: 70,
+            network_in: 500,
+            network_out: 900
+        }));
+    });
+    test('combines hourly, 5-minute, and raw sources in one query', async () => {
+        const hourMs = 60 * 60 * 1000;
+        const toMs = Math.floor(Date.now() / hourMs) * hourMs;
+        const fromMs = toMs - 12 * 24 * hourMs;
+
+        const from = new Date(fromMs);
+        const to = new Date(toMs);
+        const hourlyTimestamp = new Date(fromMs + hourMs);
+        const fiveMinuteTimestamp = new Date(toMs - 5 * 24 * hourMs);
+        const rawTimestamp = new Date(toMs - 24 * hourMs);
+
+        await insertQueryRollup(
+            'metric_rollups_1h',
+            hostA,
+            hourlyTimestamp.toISOString(),
+            2,
+            firstBucket
+        );
+
+        await insertQueryRollup(
+            'metric_rollups_5m',
+            hostA,
+            fiveMinuteTimestamp.toISOString(),
+            4,
+            secondBucket
+        );
+
+        await insertRawAt(hostA, rawTimestamp.toISOString(), {
+            cpu: 70,
+            memory: 71,
+            disk: 72,
+            netIn: 730,
+            netOut: 740
+        });
+
+        const query = new URLSearchParams({
+            host_ids: String(hostA),
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '1h',
+            agg: 'avg'
+        });
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + query.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(3);
+
+        const pointsByTimestamp = new Map(
+            res.body.data.map(point => [
+                new Date(point.timestamp).getTime(),
+                point
+            ])
+        );
+
+        expect(pointsByTimestamp.size).toBe(3);
+
+        expect(pointsByTimestamp.get(hourlyTimestamp.getTime())).toEqual(
+            expect.objectContaining({
+                host_id: hostA,
+                cpu_usage: 10,
+                memory_usage: 20,
+                disk_usage: 30,
+                network_in: 100,
+                network_out: 200
+            })
+        );
+
+        expect(pointsByTimestamp.get(fiveMinuteTimestamp.getTime())).toEqual(
+            expect.objectContaining({
+                host_id: hostA,
+                cpu_usage: 40,
+                memory_usage: 50,
+                disk_usage: 60,
+                network_in: 400,
+                network_out: 800
+            })
+        );
+
+        expect(pointsByTimestamp.get(rawTimestamp.getTime())).toEqual(
+            expect.objectContaining({
+                host_id: hostA,
+                cpu_usage: 70,
+                memory_usage: 71,
+                disk_usage: 72,
+                network_in: 730,
+                network_out: 740
+            })
+        );
+    });
+    test('splits exact retention cutovers into adjacent non-overlapping source ranges', () => {
+        const now = Date.UTC(2026, 0, 15, 12, 34, 56);
+        const dayMs = 24 * 60 * 60 * 1000;
+        const fiveMinuteMs = 5 * 60 * 1000;
+        const hourMs = 60 * 60 * 1000;
+
+        const rawCutover = Math.ceil(
+            (now - RAW_RETENTION_DAYS * dayMs) / fiveMinuteMs
+        ) * fiveMinuteMs;
+
+        const hourlyCutover = Math.ceil(
+            (now - ROLLUP_5M_RETENTION_DAYS * dayMs) / hourMs
+        ) * hourMs;
+
+        const from = new Date(hourlyCutover - hourMs);
+        const to = new Date(rawCutover + fiveMinuteMs);
+
+        const segments = metricsQueryService.getQuerySources(from, to, now);
+
+        expect(segments).toHaveLength(3);
+        expect(segments.map(segment => segment.source.type)).toEqual([
+            '1h',
+            '5m',
+            'raw'
+        ]);
+
+        expect(segments[0].from.getTime()).toBe(from.getTime());
+        expect(segments[0].to.getTime()).toBe(hourlyCutover);
+
+        expect(segments[1].from.getTime()).toBe(hourlyCutover);
+        expect(segments[1].to.getTime()).toBe(rawCutover);
+
+        expect(segments[2].from.getTime()).toBe(rawCutover);
+        expect(segments[2].to.getTime()).toBe(to.getTime());
+
+        expect(segments[0].to.getTime()).toBe(segments[1].from.getTime());
+        expect(segments[1].to.getTime()).toBe(segments[2].from.getTime());
+    });
+});
+// ===== End Gap 5 rollup aggregation tests =====

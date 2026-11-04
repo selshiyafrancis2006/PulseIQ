@@ -1,4 +1,4 @@
-import { Line } from 'react-chartjs-2'
+﻿import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -9,11 +9,11 @@ import {
   Filler,
   Legend
 } from 'chart.js'
-import { useState } from 'react'
 import {
   buildMetricChartPoints,
   getMetricTimestamp
 } from '../../utils/metricChartData'
+import { formatMetricValue } from '../../utils/metricFormatting'
 
 ChartJS.register(
   CategoryScale,
@@ -27,10 +27,10 @@ ChartJS.register(
 
 const metricColors = {
   cpu_usage: '#10b981',
-  memory_usage: '#10b981',
-  disk_usage: '#10b981',
-  network_in: '#10b981',
-  network_out: '#10b981'
+  memory_usage: '#38bdf8',
+  disk_usage: '#f59e0b',
+  network_in: '#a78bfa',
+  network_out: '#fb7185'
 }
 
 // Window and label for every range the UI offers
@@ -60,7 +60,7 @@ export default function MetricsChart({
   timeRange
 }) {
 
-  const [now] = useState(() => Date.now())
+  const now = Date.now()
 
   if (!metrics.length) return null
 
@@ -117,6 +117,8 @@ export default function MetricsChart({
     return {
 
       label: showBand ? `${name} (AVG)` : name,
+      metricKey: metric,
+      yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
 
       data: chartPoints.map(point =>
         point.metric ? toNumber(point.metric[metric]) : null
@@ -150,6 +152,8 @@ export default function MetricsChart({
     // before it), which draws the shaded band between the two.
     datasets.push({
       label: 'Max',
+      metricKey: bandMetric,
+      yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
       data: chartPoints.map(point =>
         point.metric ? toNumber(point.metric[`${bandMetric}_max`]) : null
       ),
@@ -166,6 +170,8 @@ export default function MetricsChart({
 
     datasets.push({
       label: 'Min',
+      metricKey: bandMetric,
+      yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
       data: chartPoints.map(point =>
         point.metric ? toNumber(point.metric[`${bandMetric}_min`]) : null
       ),
@@ -212,6 +218,19 @@ export default function MetricsChart({
           // The band datasets are explained in the subtitle, not the legend
           filter: (item) => item.text !== 'Max' && item.text !== 'Min'
         }
+      },
+
+      tooltip: {
+        callbacks: {
+          label: (context) => {
+            const metricKey = context.dataset.metricKey
+            const value = metricKey
+              ? formatMetricValue(metricKey, context.parsed.y)
+              : context.formattedValue
+
+            return `${context.dataset.label}: ${value}`
+          }
+        }
       }
 
     },
@@ -239,9 +258,22 @@ export default function MetricsChart({
         },
 
         ticks: {
-          color: '#777'
+          color: '#777',
+          callback: (value) => formatMetricValue('cpu_usage', value),
         }
 
+      },
+
+      yNetwork: {
+        position: 'right',
+        beginAtZero: true,
+        grid: {
+          drawOnChartArea: false
+        },
+        ticks: {
+          color: '#777',
+          callback: (value) => formatMetricValue('network_in', value),
+        }
       }
 
     }
@@ -262,7 +294,7 @@ export default function MetricsChart({
 
       <p className="text-xs text-gray-500 -mt-4 mb-5">
         Last {range ? range.label : timeRange}
-        {showBand && ' · shaded area shows the min–max within each time bucket'}
+        {showBand && ' - shaded area shows the min-max within each time bucket'}
       </p>
 
       <div className="h-[420px]">
@@ -279,3 +311,8 @@ export default function MetricsChart({
   )
 
 }
+
+
+
+
+

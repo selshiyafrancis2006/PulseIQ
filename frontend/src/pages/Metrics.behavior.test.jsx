@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+﻿import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { apiFetch } from '../utils/apiFetch';
 import useHosts from '../hooks/useHosts';
@@ -266,7 +266,7 @@ describe('Metrics page - CSV export', () => {
     const blob = window.URL.createObjectURL.mock.calls[0][0];
 
     expect(await blob.text()).toBe(
-      ['timestamp,cpu_usage,cpu_usage_min,cpu_usage_max', `${TIMESTAMP},40,10,90`].join('\n')
+      ['timestamp,host_id,host_name,cpu_usage (%),cpu_usage_min (%),cpu_usage_max (%),sample_count', `${TIMESTAMP},1,prod-server,40,10,90,12`].join('\n')
     );
     expect(clickSpy.mock.contexts[0].download).toBe('prod-server_7d_metrics.csv');
     expect(window.URL.revokeObjectURL).toHaveBeenCalledWith('blob:test');
@@ -295,6 +295,7 @@ describe('Metrics page - CSV export', () => {
 
     const blob = window.URL.createObjectURL.mock.calls[0][0];
 
-    expect(await blob.text()).toBe(['timestamp,cpu_usage', `${TIMESTAMP},5`].join('\n'));
+    expect(await blob.text()).toBe(['timestamp,host_id,host_name,cpu_usage (%)', `${TIMESTAMP},1,prod-server,5`].join('\n'));
   });
 });
+

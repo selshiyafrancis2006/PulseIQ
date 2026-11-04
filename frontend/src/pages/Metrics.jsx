@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { apiFetch } from '../utils/apiFetch'
 import { API_BASE_URL } from '../config/api'
+import { formatMetricColumnHeader } from '../utils/metricFormatting'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
 
@@ -129,28 +130,48 @@ export default function Metrics() {
 
     const host = hosts.find(h => h.id === selectedHostId)
 
-    // Rollup ranges also carry <metric>_min / <metric>_max: export them too
-    const columns = ['timestamp']
+    // Include host identity and rollup sample counts in the export.
+    const columns = [
+      { key: 'timestamp', header: 'timestamp' },
+      { key: 'host_id', header: 'host_id' },
+      { key: 'host_name', header: 'host_name' }
+    ]
 
     selectedMetrics.forEach(name => {
-
-      columns.push(name)
+      columns.push({
+        key: name,
+        header: formatMetricColumnHeader(name)
+      })
 
       if (metrics.some(row => row[`${name}_max`] !== undefined)) {
-        columns.push(`${name}_min`, `${name}_max`)
+        columns.push(
+          {
+            key: `${name}_min`,
+            header: formatMetricColumnHeader(`${name}_min`)
+          },
+          {
+            key: `${name}_max`,
+            header: formatMetricColumnHeader(`${name}_max`)
+          }
+        )
       }
-
     })
 
-    const rows = metrics.map(row =>
-      columns.map(column =>
-        column === 'timestamp'
-          ? (row.collected_at ?? row.timestamp)
-          : row[column]
-      )
-    )
+    if (metrics.some(row => row.sample_count !== undefined)) {
+      columns.push({ key: 'sample_count', header: 'sample_count' })
+    }
 
-    const csv = [columns, ...rows]
+    const rows = metrics.map(row =>
+      columns.map(({ key }) => {
+        if (key === 'timestamp') {
+          return row.collected_at ?? row.timestamp
+        }
+        if (key === 'host_id') return selectedHostId
+        if (key === 'host_name') return host?.name ?? ''
+        return row[key]
+      })
+    )
+    const csv = [columns.map(column => column.header), ...rows]
       .map(row => row.map(csvField).join(','))
       .join('\n')
 

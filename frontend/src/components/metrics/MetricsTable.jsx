@@ -1,4 +1,6 @@
-import { useMemo, useState } from 'react'
+﻿import { useMemo, useState } from 'react'
+import { formatMetricValue } from '../../utils/metricFormatting'
+import { METRICS } from '../../config/metricNames'
 
 export default function MetricsTable({
   metrics,
@@ -9,18 +11,23 @@ export default function MetricsTable({
   const [sortOrder, setSortOrder] = useState('newest')
 
   const getStatus = (value) => {
+    const thresholds = METRICS[selectedMetric]?.thresholds
 
-    if (value >= 90) {
+    if (!thresholds || !Number.isFinite(value)) {
+      return null
+    }
+
+    if (value >= thresholds.critical) {
       return {
         label: 'Critical',
-        className: 'bg-emerald-900 text-emerald-300'
+        className: 'bg-red-950 text-red-300 border border-red-800'
       }
     }
 
-    if (value >= 75) {
+    if (value >= thresholds.warning) {
       return {
         label: 'Warning',
-        className: 'bg-[#1a1a1a] text-emerald-400 border border-emerald-700'
+        className: 'bg-amber-950 text-amber-300 border border-amber-800'
       }
     }
 
@@ -28,15 +35,13 @@ export default function MetricsTable({
       label: 'Normal',
       className: 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a]'
     }
-
   }
-
   const filteredMetrics = useMemo(() => {
 
     let data = [...metrics]
 
     data = data.filter(metric =>
-      new Date(metric.timestamp)
+      new Date(metric.collected_at ?? metric.timestamp)
         .toLocaleString()
         .toLowerCase()
         .includes(search.toLowerCase())
@@ -45,11 +50,11 @@ export default function MetricsTable({
     data.sort((a, b) => {
 
       if (sortOrder === 'newest') {
-        return new Date(b.timestamp) - new Date(a.timestamp)
+        return new Date(b.collected_at ?? b.timestamp) - new Date(a.collected_at ?? a.timestamp)
       }
 
       if (sortOrder === 'oldest') {
-        return new Date(a.timestamp) - new Date(b.timestamp)
+        return new Date(a.collected_at ?? a.timestamp) - new Date(b.collected_at ?? b.timestamp)
       }
 
       if (sortOrder === 'highest') {
@@ -167,31 +172,37 @@ export default function MetricsTable({
 
                   <td className="py-3">
 
-                    {new Date(metric.timestamp)
+                    {new Date(metric.collected_at ?? metric.timestamp)
                       .toLocaleString()}
 
                   </td>
 
                   <td className="py-3">
 
-                    {value.toFixed(2)}
+                    {formatMetricValue(selectedMetric, value)}
 
                   </td>
 
                   <td className="py-3">
 
-                    <span
-                      className={`
-                        px-3
-                        py-1
-                        rounded-full
-                        text-xs
-                        font-semibold
-                        ${status.className}
-                      `}
-                    >
-                      {status.label}
-                    </span>
+                    {status ? (
+                      <span
+                        className={`
+                          px-3
+                          py-1
+                          rounded-full
+                          text-xs
+                          font-semibold
+                          ${status.className}
+                        `}
+                      >
+                        {status.label}
+                      </span>
+                    ) : (
+                      <span className="text-gray-500" aria-label="Status not applicable">
+                        —
+                      </span>
+                    )}
 
                   </td>
 
@@ -212,3 +223,5 @@ export default function MetricsTable({
   )
 
 }
+
+

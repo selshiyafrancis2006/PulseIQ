@@ -1,4 +1,4 @@
-// null (not 0 or NaN) for a missing value
+﻿// null (not 0 or NaN) for a missing value
 const toNumber = (value) => {
 
   if (value === null || value === undefined) return null
@@ -8,6 +8,8 @@ const toNumber = (value) => {
   return Number.isFinite(number) ? number : null
 
 }
+
+import { formatMetricValue } from '../../utils/metricFormatting'
 
 export default function StatsCards({
   metrics,
@@ -103,7 +105,7 @@ export default function StatsCards({
           </p>
 
           <h2 className="text-3xl font-bold text-emerald-400">
-            {stat.value.toFixed(2)}
+            {formatMetricValue(selectedMetric, stat.value)}
           </h2>
 
         </div>

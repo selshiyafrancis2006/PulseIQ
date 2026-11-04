@@ -46,8 +46,11 @@ afterEach(() => {
 })
 
 describe('Metrics page HTTP error handling', () => {
-  test('does not parse or display a failed metrics response', async () => {
-    const json = vi.fn()
+  test('displays the server error without loading failed metrics data', async () => {
+    const json = vi.fn().mockResolvedValue({
+      error: 'Database unavailable'
+    })
+
     apiFetch.mockResolvedValue({
       ok: false,
       status: 500,
@@ -58,11 +61,10 @@ describe('Metrics page HTTP error handling', () => {
 
     render(<Metrics />)
 
-    await waitFor(() => {
-      expect(apiFetch).toHaveBeenCalledTimes(1)
-    })
+    expect(await screen.findByRole('alert'))
+      .toHaveTextContent('Database unavailable')
 
-    expect(json).not.toHaveBeenCalled()
+    expect(json).toHaveBeenCalledTimes(1)
     expect(screen.getByTestId('metrics-count')).toHaveTextContent('0')
   })
 })
