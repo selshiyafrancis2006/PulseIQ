@@ -34,8 +34,8 @@ vi.mock('../components/metrics/MetricsChart', () => ({
 }));
 
 vi.mock('../components/metrics/MetricsTable', () => ({
-  default: ({ selectedMetric }) => (
-    <div data-testid="table">{selectedMetric}</div>
+  default: ({ selectedMetrics }) => (
+    <div data-testid="table">{selectedMetrics.join(',')}</div>
   ),
 }));
 

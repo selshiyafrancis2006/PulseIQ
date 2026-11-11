@@ -2,72 +2,91 @@
 import { formatMetricValue } from '../../utils/metricFormatting'
 import { METRICS } from '../../config/metricNames'
 
+const getTimestamp = (metric) => metric.collected_at ?? metric.timestamp
+
+const getStatus = (metricName, value) => {
+  const thresholds = METRICS[metricName]?.thresholds
+
+  if (!thresholds || !Number.isFinite(value)) {
+    return null
+  }
+
+  if (value >= thresholds.critical) {
+    return {
+      label: 'Critical',
+      className: 'bg-red-950 text-red-300 border border-red-800'
+    }
+  }
+
+  if (value >= thresholds.warning) {
+    return {
+      label: 'Warning',
+      className: 'bg-amber-950 text-amber-300 border border-amber-800'
+    }
+  }
+
+  return {
+    label: 'Normal',
+    className: 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a]'
+  }
+}
+
+// Missing values sort last in both directions
+const compareValues = (a, b, direction) => {
+  const aMissing = !Number.isFinite(a)
+  const bMissing = !Number.isFinite(b)
+
+  if (aMissing && bMissing) return 0
+  if (aMissing) return 1
+  if (bMissing) return -1
+
+  return direction === 'highest' ? b - a : a - b
+}
+
 export default function MetricsTable({
   metrics,
-  selectedMetric
+  selectedMetrics
 }) {
 
   const [search, setSearch] = useState('')
   const [sortOrder, setSortOrder] = useState('newest')
 
-  const getStatus = (value) => {
-    const thresholds = METRICS[selectedMetric]?.thresholds
+  // "Highest" and "Lowest" rank by the first selected metric
+  const sortMetric = selectedMetrics[0]
+  const sortMetricName = METRICS[sortMetric]?.name ?? sortMetric
 
-    if (!thresholds || !Number.isFinite(value)) {
-      return null
-    }
-
-    if (value >= thresholds.critical) {
-      return {
-        label: 'Critical',
-        className: 'bg-red-950 text-red-300 border border-red-800'
-      }
-    }
-
-    if (value >= thresholds.warning) {
-      return {
-        label: 'Warning',
-        className: 'bg-amber-950 text-amber-300 border border-amber-800'
-      }
-    }
-
-    return {
-      label: 'Normal',
-      className: 'bg-[#1a1a1a] text-gray-300 border border-[#2a2a2a]'
-    }
-  }
   const filteredMetrics = useMemo(() => {
 
-    let data = [...metrics]
+    const query = search.toLowerCase()
 
-    data = data.filter(metric =>
-      new Date(metric.collected_at ?? metric.timestamp)
+    const data = metrics.filter(metric =>
+      new Date(getTimestamp(metric))
         .toLocaleString()
         .toLowerCase()
-        .includes(search.toLowerCase())
+        .includes(query)
     )
 
     data.sort((a, b) => {
 
       if (sortOrder === 'newest') {
-        return new Date(b.collected_at ?? b.timestamp) - new Date(a.collected_at ?? a.timestamp)
+        return new Date(getTimestamp(b)) - new Date(getTimestamp(a))
       }
 
       if (sortOrder === 'oldest') {
-        return new Date(a.collected_at ?? a.timestamp) - new Date(b.collected_at ?? b.timestamp)
+        return new Date(getTimestamp(a)) - new Date(getTimestamp(b))
       }
 
-      if (sortOrder === 'highest') {
-        return b[selectedMetric] - a[selectedMetric]
-      }
-
-      return a[selectedMetric] - b[selectedMetric]
+      return compareValues(
+        parseFloat(a[sortMetric]),
+        parseFloat(b[sortMetric]),
+        sortOrder
+      )
 
     })
 
     return data
 
-  }, [metrics, search, sortOrder, selectedMetric])
+  }, [metrics, search, sortOrder, sortMetric])
 
   return (
 
@@ -119,8 +138,8 @@ export default function MetricsTable({
         >
           <option value="newest">Newest</option>
           <option value="oldest">Oldest</option>
-          <option value="highest">Highest Value</option>
-          <option value="lowest">Lowest Value</option>
+          <option value="highest">Highest {sortMetricName}</option>
+          <option value="lowest">Lowest {sortMetricName}</option>
         </select>
 
       </div>
@@ -137,13 +156,14 @@ export default function MetricsTable({
                 Time
               </th>
 
-              <th className="text-left py-3">
-                Value
-              </th>
-
-              <th className="text-left py-3">
-                Status
-              </th>
+              {selectedMetrics.map(metricName => (
+                <th
+                  key={metricName}
+                  className="text-left py-3"
+                >
+                  {METRICS[metricName]?.name ?? metricName}
+                </th>
+              ))}
 
             </tr>
 
@@ -151,66 +171,64 @@ export default function MetricsTable({
 
           <tbody>
 
-            {filteredMetrics.map(metric => {
+            {filteredMetrics.map(metric => (
 
-              const value =
-                parseFloat(metric[selectedMetric])
+              <tr
+                key={metric.id}
+                className="
+                  border-b
+                  border-[#2a2a2a]
+                  hover:bg-[#141414]
+                "
+              >
 
-              const status =
-                getStatus(value)
+                <td className="py-3">
 
-              return (
+                  {new Date(getTimestamp(metric)).toLocaleString()}
 
-                <tr
-                  key={metric.id}
-                  className="
-                    border-b
-                    border-[#2a2a2a]
-                    hover:bg-[#141414]
-                  "
-                >
+                </td>
 
-                  <td className="py-3">
+                {selectedMetrics.map(metricName => {
 
-                    {new Date(metric.collected_at ?? metric.timestamp)
-                      .toLocaleString()}
+                  const value = parseFloat(metric[metricName])
+                  const status = getStatus(metricName, value)
 
-                  </td>
+                  return (
 
-                  <td className="py-3">
+                    <td
+                      key={metricName}
+                      className="py-3"
+                    >
 
-                    {formatMetricValue(selectedMetric, value)}
-
-                  </td>
-
-                  <td className="py-3">
-
-                    {status ? (
-                      <span
-                        className={`
-                          px-3
-                          py-1
-                          rounded-full
-                          text-xs
-                          font-semibold
-                          ${status.className}
-                        `}
-                      >
-                        {status.label}
+                      <span>
+                        {formatMetricValue(metricName, value)}
                       </span>
-                    ) : (
-                      <span className="text-gray-500" aria-label="Status not applicable">
-                        —
-                      </span>
-                    )}
 
-                  </td>
+                      {status && (
+                        <span
+                          className={`
+                            ml-3
+                            px-3
+                            py-1
+                            rounded-full
+                            text-xs
+                            font-semibold
+                            ${status.className}
+                          `}
+                        >
+                          {status.label}
+                        </span>
+                      )}
 
-                </tr>
+                    </td>
 
-              )
+                  )
 
-            })}
+                })}
+
+              </tr>
+
+            ))}
 
           </tbody>
 
@@ -223,5 +241,3 @@ export default function MetricsTable({
   )
 
 }
-
-

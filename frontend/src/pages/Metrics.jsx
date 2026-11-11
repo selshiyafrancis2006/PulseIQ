@@ -9,6 +9,11 @@ import MetricSelector from '../components/metrics/MetricSelector'
 import StatsCards from '../components/metrics/StatsCards'
 import MetricsChart from '../components/metrics/MetricsChart'
 import MetricsTable from '../components/metrics/MetricsTable'
+import MetricsSkeleton from '../components/metrics/MetricsSkeleton'
+import MetricsEmptyState from '../components/metrics/MetricsEmptyState'
+
+// Stable reference, so "no data yet" doesn't look like a change on every render
+const NO_METRICS = []
 
 // Quote a CSV field when it contains a comma, quote or newline
 const csvField = (value) => {
@@ -285,7 +290,7 @@ export default function Metrics() {
 
       <MetricsTable
         metrics={metrics}
-        selectedMetric={selectedMetrics[0]}
+        selectedMetrics={selectedMetrics}
       />
 
     </div>
