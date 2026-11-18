@@ -67,3 +67,42 @@ export const buildMetricChartPoints = (metrics, timeRange) => {
 
   return points
 }
+export const buildHostMetricChartPoints = (metrics, timeRange) => {
+  const hostGroups = new Map()
+
+  metrics.forEach(metric => {
+    const hostId = String(metric.host_id)
+
+    if (!hostGroups.has(hostId)) {
+      hostGroups.set(hostId, [])
+    }
+
+    hostGroups.get(hostId).push(metric)
+  })
+
+  const hostPoints = new Map()
+  const timestamps = new Set()
+
+  hostGroups.forEach((hostMetrics, hostId) => {
+    const points = buildMetricChartPoints(hostMetrics, timeRange)
+
+    hostPoints.set(hostId, new Map(
+      points.map(point => [point.timestamp, point.metric])
+    ))
+
+    points.forEach(point => timestamps.add(point.timestamp))
+  })
+
+  const sortedTimestamps = [...timestamps].sort((a, b) => a - b)
+
+  return {
+    timestamps: sortedTimestamps,
+    hosts: [...hostPoints.entries()].map(([hostId, points]) => ({
+      hostId,
+      points: sortedTimestamps.map(timestamp => ({
+        timestamp,
+        metric: points.get(timestamp) ?? null
+      }))
+    }))
+  }
+}

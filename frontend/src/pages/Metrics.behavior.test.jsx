@@ -1,4 +1,4 @@
-﻿import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { apiFetch } from '../utils/apiFetch';
 import useHosts from '../hooks/useHosts';
@@ -20,30 +20,44 @@ vi.mock('../components/shared/hostSelector', () => ({
 }));
 
 vi.mock('../components/metrics/StatsCards', () => ({
-  default: ({ selectedMetric }) => (
-    <div data-testid="stats">{selectedMetric}</div>
+  default: ({ metrics, selectedMetric }) => (
+    <div
+      data-testid="stats"
+      data-host-ids={metrics.map(metric => metric.host_id ?? 'legacy').join(',')}
+    >
+      {selectedMetric}
+    </div>
   ),
 }));
 
 vi.mock('../components/metrics/MetricsChart', () => ({
-  default: ({ metrics, timeRange }) => (
-    <div data-testid="chart">
+  default: ({ metrics, timeRange, primaryHostId, comparisonHostIds }) => (
+    <div
+      data-testid="chart"
+      data-primary-host={primaryHostId ?? ''}
+      data-comparison-hosts={comparisonHostIds?.join(',') ?? ''}
+    >
       {timeRange}:{metrics.map((metric) => metric.cpu_usage).join(',')}
     </div>
   ),
 }));
 
 vi.mock('../components/metrics/MetricsTable', () => ({
-  default: ({ selectedMetrics }) => (
-    <div data-testid="table">{selectedMetrics.join(',')}</div>
+  default: ({ selectedMetrics, showHost, hosts }) => (
+    <div
+      data-testid="table"
+      data-show-host={String(showHost)}
+      data-host-names={hosts.map(host => host.name).join(',')}
+    >
+      {selectedMetrics.join(',')}
+    </div>
   ),
 }));
-
 function response(data, status = 200) {
   return {
     ok: status >= 200 && status < 300,
     status,
-    json: async () => data,
+    json: async () => status >= 200 && status < 300 ? { data } : data,
   };
 }
 
@@ -81,7 +95,7 @@ describe('Metrics page - loading data', () => {
 
     await waitFor(() =>
       expect(apiFetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/metrics?range=1m&host_id=1')
+        expect.stringMatching(/\/api\/metrics\/query\?host_ids=1&.*step=1m/)
       )
     );
   });
@@ -109,13 +123,13 @@ describe('Metrics page - loading data', () => {
       expect(screen.getByTestId('chart')).toHaveTextContent('1m:5')
     );
 
-    fireEvent.change(screen.getByRole('combobox'), {
+    fireEvent.change(screen.getByLabelText('Time Range'), {
       target: { value: '7d' },
     });
 
     await waitFor(() =>
       expect(apiFetch).toHaveBeenLastCalledWith(
-        expect.stringContaining('/api/metrics?range=7d&host_id=1')
+        expect.stringMatching(/\/api\/metrics\/query\?host_ids=1&.*step=5m/)
       )
     );
     await waitFor(() =>
@@ -124,9 +138,13 @@ describe('Metrics page - loading data', () => {
   });
 
   test('gives the stats and the table the selected metric', async () => {
+    apiFetch.mockResolvedValue(
+      response([{ id: 1, timestamp: TIMESTAMP, cpu_usage: 5 }])
+    );
+
     renderPage();
 
-    expect(screen.getByTestId('stats')).toHaveTextContent('cpu_usage');
+    expect(await screen.findByTestId('stats')).toHaveTextContent('cpu_usage');
     expect(screen.getByTestId('table')).toHaveTextContent('cpu_usage');
   });
 
@@ -137,7 +155,7 @@ describe('Metrics page - loading data', () => {
     });
 
     apiFetch.mockImplementation((url) =>
-      url.includes('range=1m')
+      url.includes('step=1m')
         ? slow
         : Promise.resolve(
             response([{ id: 2, timestamp: TIMESTAMP, cpu_usage: 222 }])
@@ -146,7 +164,7 @@ describe('Metrics page - loading data', () => {
 
     renderPage();
 
-    fireEvent.change(screen.getByRole('combobox'), {
+    fireEvent.change(screen.getByLabelText('Time Range'), {
       target: { value: '7d' },
     });
 
@@ -227,6 +245,101 @@ describe('Metrics page - errors', () => {
   });
 });
 
+describe('Metrics page - host comparison', () => {
+  test('queries comparison hosts while keeping stats scoped to the primary host', async () => {
+    useHosts.mockReturnValue({
+      hosts: [
+        { id: 1, name: 'prod-server' },
+        { id: 2, name: 'staging-server' },
+      ],
+      selectedHostId: 1,
+      setSelectedHostId: vi.fn(),
+    });
+
+    apiFetch.mockResolvedValue(
+      response([
+        {
+          host_id: 1,
+          timestamp: TIMESTAMP,
+          cpu_usage: 40,
+        },
+        {
+          host_id: 2,
+          timestamp: TIMESTAMP,
+          cpu_usage: 60,
+        },
+      ])
+    );
+
+    renderPage();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('chart')).toHaveTextContent('1m:40')
+    );
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'staging-server' })
+    );
+
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenLastCalledWith(
+        expect.stringMatching(/host_ids=1%2C2/)
+      )
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chart')).toHaveAttribute(
+        'data-primary-host',
+        '1'
+      );
+      expect(screen.getByTestId('chart')).toHaveAttribute(
+        'data-comparison-hosts',
+        '2'
+      );
+      expect(screen.getByTestId('chart')).toHaveTextContent('1m:40,60');
+
+      expect(screen.getByTestId('stats')).toHaveAttribute(
+        'data-host-ids',
+        '1'
+      );
+
+      expect(screen.getByTestId('table')).toHaveAttribute(
+        'data-show-host',
+        'true'
+      );
+      expect(screen.getByTestId('table')).toHaveAttribute(
+        'data-host-names',
+        'prod-server,staging-server'
+      );
+    });
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'staging-server' })
+    );
+
+    await waitFor(() =>
+      expect(apiFetch).toHaveBeenLastCalledWith(
+        expect.stringMatching(/host_ids=1(?:&|$)/)
+      )
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('chart')).toHaveAttribute(
+        'data-comparison-hosts',
+        ''
+      );
+      expect(screen.getByTestId('chart')).toHaveTextContent('1m:40');
+      expect(screen.getByTestId('stats')).toHaveAttribute(
+        'data-host-ids',
+        '1'
+      );
+      expect(screen.getByTestId('table')).toHaveAttribute(
+        'data-show-host',
+        'false'
+      );
+    });
+  });
+});
 describe('Metrics page - CSV export', () => {
   test('the export button is disabled while there is no data', async () => {
     renderPage();
@@ -234,7 +347,7 @@ describe('Metrics page - CSV export', () => {
     expect(screen.getByRole('button', { name: 'Export CSV' })).toBeDisabled();
   });
 
-  test('exports min and max columns for rollup rows and names the file after the host and range', async () => {
+  test('exports query values without unavailable rollup fields and includes query settings in the filename', async () => {
     const clickSpy = vi
       .spyOn(HTMLAnchorElement.prototype, 'click')
       .mockImplementation(() => {});
@@ -244,17 +357,15 @@ describe('Metrics page - CSV export', () => {
         {
           id: 1,
           timestamp: TIMESTAMP,
+          host_id: 1,
           cpu_usage: 40,
-          cpu_usage_min: 10,
-          cpu_usage_max: 90,
-          sample_count: 12,
         },
       ])
     );
 
     renderPage();
 
-    fireEvent.change(screen.getByRole('combobox'), {
+    fireEvent.change(screen.getByLabelText('Time Range'), {
       target: { value: '7d' },
     });
 
@@ -266,12 +377,69 @@ describe('Metrics page - CSV export', () => {
     const blob = window.URL.createObjectURL.mock.calls[0][0];
 
     expect(await blob.text()).toBe(
-      ['timestamp,host_id,host_name,cpu_usage (%),cpu_usage_min (%),cpu_usage_max (%),sample_count', `${TIMESTAMP},1,prod-server,40,10,90,12`].join('\n')
+      ['timestamp,host_id,host_name,cpu_usage (%)', `${TIMESTAMP},1,prod-server,40`].join('\n')
     );
-    expect(clickSpy.mock.contexts[0].download).toBe('prod-server_7d_metrics.csv');
+    expect(clickSpy.mock.contexts[0].download).toBe('prod-server_7d_5m_avg_metrics.csv');
     expect(window.URL.revokeObjectURL).toHaveBeenCalledWith('blob:test');
   });
 
+  test('exports comparison rows with the correct host names and filename', async () => {
+    const clickSpy = vi
+      .spyOn(HTMLAnchorElement.prototype, 'click')
+      .mockImplementation(() => {});
+
+    useHosts.mockReturnValue({
+      hosts: [
+        { id: 1, name: 'prod-server' },
+        { id: 2, name: 'staging-server' },
+      ],
+      selectedHostId: 1,
+      setSelectedHostId: vi.fn(),
+    });
+
+    apiFetch.mockResolvedValue(
+      response([
+        {
+          host_id: 1,
+          collected_at: TIMESTAMP,
+          cpu_usage: 40,
+        },
+        {
+          host_id: 2,
+          collected_at: TIMESTAMP,
+          cpu_usage: 60,
+        },
+      ])
+    );
+
+    renderPage();
+
+    fireEvent.click(
+      screen.getByRole('checkbox', { name: 'staging-server' })
+    );
+
+    const button = screen.getByRole('button', { name: 'Export CSV' });
+
+    await waitFor(() => expect(button).toBeEnabled());
+
+    fireEvent.click(button);
+
+    const blob = window.URL.createObjectURL.mock.calls[0][0];
+
+    expect(await blob.text()).toBe(
+      [
+        'timestamp,host_id,host_name,cpu_usage (%)',
+        `${TIMESTAMP},1,prod-server,40`,
+        `${TIMESTAMP},2,staging-server,60`,
+      ].join('\n')
+    );
+
+    expect(clickSpy.mock.contexts[0].download).toBe(
+      'prod-server_comparison_1m_1m_avg_metrics.csv'
+    );
+
+    expect(window.URL.revokeObjectURL).toHaveBeenCalledWith('blob:test');
+  });
   test('raw rows export only the value, using the agent collection time when there is one', async () => {
     vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
 
@@ -298,4 +466,13 @@ describe('Metrics page - CSV export', () => {
     expect(await blob.text()).toBe(['timestamp,host_id,host_name,cpu_usage (%)', `${TIMESTAMP},1,prod-server,5`].join('\n'));
   });
 });
+
+
+
+
+
+
+
+
+
 

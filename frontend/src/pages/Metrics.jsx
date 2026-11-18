@@ -1,9 +1,16 @@
-﻿import { useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { apiFetch } from '../utils/apiFetch'
 import { API_BASE_URL } from '../config/api'
+import {
+  getAlignedQueryRange,
+  getAlignedCustomQueryRange,
+  getCompatibleQuerySteps,
+  isP95Available
+} from '../utils/metricsQuery'
 import { formatMetricColumnHeader } from '../utils/metricFormatting'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
+import HostComparisonSelector from '../components/metrics/HostComparisonSelector'
 
 import MetricSelector from '../components/metrics/MetricSelector'
 import StatsCards from '../components/metrics/StatsCards'
@@ -14,6 +21,7 @@ import MetricsEmptyState from '../components/metrics/MetricsEmptyState'
 
 // Stable reference, so "no data yet" doesn't look like a change on every render
 const NO_METRICS = []
+const METRICS_PAGE_NOW = Date.now()
 
 // Quote a CSV field when it contains a comma, quote or newline
 const csvField = (value) => {
@@ -34,38 +42,106 @@ const safeFilePart = (text) =>
 export default function Metrics() {
 
   const { hosts, selectedHostId, setSelectedHostId } = useHosts()
+  const [selectedComparisonHostIds, setSelectedComparisonHostIds] = useState([])
 
-  const [metrics, setMetrics] = useState([])
-  const [error, setError] = useState(null)
+  const queryHostIds = selectedHostId
+    ? [
+        selectedHostId,
+        ...selectedComparisonHostIds.filter(id =>
+          String(id) !== String(selectedHostId) &&
+          hosts.some(host => String(host.id) === String(id))
+        )
+      ]
+    : []
+
+  const hostIdsKey = queryHostIds.map(String).join(',')
+
+  const [metricsResult, setMetricsResult] = useState({ hostId: null, hostIdsKey: null, range: null, step: null, aggregation: null, data: [] })
+  const [errorResult, setErrorResult] = useState({ hostId: null, hostIdsKey: null, range: null, step: null, aggregation: null, message: null })
   const [selectedMetrics, setSelectedMetrics] = useState([
     'cpu_usage'
   ])
   const [timeRange, setTimeRange] = useState('1m')
+  const [customFrom, setCustomFrom] = useState('')
+  const [customTo, setCustomTo] = useState('')
+  const [step, setStep] = useState('1m')
+  const [aggregation, setAggregation] = useState('avg')
+  const customFromTimestamp = customFrom ? new Date(customFrom).getTime() : NaN
+  const customToTimestamp = customTo ? new Date(customTo).getTime() : NaN
+
+  let customRangeError = null
+  let queryRange = null
+
+  if (timeRange === 'custom') {
+    if (!customFrom || !customTo) {
+      customRangeError = 'Select both start and end date/time.'
+    } else if (!Number.isFinite(customFromTimestamp) || !Number.isFinite(customToTimestamp)) {
+      customRangeError = 'Enter valid start and end date/time.'
+    } else if (customFromTimestamp >= customToTimestamp) {
+      customRangeError = 'Start must be before end.'
+    } else if (customToTimestamp > METRICS_PAGE_NOW) {
+      customRangeError = 'End time cannot be in the future.'
+    } else if (customFromTimestamp < METRICS_PAGE_NOW - 90 * 24 * 60 * 60 * 1000) {
+      customRangeError = 'Start cannot be older than 90 days.'
+    } else {
+      queryRange = getAlignedCustomQueryRange(customFromTimestamp, customToTimestamp)
+      if (!queryRange) {
+        customRangeError = 'Selected range is too short for the available resolution.'
+      }
+    }
+  } else {
+    queryRange = getAlignedQueryRange(timeRange)
+  }
+
+  const compatibleSteps = queryRange
+    ? getCompatibleQuerySteps(queryRange.resolutionMs)
+    : []
+  const effectiveStep = compatibleSteps.includes(step)
+    ? step
+    : compatibleSteps[0] ?? '1m'
+  const p95Available = queryRange
+    ? isP95Available(queryRange.from, queryRange.to)
+    : false
+  const effectiveAggregation =
+    aggregation === 'p95' && !p95Available ? 'avg' : aggregation
+
+
+  const queryRangeKey = timeRange === 'custom'
+    ? queryRange
+      ? `custom:${queryRange.from}:${queryRange.to}`
+      : `custom:invalid:${customFrom}:${customTo}`
+    : timeRange
+  const queryRangeFrom = queryRange?.from ?? null
+  const queryRangeTo = queryRange?.to ?? null
 
   useEffect(() => {
-
-    if (!selectedHostId) {
+    if (!hostIdsKey || queryRangeFrom === null || queryRangeTo === null) {
       return
     }
 
-    // Set when this effect is replaced (host/range changed or unmounted),
-    // so a slow response for the old selection can't overwrite new data.
     let ignore = false
 
-    // Don't show the previous host/range's data while the new one loads
-    setMetrics([])
-    setError(null)
-
     const fetchMetrics = async () => {
-
       try {
+        const currentQueryRange = { from: queryRangeFrom, to: queryRangeTo }
+
+        if (!currentQueryRange) {
+          return
+        }
+
+        const params = new URLSearchParams({
+          host_ids: hostIdsKey,
+          from: new Date(currentQueryRange.from).toISOString(),
+          to: new Date(currentQueryRange.to).toISOString(),
+          step: effectiveStep,
+          agg: effectiveAggregation
+        })
 
         const res = await apiFetch(
-          `${API_BASE_URL}/api/metrics?range=${timeRange}&host_id=${selectedHostId}`
+          `${API_BASE_URL}/api/metrics/query?${params.toString()}`
         )
 
         if (!res.ok) {
-
           console.error(
             'Failed to fetch metrics',
             new Error('Metrics request failed: ' + res.status)
@@ -79,140 +155,188 @@ export default function Metrics() {
               message = body.error
             }
           } catch {
-            // body was not JSON - keep the generic message
+            // Keep the generic message when the body is not JSON.
           }
 
-          if (!ignore) setError(message)
+          if (!ignore) {
+            setErrorResult({
+              hostId: selectedHostId,
+              hostIdsKey,
+              range: queryRangeKey,
+              step: effectiveStep,
+              aggregation: effectiveAggregation,
+              message
+            })
+          }
 
           return
-
         }
 
-        const data = await res.json()
+        const result = await res.json()
 
-        if (!Array.isArray(data)) {
-          if (!ignore) setError('Unexpected response from the server')
+        if (!result || !Array.isArray(result.data)) {
+          if (!ignore) {
+            setErrorResult({
+              hostId: selectedHostId,
+              hostIdsKey,
+              range: queryRangeKey,
+              step: effectiveStep,
+              aggregation: effectiveAggregation,
+              message: 'Unexpected response from the server'
+            })
+          }
+
           return
         }
 
         if (!ignore) {
-          setMetrics(data)
-          setError(null)
-        }
+          setMetricsResult({
+            hostId: selectedHostId,
+            hostIdsKey,
+            range: queryRangeKey,
+            step: effectiveStep,
+            aggregation: effectiveAggregation,
+            data: result.data
+          })
 
+          setErrorResult({
+            hostId: selectedHostId,
+            hostIdsKey,
+            range: queryRangeKey,
+            step: effectiveStep,
+            aggregation: effectiveAggregation,
+            message: null
+          })
+        }
       } catch (err) {
-
-        console.error(
-          'Failed to fetch metrics',
-          err
-        )
+        console.error('Failed to fetch metrics', err)
 
         if (!ignore) {
-          setError('Could not reach the server')
+          setErrorResult({
+            hostId: selectedHostId,
+            hostIdsKey,
+            range: queryRangeKey,
+            step: effectiveStep,
+            aggregation: effectiveAggregation,
+            message: 'Could not reach the server'
+          })
         }
-
       }
-
     }
 
     fetchMetrics()
 
-    const interval = setInterval(
-      fetchMetrics,
-      5000
-    )
+    const interval = setInterval(fetchMetrics, 5000)
 
     return () => {
       ignore = true
       clearInterval(interval)
     }
+  }, [
+    queryRangeKey,
+    queryRangeFrom,
+    queryRangeTo,
+    selectedHostId,
+    effectiveStep,
+    effectiveAggregation,
+    hostIdsKey
+  ])
 
-  }, [timeRange, selectedHostId])
+  const metrics = metricsResult.hostId === selectedHostId && metricsResult.hostIdsKey === hostIdsKey && metricsResult.range === queryRangeKey && metricsResult.step === effectiveStep && metricsResult.aggregation === effectiveAggregation
+    ? metricsResult.data
+    : NO_METRICS
+
+  const primaryMetrics = metrics.filter(row =>
+    row.host_id == null
+      ? queryHostIds.length === 1
+      : String(row.host_id) === String(selectedHostId)
+  )
+  const error = errorResult.hostId === selectedHostId && errorResult.hostIdsKey === hostIdsKey && errorResult.range === queryRangeKey && errorResult.step === effectiveStep && errorResult.aggregation === effectiveAggregation
+    ? errorResult.message
+    : null
+
+  const hasCurrentMetricsResult =
+    metricsResult.hostId === selectedHostId && metricsResult.hostIdsKey === hostIdsKey &&
+    metricsResult.range === queryRangeKey &&
+    metricsResult.step === effectiveStep &&
+    metricsResult.aggregation === effectiveAggregation
+
+  const isLoading =
+
+    Boolean(selectedHostId) &&
+
+    !hasCurrentMetricsResult &&
+
+    !error
+
+
+  const isEmpty =
+
+    hasCurrentMetricsResult &&
+
+    !error &&
+
+    metrics.length === 0
 
   const exportCSV = () => {
-
     if (!metrics.length) return
 
     const host = hosts.find(h => h.id === selectedHostId)
 
-    // Include host identity and rollup sample counts in the export.
     const columns = [
       { key: 'timestamp', header: 'timestamp' },
       { key: 'host_id', header: 'host_id' },
-      { key: 'host_name', header: 'host_name' }
-    ]
-
-    selectedMetrics.forEach(name => {
-      columns.push({
+      { key: 'host_name', header: 'host_name' },
+      ...selectedMetrics.map(name => ({
         key: name,
         header: formatMetricColumnHeader(name)
-      })
-
-      if (metrics.some(row => row[`${name}_max`] !== undefined)) {
-        columns.push(
-          {
-            key: `${name}_min`,
-            header: formatMetricColumnHeader(`${name}_min`)
-          },
-          {
-            key: `${name}_max`,
-            header: formatMetricColumnHeader(`${name}_max`)
-          }
-        )
-      }
-    })
-
-    if (metrics.some(row => row.sample_count !== undefined)) {
-      columns.push({ key: 'sample_count', header: 'sample_count' })
-    }
+      }))
+    ]
 
     const rows = metrics.map(row =>
       columns.map(({ key }) => {
         if (key === 'timestamp') {
           return row.collected_at ?? row.timestamp
         }
-        if (key === 'host_id') return selectedHostId
-        if (key === 'host_name') return host?.name ?? ''
+        if (key === 'host_id') return row.host_id ?? selectedHostId
+        if (key === 'host_name') {
+          const rowHost = hosts.find(
+            h => String(h.id) === String(row.host_id ?? selectedHostId)
+          )
+          return rowHost?.name ?? ''
+        }
         return row[key]
       })
     )
+
     const csv = [columns.map(column => column.header), ...rows]
       .map(row => row.map(csvField).join(','))
       .join('\n')
 
-    const blob = new Blob(
-      [csv],
-      {
-        type: 'text/csv'
-      }
-    )
-
-    const url =
-      window.URL.createObjectURL(blob)
-
-    const link =
-      document.createElement('a')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = window.URL.createObjectURL(blob)
+    const link = document.createElement('a')
 
     link.href = url
+    const baseName = safeFilePart(host?.name ?? ('host_' + selectedHostId))
+    const exportName = queryHostIds.length > 1
+      ? baseName + '_comparison'
+      : baseName
 
-    link.download =
-      `${safeFilePart(host?.name ?? `host_${selectedHostId}`)}_${timeRange}_metrics.csv`
-
+    link.download = exportName + '_' + timeRange + '_' + effectiveStep + '_' + effectiveAggregation + '_metrics.csv'
     link.click()
 
     window.URL.revokeObjectURL(url)
-
   }
-
   return (
 
     <div>
 
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex flex-col gap-4 mb-8 sm:flex-row sm:justify-between sm:items-center">
 
         <div>
 
-          <h1 className="text-3xl font-bold text-white">
+          <h1 className="text-2xl sm:text-3xl font-bold text-white">
             Metrics Explorer
           </h1>
 
@@ -222,7 +346,7 @@ export default function Metrics() {
 
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
 
           <HostSelector
             hosts={hosts}
@@ -230,11 +354,18 @@ export default function Metrics() {
             onChange={setSelectedHostId}
           />
 
+          <HostComparisonSelector
+            hosts={hosts}
+            primaryHostId={selectedHostId}
+            selectedHostIds={selectedComparisonHostIds}
+            onChange={setSelectedComparisonHostIds}
+          />
+
           <button
             onClick={exportCSV}
             disabled={!metrics.length}
             className="
-              bg-emerald-600
+              w-full sm:w-auto bg-emerald-600
               hover:bg-emerald-700
               disabled:opacity-50
               disabled:cursor-not-allowed
@@ -256,6 +387,17 @@ export default function Metrics() {
         setSelectedMetrics={setSelectedMetrics}
         timeRange={timeRange}
         setTimeRange={setTimeRange}
+        step={effectiveStep}
+        setStep={setStep}
+        aggregation={effectiveAggregation}
+        setAggregation={setAggregation}
+        compatibleSteps={compatibleSteps}
+        p95Available={p95Available}
+        customFrom={customFrom}
+        setCustomFrom={setCustomFrom}
+        customTo={customTo}
+        setCustomTo={setCustomTo}
+        customRangeError={customRangeError}
       />
 
       {error && (
@@ -277,24 +419,57 @@ export default function Metrics() {
         </div>
       )}
 
-      <StatsCards
-        metrics={metrics}
-        selectedMetric={selectedMetrics[0]}
-      />
+      {isLoading ? (
+        <MetricsSkeleton />
+      ) : isEmpty ? (
+        <MetricsEmptyState
+          hostName={hosts.find(host => String(host.id) === String(selectedHostId))?.name}
+        />
+      ) : (
+        <>
+          <StatsCards
+            metrics={primaryMetrics}
+            selectedMetric={selectedMetrics[0]}
+          />
 
-      <MetricsChart
-        metrics={metrics}
-        selectedMetrics={selectedMetrics}
-        timeRange={timeRange}
-      />
+          <MetricsChart
+            metrics={metrics}
+            selectedMetrics={selectedMetrics}
+            timeRange={timeRange}
+            primaryHostId={selectedHostId}
+            hosts={hosts}
+            comparisonHostIds={queryHostIds.slice(1)}
+          />
 
-      <MetricsTable
-        metrics={metrics}
-        selectedMetrics={selectedMetrics}
-      />
+          <MetricsTable
+            metrics={metrics}
+            selectedMetrics={selectedMetrics}
+            hosts={hosts}
+            showHost={queryHostIds.length > 1}
+          />
+        </>
+      )}
 
     </div>
 
   )
 
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

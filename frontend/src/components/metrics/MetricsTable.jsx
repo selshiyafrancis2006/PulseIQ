@@ -1,5 +1,5 @@
 ﻿import { useMemo, useState } from 'react'
-import { formatMetricValue } from '../../utils/metricFormatting'
+import { formatMetricValue, getMetricUnit } from '../../utils/metricFormatting'
 import { METRICS } from '../../config/metricNames'
 
 const getTimestamp = (metric) => metric.collected_at ?? metric.timestamp
@@ -45,7 +45,9 @@ const compareValues = (a, b, direction) => {
 
 export default function MetricsTable({
   metrics,
-  selectedMetrics
+  selectedMetrics,
+  hosts = [],
+  showHost = false
 }) {
 
   const [search, setSearch] = useState('')
@@ -96,7 +98,7 @@ export default function MetricsTable({
         border
         border-[#2a2a2a]
         rounded-xl
-        p-6
+        p-4 sm:p-6
       "
     >
 
@@ -104,6 +106,7 @@ export default function MetricsTable({
 
         <input
           type="text"
+          aria-label="Search metrics by timestamp"
           placeholder="Search timestamp..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
@@ -117,11 +120,12 @@ export default function MetricsTable({
             text-white
             outline-none
             flex-1
-            focus:border-emerald-400
+            focus:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#1a1a1a]
           "
         />
 
         <select
+          aria-label="Sort metrics"
           value={sortOrder}
           onChange={(e) => setSortOrder(e.target.value)}
           className="
@@ -133,7 +137,7 @@ export default function MetricsTable({
             py-2
             text-white
             outline-none
-            focus:border-emerald-400
+            focus:border-emerald-400 focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[#1a1a1a]
           "
         >
           <option value="newest">Newest</option>
@@ -146,22 +150,29 @@ export default function MetricsTable({
 
       <div className="overflow-auto max-h-[500px]">
 
-        <table className="w-full text-sm">
+        <table className="min-w-[640px] w-full text-sm">
 
           <thead className="sticky top-0 bg-[#1a1a1a]">
 
             <tr className="border-b border-[#2a2a2a]">
 
-              <th className="text-left py-3">
+              <th className="text-left py-3 whitespace-nowrap">
                 Time
               </th>
+
+              {showHost && (
+                <th className="text-left py-3 whitespace-nowrap">Host</th>
+              )}
+
+              
 
               {selectedMetrics.map(metricName => (
                 <th
                   key={metricName}
-                  className="text-left py-3"
+                  className="text-left py-3 whitespace-nowrap"
                 >
                   {METRICS[metricName]?.name ?? metricName}
+                  {getMetricUnit(metricName) && ` (${getMetricUnit(metricName)})`}
                 </th>
               ))}
 
@@ -182,11 +193,19 @@ export default function MetricsTable({
                 "
               >
 
-                <td className="py-3">
+                <td className="py-3 whitespace-nowrap">
 
                   {new Date(getTimestamp(metric)).toLocaleString()}
 
                 </td>
+
+                {showHost && (
+                  <td className="py-3 whitespace-nowrap text-gray-300">
+                    {hosts.find(host => String(host.id) === String(metric.host_id))?.name ?? ('Host ' + (metric.host_id ?? 'Unknown'))}
+                  </td>
+                )}
+
+                
 
                 {selectedMetrics.map(metricName => {
 
@@ -197,7 +216,7 @@ export default function MetricsTable({
 
                     <td
                       key={metricName}
-                      className="py-3"
+                      className="py-3 whitespace-nowrap"
                     >
 
                       <span>
@@ -230,6 +249,19 @@ export default function MetricsTable({
 
             ))}
 
+            {filteredMetrics.length === 0 && (
+              <tr>
+                <td
+                  colSpan={selectedMetrics.length + (showHost ? 2 : 1)}
+                  className="py-8 text-center text-gray-400"
+                >
+                  {search
+                    ? 'No metrics match your search.'
+                    : 'No metric data available.'}
+                </td>
+              </tr>
+            )}
+
           </tbody>
 
         </table>
@@ -241,3 +273,7 @@ export default function MetricsTable({
   )
 
 }
+
+
+
+

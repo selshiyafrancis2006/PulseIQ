@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import { apiFetch } from '../utils/apiFetch'
 import Metrics from './Metrics'
 
@@ -68,3 +68,33 @@ describe('Metrics page HTTP error handling', () => {
     expect(screen.getByTestId('metrics-count')).toHaveTextContent('0')
   })
 })
+
+describe('Metrics page loading and empty states', () => {
+  test('shows skeleton while the initial metrics request is pending', () => {
+    apiFetch.mockReturnValue(new Promise(() => {}))
+
+    render(<Metrics />)
+
+    expect(
+      screen.getByRole('status', { name: 'Loading metrics' })
+    ).toBeInTheDocument()
+
+    expect(screen.queryByTestId('metrics-count')).not.toBeInTheDocument()
+  })
+
+  test('shows empty state when the API successfully returns no metrics', async () => {
+    apiFetch.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [] }),
+    })
+
+    render(<Metrics />)
+
+    expect(
+      await screen.findByText('No data for this range')
+    ).toBeInTheDocument()
+
+    expect(screen.queryByTestId('metrics-count')).not.toBeInTheDocument()
+  })
+})
+

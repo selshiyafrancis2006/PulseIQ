@@ -91,3 +91,51 @@ describe('metricChartData', () => {
     expect(points.every((point) => point.metric !== null)).toBe(true)
   })
 })
+describe('buildHostMetricChartPoints', () => {
+  test('keeps missing intervals independent for each host', async () => {
+    const { buildHostMetricChartPoints } = await import('./metricChartData')
+    const start = Date.parse('2026-11-02T10:00:00.000Z')
+
+    const row = (host_id, seconds, cpu_usage) => ({
+      host_id,
+      timestamp: new Date(start + seconds * 1000).toISOString(),
+      cpu_usage
+    })
+
+    const result = buildHostMetricChartPoints([
+      row(1, 0, 10),
+      row(1, 5, 20),
+      row(1, 15, 40),
+      row(2, 0, 100),
+      row(2, 10, 110),
+      row(2, 20, 120)
+    ], '1m')
+
+    expect(result.timestamps).toEqual([
+      start,
+      start + 5000,
+      start + 10000,
+      start + 15000,
+      start + 20000
+    ])
+
+    expect(result.hosts[0].hostId).toBe('1')
+    expect(result.hosts[0].points.map(point =>
+      point.metric?.cpu_usage ?? null
+    )).toEqual([10, 20, null, 40, null])
+
+    expect(result.hosts[1].hostId).toBe('2')
+    expect(result.hosts[1].points.map(point =>
+      point.metric?.cpu_usage ?? null
+    )).toEqual([100, null, 110, null, 120])
+  })
+
+  test('returns an empty shared timeline when there are no rows', async () => {
+    const { buildHostMetricChartPoints } = await import('./metricChartData')
+
+    expect(buildHostMetricChartPoints([], '1m')).toEqual({
+      timestamps: [],
+      hosts: []
+    })
+  })
+})

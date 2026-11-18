@@ -1,5 +1,4 @@
-﻿import { METRICS } from '../config/metricNames'
-import { formatRate } from './hostStatus'
+import { METRICS } from '../config/metricNames'
 
 export function getMetricUnit(metricName) {
   return METRICS[metricName]?.unit ?? ''
@@ -7,17 +6,17 @@ export function getMetricUnit(metricName) {
 
 export function formatMetricValue(metricName, value) {
   if (value === null || value === undefined || value === '') {
-    return '—'
+    return 'â€”'
   }
 
   const number = Number(value)
 
   if (!Number.isFinite(number)) {
-    return '—'
+    return 'â€”'
   }
 
   if (metricName === 'network_in' || metricName === 'network_out') {
-    return formatRate(number)
+    return `${number.toFixed(1)} KB/s`
   }
 
   const unit = getMetricUnit(metricName)

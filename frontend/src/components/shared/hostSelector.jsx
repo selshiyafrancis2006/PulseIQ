@@ -7,7 +7,7 @@ function HostSelector({ hosts, selectedHostId, onChange }) {
     <select
       value={selectedHostId ?? ""}
       onChange={(e) => onChange(Number(e.target.value))}
-      className="bg-gray-800 text-white border border-gray-700 rounded-md px-3 py-1.5 text-sm"
+      className="w-full sm:w-auto max-w-full bg-gray-800 text-white border border-gray-700 rounded-md px-3 py-1.5 text-sm"
     >
       {hosts.map((host) => (
         <option key={host.id} value={host.id}>

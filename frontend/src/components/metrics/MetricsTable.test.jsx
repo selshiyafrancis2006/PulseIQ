@@ -1,4 +1,4 @@
-﻿import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import { fireEvent, render, screen, within } from '@testing-library/react'
 import MetricsTable from './MetricsTable'
 
@@ -95,7 +95,7 @@ describe('MetricsTable metric status', () => {
       expect(screen.queryByText('Critical')).not.toBeInTheDocument()
       expect(screen.queryByText('Warning')).not.toBeInTheDocument()
       expect(screen.queryByText('Normal')).not.toBeInTheDocument()
-      expect(screen.getByText('1.2 MB/s')).toBeInTheDocument()
+      expect(screen.getByText('1200.0 KB/s')).toBeInTheDocument()
     }
   )
 })
@@ -118,9 +118,9 @@ describe('MetricsTable with several selected metrics', () => {
 
     expect(headers).toEqual([
       'Time',
-      'Memory Usage',
-      'CPU Usage',
-      'Incoming Network'
+      'Memory Usage (%)',
+      'CPU Usage (%)',
+      'Incoming Network (KB/s)'
     ])
   })
 
@@ -181,3 +181,41 @@ describe('MetricsTable with several selected metrics', () => {
     expect(firstColumn()[2]).toBe('—')
   })
 })
+
+describe('MetricsTable accessibility and empty states', () => {
+  test('provides accessible names for search and sorting controls', () => {
+    renderTable([
+      { id: 1, timestamp: '2026-11-04T10:00:00.000Z', cpu_usage: 50 }
+    ])
+
+    expect(
+      screen.getByRole('textbox', { name: 'Search metrics by timestamp' })
+    ).toBeInTheDocument()
+
+    expect(
+      screen.getByRole('combobox', { name: 'Sort metrics' })
+    ).toBeInTheDocument()
+  })
+
+  test('shows an empty state when there are no metrics', () => {
+    renderTable([])
+
+    expect(screen.getByText('No metric data available.')).toBeInTheDocument()
+  })
+
+  test('shows a search-specific empty state when no rows match', () => {
+    renderTable([
+      { id: 1, timestamp: '2026-11-04T10:00:00.000Z', cpu_usage: 50 }
+    ])
+
+    fireEvent.change(
+      screen.getByRole('textbox', { name: 'Search metrics by timestamp' }),
+      { target: { value: 'no matching timestamp' } }
+    )
+
+    expect(
+      screen.getByText('No metrics match your search.')
+    ).toBeInTheDocument()
+  })
+})
+

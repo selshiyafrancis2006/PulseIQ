@@ -1,4 +1,4 @@
-﻿import { Line } from 'react-chartjs-2'
+import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -11,7 +11,7 @@ import {
 } from 'chart.js'
 import {
   buildMetricChartPoints,
-  getMetricTimestamp
+  buildHostMetricChartPoints
 } from '../../utils/metricChartData'
 import { formatMetricValue } from '../../utils/metricFormatting'
 
@@ -57,26 +57,41 @@ const toNumber = (value) => {
 export default function MetricsChart({
   metrics,
   selectedMetrics,
-  timeRange
+  timeRange,
+  primaryHostId = null,
+  hosts = [],
+  comparisonHostIds = []
 }) {
-
-  const now = Date.now()
 
   if (!metrics.length) return null
 
   const range = RANGES[timeRange]
+  const comparisonMode =
+    primaryHostId !== null &&
+    comparisonHostIds.length > 0
 
-  // Unknown range: show everything the API returned rather than nothing
-  const filteredMetrics = range
-    ? metrics.filter(metric =>
-        getMetricTimestamp(metric) >=
-          now - range.minutes * 60 * 1000
-      )
-    : metrics
+  const selectedHosts = comparisonMode
+    ? [
+        ...new Map(
+          [primaryHostId, ...comparisonHostIds]
+            .map(id => String(id))
+            .map(id => [id, hosts.find(host => String(host.id) === id)])
+            .filter(([, host]) => Boolean(host))
+        ).values()
+      ]
+    : []
 
-  // Points include empty placeholders where samples are missing, so the
-  // line breaks across an outage instead of joining over it
-  const chartPoints = buildMetricChartPoints(filteredMetrics, timeRange)
+  // Preserve the original single-host chart path.
+  const hostChart = comparisonMode
+    ? buildHostMetricChartPoints(metrics, timeRange)
+    : null
+
+  const chartPoints = comparisonMode
+    ? hostChart.timestamps.map(timestamp => ({
+        timestamp,
+        metric: null
+      }))
+    : buildMetricChartPoints(metrics, timeRange)
 
   // Day-or-longer ranges need the date too, or labels repeat ambiguously
   const formatLabel = (timestamp) => {
@@ -96,10 +111,11 @@ export default function MetricsChart({
     formatLabel(point.timestamp)
   )
 
-  // The min-max band is drawn for one metric at a time, and only when the
-  // rows carry min/max (rollup ranges: 6h and longer).
+  // Min-max shading remains available in single-host mode.
   const bandMetric =
-    selectedMetrics.length === 1 ? selectedMetrics[0] : null
+    !comparisonMode && selectedMetrics.length === 1
+      ? selectedMetrics[0]
+      : null
 
   const showBand =
     bandMetric !== null &&
@@ -108,86 +124,162 @@ export default function MetricsChart({
       toNumber(point.metric[`${bandMetric}_max`]) !== null
     )
 
-  const datasets = selectedMetrics.map(metric => {
+  const datasets = comparisonMode
+    ? (() => {
+        const hostSeriesById = new Map(
+          hostChart.hosts.map(host => [host.hostId, host])
+        )
 
-    const name = metric
-      .replace('_', ' ')
-      .toUpperCase()
+        const hostColors = [
+          '#10b981',
+          '#38bdf8',
+          '#f59e0b',
+          '#a78bfa',
+          '#fb7185',
+          '#f97316',
+          '#a3e635',
+          '#e879f9'
+        ]
 
-    return {
+        const metricDashPatterns = [
+          [],
+          [6, 3],
+          [2, 3],
+          [8, 3, 2, 3],
+          [10, 4]
+        ]
 
-      label: showBand ? `${name} (AVG)` : name,
-      metricKey: metric,
-      yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
+        return selectedHosts.flatMap((host, hostIndex) => {
+          const hostId = String(host.id)
+          const hostSeries = hostSeriesById.get(hostId)
 
-      data: chartPoints.map(point =>
-        point.metric ? toNumber(point.metric[metric]) : null
-      ),
+          if (!hostSeries) return []
 
-      borderColor: metricColors[metric],
+          return selectedMetrics.map((metric, metricIndex) => {
+            const name = metric
+              .replace('_', ' ')
+              .toUpperCase()
 
-      backgroundColor: metricColors[metric] + '20',
+            const color = hostColors[hostIndex % hostColors.length]
 
-      borderWidth: 2,
+            return {
+              label: `${host.name} · ${name}`,
+              metricKey: metric,
+              hostId,
+              yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
+              data: hostSeries.points.map(point =>
+                point.metric ? toNumber(point.metric[metric]) : null
+              ),
+              borderColor: color,
+              backgroundColor: color + '20',
+              borderWidth: 2,
+              borderDash: metricDashPatterns[
+                metricIndex % metricDashPatterns.length
+              ],
+              fill: false,
+              pointRadius: 0,
+              pointHoverRadius: 4,
+              spanGaps: false,
+              tension: 0.35,
+              order: 0
+            }
+          })
+        })
+      })()
+    : (() => {
+        const singleHostDatasets = selectedMetrics.map(metric => {
+          const name = metric
+            .replace('_', ' ')
+            .toUpperCase()
 
-      fill: false,
+          return {
+            label: showBand ? `${name} (AVG)` : name,
+            metricKey: metric,
+            yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
+            data: chartPoints.map(point =>
+              point.metric ? toNumber(point.metric[metric]) : null
+            ),
+            borderColor: metricColors[metric],
+            backgroundColor: metricColors[metric] + '20',
+            borderWidth: 2,
+            fill: false,
+            pointRadius: 0,
+            pointHoverRadius: 4,
+            spanGaps: false,
+            tension: 0.35,
+            order: 0
+          }
+        })
 
-      pointRadius: 0,
-      pointHoverRadius: 4,
-      spanGaps: false,
-      tension: 0.35,
+        if (showBand) {
+          const color = metricColors[bandMetric]
 
-      // Lower order is drawn on top, so the line stays above the band
-      order: 0
+          singleHostDatasets.push({
+            label: 'Max',
+            metricKey: bandMetric,
+            yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
+            data: chartPoints.map(point =>
+              point.metric ? toNumber(point.metric[`${bandMetric}_max`]) : null
+            ),
+            borderColor: 'transparent',
+            backgroundColor: 'transparent',
+            borderWidth: 0,
+            fill: false,
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            spanGaps: false,
+            tension: 0.35,
+            order: 1
+          })
 
-    }
+          singleHostDatasets.push({
+            label: 'Min',
+            metricKey: bandMetric,
+            yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
+            data: chartPoints.map(point =>
+              point.metric ? toNumber(point.metric[`${bandMetric}_min`]) : null
+            ),
+            borderColor: 'transparent',
+            backgroundColor: color + '26',
+            borderWidth: 0,
+            fill: '-1',
+            pointRadius: 0,
+            pointHoverRadius: 0,
+            spanGaps: false,
+            tension: 0.35,
+            order: 1
+          })
+        }
 
-  })
+        return singleHostDatasets
+      })()
+  const latestValues = comparisonMode
+    ? datasets.map(dataset => {
+        const latestValue = [...dataset.data]
+          .reverse()
+          .find(value => value !== null)
 
-  if (showBand) {
+        return latestValue === undefined
+          ? `${dataset.label}: no recorded value`
+          : `${dataset.label}: ${formatMetricValue(dataset.metricKey, latestValue)}`
+      })
+    : selectedMetrics.map(metric => {
+        const values = datasets.find(dataset => dataset.metricKey === metric)?.data ?? []
+        const latestValue = [...values].reverse().find(value => value !== null)
+        const name = metric.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase())
 
-    const color = metricColors[bandMetric]
+        return latestValue === undefined
+          ? `${name}: no recorded value`
+          : `${name}: ${formatMetricValue(metric, latestValue)}`
+      })
 
-    // "Max" is an invisible line; "Min" fills up to it ('-1' = the dataset
-    // before it), which draws the shaded band between the two.
-    datasets.push({
-      label: 'Max',
-      metricKey: bandMetric,
-      yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
-      data: chartPoints.map(point =>
-        point.metric ? toNumber(point.metric[`${bandMetric}_max`]) : null
-      ),
-      borderColor: 'transparent',
-      backgroundColor: 'transparent',
-      borderWidth: 0,
-      fill: false,
-      pointRadius: 0,
-      pointHoverRadius: 0,
-      spanGaps: false,
-      tension: 0.35,
-      order: 1
-    })
-
-    datasets.push({
-      label: 'Min',
-      metricKey: bandMetric,
-      yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
-      data: chartPoints.map(point =>
-        point.metric ? toNumber(point.metric[`${bandMetric}_min`]) : null
-      ),
-      borderColor: 'transparent',
-      backgroundColor: color + '26',
-      borderWidth: 0,
-      fill: '-1',
-      pointRadius: 0,
-      pointHoverRadius: 0,
-      spanGaps: false,
-      tension: 0.35,
-      order: 1
-    })
-
-  }
-
+  const chartDescription =
+    `Metrics chart showing ${comparisonMode
+      ? selectedHosts.map(host => host.name).join(', ')
+      : selectedMetrics.map(metric =>
+          metric.replace('_', ' ').replace(/\b\w/g, char => char.toUpperCase())
+        ).join(', ')} over the last ${range ? range.label : timeRange}. ` +
+    `${metrics.length} recorded ${metrics.length === 1 ? 'sample' : 'samples'}. Latest values: ${latestValues.join('; ')}.`
   const data = {
 
     labels,
@@ -205,7 +297,7 @@ export default function MetricsChart({
     animation: false,
 
     // With a band, hovering shows average, max and min together
-    interaction: showBand
+    interaction: showBand || comparisonMode
       ? { mode: 'index', intersect: false }
       : undefined,
 
@@ -282,7 +374,7 @@ export default function MetricsChart({
 
   return (
 
-    <div className="bg-[#0d0d0d] border border-emerald-500/20 rounded-xl p-6 mb-8 shadow-[0_0_20px_rgba(16,185,129,0.04)]">
+    <div className="bg-[#0d0d0d] border border-emerald-500/20 rounded-xl p-4 sm:p-6 mb-8 shadow-[0_0_20px_rgba(16,185,129,0.04)]">
 
       <h2 className="text-lg font-semibold mb-6">
         {selectedMetrics.length === 1
@@ -297,7 +389,11 @@ export default function MetricsChart({
         {showBand && ' - shaded area shows the min-max within each time bucket'}
       </p>
 
-      <div className="h-[420px]">
+      <div
+        className="h-[280px] sm:h-[360px] lg:h-[420px]"
+        role="img"
+        aria-label={chartDescription}
+      >
 
         <Line
           data={data}
@@ -311,6 +407,11 @@ export default function MetricsChart({
   )
 
 }
+
+
+
+
+
 
 
 

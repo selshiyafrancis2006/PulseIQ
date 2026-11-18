@@ -37,10 +37,10 @@ describe('StatsCards', () => {
       />
     );
 
-    expect(valueOf('Latest')).toBe('20.00');
-    expect(valueOf('Average')).toBe('23.33');
-    expect(valueOf('Maximum')).toBe('40.00');
-    expect(valueOf('Minimum')).toBe('10.00');
+    expect(valueOf('Latest')).toBe('20.00%');
+    expect(valueOf('Average')).toBe('23.33%');
+    expect(valueOf('Maximum')).toBe('40.00%');
+    expect(valueOf('Minimum')).toBe('10.00%');
   });
 
   test('rollup rows: maximum and minimum use the true peaks, not the highest and lowest average', () => {
@@ -54,9 +54,9 @@ describe('StatsCards', () => {
       />
     );
 
-    expect(valueOf('Maximum')).toBe('50.00');
-    expect(valueOf('Minimum')).toBe('2.00');
-    expect(valueOf('Latest')).toBe('40.00');
+    expect(valueOf('Maximum')).toBe('50.00%');
+    expect(valueOf('Minimum')).toBe('2.00%');
+    expect(valueOf('Latest')).toBe('40.00%');
   });
 
   test('rollup rows: the average is weighted by sample count', () => {
@@ -71,7 +71,7 @@ describe('StatsCards', () => {
     );
 
     // (10 * 1 + 40 * 3) / 4 = 32.5. A plain average of the two would be 25.
-    expect(valueOf('Average')).toBe('32.50');
+    expect(valueOf('Average')).toBe('32.50%');
   });
 
   test('skips rows with a missing value instead of showing NaN', () => {
@@ -82,10 +82,10 @@ describe('StatsCards', () => {
       />
     );
 
-    expect(valueOf('Latest')).toBe('50.00');
-    expect(valueOf('Average')).toBe('50.00');
-    expect(valueOf('Maximum')).toBe('50.00');
-    expect(valueOf('Minimum')).toBe('50.00');
+    expect(valueOf('Latest')).toBe('50.00%');
+    expect(valueOf('Average')).toBe('50.00%');
+    expect(valueOf('Maximum')).toBe('50.00%');
+    expect(valueOf('Minimum')).toBe('50.00%');
   });
 
   test('reads the selected metric, not another one', () => {
@@ -96,6 +96,6 @@ describe('StatsCards', () => {
       />
     );
 
-    expect(valueOf('Latest')).toBe('80.00');
+    expect(valueOf('Latest')).toBe('80.00%');
   });
 });

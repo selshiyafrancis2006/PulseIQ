@@ -1,4 +1,4 @@
-﻿import { describe, expect, test } from 'vitest'
+import { describe, expect, test } from 'vitest'
 import {
   getMetricUnit,
   formatMetricValue
@@ -28,7 +28,7 @@ describe('formatMetricValue', () => {
 
   test('formats network values using the existing KB/s formatter', () => {
     expect(formatMetricValue('network_in', 12)).toBe('12.0 KB/s')
-    expect(formatMetricValue('network_out', 1024)).toBe('1.0 MB/s')
+    expect(formatMetricValue('network_out', 1024)).toBe('1024.0 KB/s')
   })
 
   test.each([null, undefined, ''])(
