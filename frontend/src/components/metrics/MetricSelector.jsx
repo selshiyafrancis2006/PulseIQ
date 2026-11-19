@@ -1,4 +1,4 @@
-const metricOptions = [
+﻿const metricOptions = [
   {
     label: 'CPU Usage',
     value: 'cpu_usage'
@@ -63,7 +63,7 @@ export default function MetricSelector({
 
   return (
 
-    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.5fr)_minmax(180px,0.8fr)_minmax(0,1.4fr)] items-start gap-6 mb-8">
+    <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)] items-start gap-6 mb-8">
 
       {/* METRICS */}
 
@@ -73,20 +73,20 @@ export default function MetricSelector({
           Metrics
         </p>
 
-        <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5 gap-3">
+        <div className="flex flex-wrap items-center gap-2">
 
           {metricOptions.map(metric => (
 
             <label
               key={metric.value}
-              className="flex items-center gap-3 cursor-pointer text-sm"
+              className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm cursor-pointer transition-colors ${selectedMetrics.includes(metric.value) ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-300" : "border-[#303030] bg-[#171717] text-gray-300 hover:border-gray-500 hover:bg-[#202020]"}`}
             >
 
               <input
                 type="checkbox"
                 checked={selectedMetrics.includes(metric.value)}
                 onChange={() => toggleMetric(metric.value)}
-                className="accent-emerald-500"
+                className="accent-emerald-500 shrink-0"
               />
 
               <span>
@@ -177,7 +177,7 @@ export default function MetricSelector({
       </div>
       {/* QUERY SETTINGS */}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 min-w-0">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 min-w-0">
         <div>
           <label htmlFor="metrics-step" className="text-xs uppercase tracking-widest text-gray-500 mb-2 block">
             Step
@@ -222,6 +222,7 @@ export default function MetricSelector({
   )
 
 }
+
 
 
 

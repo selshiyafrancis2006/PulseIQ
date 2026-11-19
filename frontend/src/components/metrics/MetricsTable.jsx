@@ -1,4 +1,4 @@
-﻿import { useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { formatMetricValue, getMetricUnit } from '../../utils/metricFormatting'
 import { METRICS } from '../../config/metricNames'
 
@@ -182,10 +182,10 @@ export default function MetricsTable({
 
           <tbody>
 
-            {filteredMetrics.map(metric => (
+            {filteredMetrics.map((metric, index) => (
 
               <tr
-                key={metric.id}
+                key={metric.id ?? `${metric.host_id ?? "host"}-${getTimestamp(metric) ?? "unknown"}-${index}`}
                 className="
                   border-b
                   border-[#2a2a2a]

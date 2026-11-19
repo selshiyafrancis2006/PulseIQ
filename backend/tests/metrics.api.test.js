@@ -378,6 +378,9 @@ describe('GET /api/metrics/query - access and validation', () => {
         ['decimal host ID', { host_ids: '1.5' }],
         ['invalid from timestamp', { from: 'not-a-date' }],
         ['invalid to timestamp', { to: 'not-a-date' }],
+        ['future to timestamp', {
+            to: new Date(Date.now() + 60 * 1000).toISOString()
+        }],
         ['from equal to to', (() => {
             const value = new Date().toISOString();
             return { from: value, to: value };
@@ -460,6 +463,46 @@ describe('GET /api/metrics/query - access and validation', () => {
         expect(res.body.to).toBeDefined();
     });
 
+    test('returns 413 when a metrics query exceeds the row limit', async () => {
+        const fetchSpy = jest.spyOn(metricsQueryService, 'fetchMetricQuery');
+        fetchSpy.mockResolvedValue(
+            Array(metricsQueryService.MAX_QUERY_ROWS + 1).fill({})
+        );
+
+        try {
+            const res = await request(app)
+                .get('/api/metrics/query?' + buildQuery())
+                .set(authHeader(userA.token));
+
+            expect(res.status).toBe(413);
+            expect(res.body.error).toMatch(/10,000 rows/i);
+        } finally {
+            fetchSpy.mockRestore();
+        }
+    });
+    test('allows a mixed-source query to end on the latest minute boundary', async () => {
+        const hourMs = 60 * 60 * 1000;
+        const minuteMs = 60 * 1000;
+        const now = Date.now();
+
+        const from = new Date(
+            Math.floor((now - 10 * 24 * hourMs) / hourMs) * hourMs
+        );
+        const to = new Date(
+            Math.floor(now / minuteMs) * minuteMs
+        );
+
+        const res = await request(app)
+            .get('/api/metrics/query?' + buildQuery({
+                from: from.toISOString(),
+                to: to.toISOString(),
+                step: '1h'
+            }))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual(expect.any(Array));
+    });
     test('rejects misaligned 5-minute rollup boundaries', async () => {
         const stepMs = 5 * 60 * 1000;
         const to = new Date(Math.floor(Date.now() / stepMs) * stepMs);
@@ -659,7 +702,30 @@ describe('GET /api/metrics/query - access and validation', () => {
             network_in: 385,
             network_out: 485
         }));
-    });});
+    });
+
+    test('rate limits metrics queries independently per authenticated user', async () => {
+        const limitedUser = await createUser();
+        const otherUser = await createUser();
+
+        let lastResponse;
+
+        for (let i = 0; i < 61; i++) {
+            lastResponse = await request(app)
+                .get('/api/metrics/query')
+                .set(authHeader(limitedUser.token));
+        }
+
+        expect(lastResponse.status).toBe(429);
+        expect(lastResponse.body.message).toMatch(/too many metrics queries/i);
+
+        const otherUserResponse = await request(app)
+            .get('/api/metrics/query')
+            .set(authHeader(otherUser.token));
+
+        expect(otherUserResponse.status).toBe(400);
+    });
+});
 // ===== Step 3: min/max on rollup ranges =====
 describe('GET /api/metrics - min/max on rollup ranges', () => {
     async function insertRollupWithBounds(table, hostId, hoursAgo) {

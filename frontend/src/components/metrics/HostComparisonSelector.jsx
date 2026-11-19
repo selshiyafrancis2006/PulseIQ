@@ -1,4 +1,4 @@
-export default function HostComparisonSelector({
+﻿export default function HostComparisonSelector({
   hosts,
   primaryHostId,
   selectedHostIds,
@@ -19,16 +19,16 @@ export default function HostComparisonSelector({
   }
 
   return (
-    <fieldset className="rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] p-3">
-      <legend className="px-2 text-sm font-medium text-gray-300">
+    <fieldset className="min-w-0 rounded-xl border border-[#303030] bg-[#171717] px-3 py-2.5">
+      <legend className="mb-2 block px-0 text-xs font-semibold uppercase tracking-wider text-gray-400">
         Compare with
       </legend>
 
-      <div className="flex flex-wrap gap-x-5 gap-y-3">
+      <div className="flex flex-wrap items-center gap-2">
         {comparableHosts.map(host => (
           <label
             key={host.id}
-            className="flex items-center gap-2 text-sm text-gray-300 cursor-pointer"
+            className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg border px-3 py-2 text-sm cursor-pointer transition-colors ${selectedHostIds.some(id => String(id) === String(host.id)) ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-300" : "border-[#303030] bg-[#202020] text-gray-300 hover:border-gray-500"}`}
           >
             <input
               type="checkbox"
@@ -36,7 +36,7 @@ export default function HostComparisonSelector({
                 id => String(id) === String(host.id)
               )}
               onChange={event => toggleHost(host.id, event.target.checked)}
-              className="accent-emerald-500"
+              className="shrink-0 accent-emerald-500"
             />
             {host.name}
           </label>
@@ -45,4 +45,6 @@ export default function HostComparisonSelector({
     </fieldset>
   )
 }
+
+
 

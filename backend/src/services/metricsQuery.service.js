@@ -7,6 +7,7 @@ const {
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
+const MAX_QUERY_ROWS = 10000;
 
 const QUERY_STEPS = {
     '1m': '1 minute',
@@ -235,6 +236,9 @@ const fetchMetricQuery = async ({
     const stepParam = values.length + 1;
     values.push(QUERY_STEPS[step]);
 
+    const rowLimitParam = values.length + 1;
+    values.push(MAX_QUERY_ROWS + 1);
+
     const aggregateExpressions = METRICS.map((metric) =>
         `${getAggregateExpression(metric, agg)} AS ${metric}`
     );
@@ -261,6 +265,7 @@ const fetchMetricQuery = async ({
                 TIMESTAMPTZ '2000-01-01 00:00:00+00'
             )
         ORDER BY host_id ASC, timestamp ASC
+        LIMIT $${rowLimitParam}
         `,
         values
     );
@@ -270,6 +275,7 @@ const fetchMetricQuery = async ({
 
 module.exports = {
     QUERY_STEPS,
+    MAX_QUERY_ROWS,
     getQuerySource,
     getQuerySources,
     isStepCompatible,

@@ -76,6 +76,22 @@ describe('MetricsChart min-max band', () => {
     expect(datasets()[1].borderWidth).toBe(0);
   });
 
+  test('hides the network axis when only percentage metrics are selected', () => {
+    const rows = [
+      rollupRow(1, 3, 40, 10, 90),
+      rollupRow(2, 2, 50, 20, 80),
+    ];
+
+    render(
+      <MetricsChart
+        metrics={rows}
+        selectedMetrics={['cpu_usage', 'memory_usage']}
+        timeRange="7d"
+      />
+    );
+
+    expect(chart.props.options.scales.yNetwork.display).toBe(false);
+  });
   test('assigns distinct colours to every metric', () => {
     const rows = [{
       id: 1,

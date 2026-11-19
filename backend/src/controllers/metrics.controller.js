@@ -228,19 +228,31 @@ const getMetricsQuery = async (req, res) => {
             });
         }
 
-        if (
-            from.getTime() % coarsestSource.resolutionMs !== 0 ||
-            to.getTime() % coarsestSource.resolutionMs !== 0
-        ) {
-            const boundaryLabel = coarsestSource.type === '1h'
+        const firstSource = sources[0].source;
+        const lastSource = sources[sources.length - 1].source;
+
+        const fromMisaligned =
+            from.getTime() % firstSource.resolutionMs !== 0;
+        const toMisaligned =
+            to.getTime() % lastSource.resolutionMs !== 0;
+
+        if (fromMisaligned || toMisaligned) {
+            const invalidSource = fromMisaligned
+                ? firstSource
+                : lastSource;
+
+            const boundaryLabel = invalidSource.type === '1h'
                 ? 'hourly'
-                : '5-minute';
+                : invalidSource.type === '5m'
+                    ? '5-minute'
+                    : 'one-minute';
+
+            const boundaryName = fromMisaligned ? 'from' : 'to';
 
             return res.status(400).json({
-                error: `from and to must align to ${boundaryLabel} UTC boundaries for this query range`
+                error: `${boundaryName} must align to ${boundaryLabel} UTC boundaries for this query range`
             });
         }
-
         const ownsAllHosts =
             await metricsQueryService.verifyHostsOwnership(
                 hostIds,
@@ -261,6 +273,12 @@ const getMetricsQuery = async (req, res) => {
             agg,
             sources
         });
+
+        if (data.length > metricsQueryService.MAX_QUERY_ROWS) {
+            return res.status(413).json({
+                error: `Query exceeds the maximum of ${metricsQueryService.MAX_QUERY_ROWS.toLocaleString()} rows. Narrow the time range, increase the step, or reduce the number of hosts.`
+            });
+        }
 
         return res.json({
             from: from.toISOString(),

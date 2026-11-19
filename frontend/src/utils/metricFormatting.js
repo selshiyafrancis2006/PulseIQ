@@ -1,18 +1,23 @@
 import { METRICS } from '../config/metricNames'
 
+// Shown for a missing or non-numeric value. Written as an escape so the
+// character cannot be corrupted again if the file is re-saved with the wrong
+// encoding.
+const MISSING_VALUE = '\u2014'
+
 export function getMetricUnit(metricName) {
   return METRICS[metricName]?.unit ?? ''
 }
 
 export function formatMetricValue(metricName, value) {
   if (value === null || value === undefined || value === '') {
-    return 'â€”'
+    return MISSING_VALUE
   }
 
   const number = Number(value)
 
   if (!Number.isFinite(number)) {
-    return 'â€”'
+    return MISSING_VALUE
   }
 
   if (metricName === 'network_in' || metricName === 'network_out') {
@@ -33,4 +38,3 @@ export function formatMetricColumnHeader(columnName) {
 
   return unit ? `${columnName} (${unit})` : columnName
 }
-

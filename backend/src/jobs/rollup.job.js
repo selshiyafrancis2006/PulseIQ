@@ -12,26 +12,34 @@ const {
     cleanupMonitorResults
 } = require('../services/monitorRollup.service');
 
-// 5-minute rollup â€” runs every 5 minutes
+// Serialize both metric rollups so the hourly job cannot race the 5-minute job.
+let metricRollupQueue = Promise.resolve();
+
+const enqueueMetricRollup = (rollup) => {
+    const execution = metricRollupQueue.then(() => rollup());
+    metricRollupQueue = execution.catch(() => undefined);
+    return execution;
+};
+
+// 5-minute rollup — runs every 5 minutes
 cron.schedule('*/5 * * * *', async () => {
     try {
-        await rollup5Minute();
+        await enqueueMetricRollup(rollup5Minute);
         console.log('5-minute metric rollup complete');
     } catch (err) {
         console.error('5-minute rollup error:', err);
     }
-});
+}, { noOverlap: true });
 
-// 1-hour rollup â€” runs at the top of every hour
-cron.schedule('0 * * * *', async () => {
+// 1-hour rollup — runs at minute 2 of every hour
+cron.schedule('2 * * * *', async () => {
     try {
-        await rollup1Hour();
+        await enqueueMetricRollup(rollup1Hour);
         console.log('1-hour metric rollup complete');
     } catch (err) {
         console.error('1-hour rollup error:', err);
     }
-});
-
+}, { noOverlap: true });
 // Hourly monitor results rollup â€” runs at minute 5 of every hour
 cron.schedule('5 * * * *', async () => {
     try {

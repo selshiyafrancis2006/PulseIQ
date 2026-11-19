@@ -1,4 +1,4 @@
-import { Line } from 'react-chartjs-2'
+﻿import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -163,7 +163,7 @@ export default function MetricsChart({
             const color = hostColors[hostIndex % hostColors.length]
 
             return {
-              label: `${host.name} · ${name}`,
+              label: `${host.name} \u00b7 ${name}`,
               metricKey: metric,
               hostId,
               yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
@@ -358,6 +358,7 @@ export default function MetricsChart({
 
       yNetwork: {
         position: 'right',
+        display: selectedMetrics.some(metric => metric.startsWith('network_')),
         beginAtZero: true,
         grid: {
           drawOnChartArea: false
@@ -407,6 +408,7 @@ export default function MetricsChart({
   )
 
 }
+
 
 
 

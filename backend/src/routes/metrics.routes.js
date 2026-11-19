@@ -1,4 +1,5 @@
-﻿const express = require('express');
+const express = require('express');
+const metricsQueryLimiter = require('../middleware/metricsQueryRateLimit.middleware');
 
 const router = express.Router();
 
@@ -8,7 +9,7 @@ const {
     getMetricsQuery
 } = require('../controllers/metrics.controller');
 
-router.get('/metrics/query', getMetricsQuery);
+router.get('/metrics/query', metricsQueryLimiter, getMetricsQuery);
 
 router.get('/metrics', getMetrics);
 
