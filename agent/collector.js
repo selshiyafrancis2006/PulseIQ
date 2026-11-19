@@ -3,12 +3,21 @@ require('dotenv').config();
 const si = require('systeminformation');
 const axios = require('axios');
 const { randomUUID } = require('crypto');
+const path = require('path');
 const { MetricDeliveryQueue } = require('./metric-delivery-queue');
+const { createFileStore } = require('./metric-queue-store');
+const { toRateKBps } = require('./metric-rates');
 const { version: AGENT_VERSION } = require('./package.json');
 
 const METADATA_INTERVAL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10000;
 const INGEST_PATH = '/api/agent/metrics';
+const DEFAULT_QUEUE_MAX_SIZE = 100;
+const NETWORK_WARMUP_MS = 1000;
+const SHUTDOWN_FLUSH_MS = 5000;
+// The 5-minute rollup only re-reads about the last 2 hours, so a sample that
+// is older than this would reach raw data but never the longer-range charts.
+const QUEUE_MAX_AGE_MS = 2 * 60 * 60 * 1000;
 
 function isLocalOrInternalHost(hostname) {
     return (
@@ -66,11 +75,23 @@ function loadConfig() {
     }
 
     const interval = Number(process.env.INTERVAL_MS);
+    const queueMaxSize = Number.parseInt(process.env.QUEUE_MAX_SIZE, 10);
+
+    // The queue is saved to a file so samples survive a restart or crash.
+    // Set QUEUE_PERSIST=false to keep it in memory only.
+    const persistQueue = (process.env.QUEUE_PERSIST || '').trim().toLowerCase() !== 'false';
+    const queueFile = path.resolve(
+        (process.env.QUEUE_FILE || '').trim() || path.join(__dirname, 'queue.json')
+    );
 
     return {
         metricsUrl,
         apiKey,
+        queueFile: persistQueue ? queueFile : null,
         intervalMs: Number.isFinite(interval) && interval >= 1000 ? interval : 5000,
+        queueMaxSize: Number.isInteger(queueMaxSize) && queueMaxSize >= 1
+            ? queueMaxSize
+            : DEFAULT_QUEUE_MAX_SIZE,
         insecureRemote
     };
 }
@@ -79,9 +100,16 @@ const config = loadConfig();
 
 let lastMetadataSentAt = 0;
 let collecting = false;
+let shuttingDown = false;
+let collectTimer = null;
+let monitorRunner = null;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const metricQueue = new MetricDeliveryQueue({
-    maxSize: 100,
+    maxSize: config.queueMaxSize,
+    maxAgeMs: QUEUE_MAX_AGE_MS,
+    store: config.queueFile ? createFileStore(config.queueFile) : null,
     maxAttempts: 5,
     baseDelayMs: 1000,
     maxDelayMs: 8000,
@@ -119,6 +147,14 @@ const metricQueue = new MetricDeliveryQueue({
         );
     }
 });
+
+if (metricQueue.restoredCount > 0) {
+    console.log(
+        `[PulseIQ Agent] Restored ${metricQueue.restoredCount} unsent sample(s) from ${config.queueFile}`
+    );
+
+    metricQueue.start();
+}
 
 async function collectMetadata() {
 
@@ -167,7 +203,7 @@ async function collectMetadata() {
 async function collectAndSend() {
     // Avoid overlapping system-information collection.
     // Network delivery runs independently through the queue.
-    if (collecting) return;
+    if (collecting || shuttingDown) return;
     collecting = true;
 
 
@@ -189,12 +225,14 @@ async function collectAndSend() {
             ? Number(disk[0].use.toFixed(2))
             : 0;
 
+        // toRateKBps turns a missing or negative rate into 0, so a bad
+        // network reading can never make the server reject the whole sample.
         const network_in = network.length > 0
-            ? Number((network[0].rx_sec / 1024).toFixed(2))
+            ? toRateKBps(network[0].rx_sec)
             : 0;
 
         const network_out = network.length > 0
-            ? Number((network[0].tx_sec / 1024).toFixed(2))
+            ? toRateKBps(network[0].tx_sec)
             : 0;
 
         const payload = {
@@ -229,27 +267,88 @@ async function collectAndSend() {
         collecting = false;
     }
 }
-console.log(
-    `PulseIQ Agent v${AGENT_VERSION} starting — sending to ${config.metricsUrl} every ${config.intervalMs}ms`
-);
 
-if (config.insecureRemote) {
-    console.warn(
-        'WARNING: BACKEND_URL uses plain http:// to a remote host — your API key and metrics are sent unencrypted. Use https:// in production.'
+async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.log(
+        `[PulseIQ Agent] ${signal} received — stopping and flushing ${metricQueue.size} queued sample(s)`
     );
+
+    clearInterval(collectTimer);
+
+    if (monitorRunner) {
+        monitorRunner.stop();
+    }
+
+    // Let a collection that is already running finish and enqueue its sample.
+    for (let waited = 0; collecting && waited < 2000; waited += 50) {
+        await sleep(50);
+    }
+
+    const remaining = await metricQueue.flush(SHUTDOWN_FLUSH_MS);
+
+    // With a queue file the unsent samples are kept for the next start.
+    const lost = metricQueue.droppedCount + (config.queueFile ? 0 : remaining);
+
+    if (remaining > 0) {
+        console.warn(
+            config.queueFile
+                ? `[PulseIQ Agent] ${remaining} sample(s) could not be delivered before shutdown; they are saved in ${config.queueFile} and will be sent on the next start`
+                : `[PulseIQ Agent] ${remaining} sample(s) could not be delivered before shutdown and were discarded`
+        );
+    }
+
+    console.log(
+        `[PulseIQ Agent] Stopped. Samples lost during this run: ${lost}`
+    );
+
+    process.exit(0);
 }
 
-collectAndSend();
+async function start() {
+    console.log(
+        `PulseIQ Agent v${AGENT_VERSION} starting — sending to ${config.metricsUrl} every ${config.intervalMs}ms (queue holds up to ${config.queueMaxSize} samples${config.queueFile ? `, saved to ${config.queueFile}` : ', memory only'})`
+    );
 
-setInterval(collectAndSend, config.intervalMs);
+    if (config.insecureRemote) {
+        console.warn(
+            'WARNING: BACKEND_URL uses plain http:// to a remote host — your API key and metrics are sent unencrypted. Use https:// in production.'
+        );
+    }
 
-// G1.4: run the monitor checks that PulseIQ assigned to this host
-// (multi-location monitoring). Set MONITOR_CHECKS=false to turn it off.
-if (process.env.MONITOR_CHECKS !== 'false') {
-    const { startMonitorRunner } = require('./monitor-runner');
+    // The first networkStats() call has nothing to compare against, so it
+    // reports no rate. Take that reading now and wait a moment, so the first
+    // real sample carries a measured rate instead of a placeholder 0.
+    try {
+        await si.networkStats();
+        await sleep(NETWORK_WARMUP_MS);
+    } catch (err) {
+        console.warn(
+            `[PulseIQ Agent] Network warm-up failed: ${err.message}`
+        );
+    }
 
-    startMonitorRunner({
-        baseUrl: config.metricsUrl.replace(/\/api\/agent\/metrics$/, ''),
-        apiKey: config.apiKey
-    });
+    if (shuttingDown) return;
+
+    collectAndSend();
+
+    collectTimer = setInterval(collectAndSend, config.intervalMs);
+
+    // G1.4: run the monitor checks that PulseIQ assigned to this host
+    // (multi-location monitoring). Set MONITOR_CHECKS=false to turn it off.
+    if (process.env.MONITOR_CHECKS !== 'false') {
+        const { startMonitorRunner } = require('./monitor-runner');
+
+        monitorRunner = startMonitorRunner({
+            baseUrl: config.metricsUrl.replace(/\/api\/agent\/metrics$/, ''),
+            apiKey: config.apiKey
+        });
+    }
 }
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+
+start();
