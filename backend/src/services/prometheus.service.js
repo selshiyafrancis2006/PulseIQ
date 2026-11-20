@@ -1,5 +1,6 @@
 const { Registry, Gauge } = require('@prometheus-io/client');
 const pool = require('../config/db');
+const { getRollupHealth } = require('./metricRollupHealth.service');
 const {
     OFFLINE_THRESHOLD_SECONDS,
     statusSql
@@ -41,6 +42,19 @@ const setIfValid = (
 
 const getPrometheusMetrics = async () => {
     const registry = new Registry();
+
+    const rollupHealthy = new Gauge({
+        name: 'pulseiq_metric_rollup_healthy',
+        help: 'Whether a metric rollup job is healthy (1 = healthy, 0 = stale or never succeeded).',
+        labelNames: ['job'],
+        registers: [registry]
+    });
+
+    const rollupHealth = getRollupHealth();
+
+    for (const [jobName, state] of Object.entries(rollupHealth.jobs)) {
+        rollupHealthy.set({ job: jobName }, state.healthy ? 1 : 0);
+    }
 
     const result = await pool.query(
         `SELECT

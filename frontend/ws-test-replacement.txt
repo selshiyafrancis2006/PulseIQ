@@ -1,0 +1,48 @@
+﻿  test('connects for a short single-host range, merges samples without refetching, and closes on unmount', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-11-20T04:30:00.000Z'))
+
+    vi.stubGlobal('WebSocket', MockWebSocket)
+    localStorage.setItem('token', 'test-jwt-token')
+
+    apiFetch.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [] }),
+    })
+
+    const { unmount } = render(<Metrics />)
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+      expect(apiFetch).toHaveBeenCalledTimes(1)
+    })
+
+    const socket = MockWebSocket.instances[0]
+
+    expect(socket.url).toContain('token=test-jwt-token')
+    expect(socket.url).toContain('host_id=1')
+    expect(screen.getByTestId('metrics-count')).toHaveTextContent('0')
+
+    socket.receive(JSON.stringify({
+      host_id: 1,
+      sample_id: '11111111-1111-4111-8111-111111111111',
+      collected_at: '2026-11-20T04:30:30.000Z',
+      cpu_usage: 20,
+      memory_usage: 30,
+      disk_usage: 40,
+      network_in: 50,
+      network_out: 60
+    }))
+
+    await waitFor(() => {
+      expect(screen.getByTestId('metrics-count')).toHaveTextContent('1')
+    })
+
+    expect(apiFetch).toHaveBeenCalledTimes(1)
+
+    unmount()
+
+    expect(socket.close).toHaveBeenCalledOnce()
+    localStorage.removeItem('token')
+    vi.useRealTimers()
+  })

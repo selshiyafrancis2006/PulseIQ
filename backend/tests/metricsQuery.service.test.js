@@ -65,6 +65,36 @@ describe('metricsQuery.service row limit', () => {
         expect(pool.query).not.toHaveBeenCalled();
     });
 
+    test('includes sample count and latest source timestamp in each aggregated bucket', async () => {
+        pool.query.mockResolvedValue({ rows: [] });
+
+        const from = new Date('2026-11-17T10:00:00.000Z');
+        const to = new Date('2026-11-17T11:00:00.000Z');
+
+        await fetchMetricQuery({
+            hostIds: [1],
+            from,
+            to,
+            step: '5m',
+            agg: 'avg',
+            sources: [{
+                from,
+                to,
+                source: {
+                    type: 'raw',
+                    table: 'metrics'
+                }
+            }]
+        });
+
+        const [sql] = pool.query.mock.calls[0];
+
+        expect(sql).toMatch(/SUM\(sample_count\)::bigint AS sample_count/);
+        expect(sql).toMatch(/MAX\(source_timestamp\) AS latest_sample_timestamp/);
+        expect(sql).toContain('FROM combined');
+        expect(sql).toContain('GROUP BY');
+    });
+
     test('limits the final aggregated query to MAX_QUERY_ROWS + 1', async () => {
         const rows = [{ host_id: 1, cpu_usage: 50 }];
 

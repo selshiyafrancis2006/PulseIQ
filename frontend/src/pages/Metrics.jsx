@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useRef, useState } from 'react'
 import { apiFetch } from '../utils/apiFetch'
-import { API_BASE_URL } from '../config/api'
+import { API_BASE_URL, WS_URL } from '../config/api'
 import {
   getAlignedQueryRange,
   getAlignedCustomQueryRange,
@@ -8,6 +8,7 @@ import {
   isP95Available
 } from '../utils/metricsQuery'
 import { formatMetricColumnHeader } from '../utils/metricFormatting'
+import { mergeLiveMetricSample } from '../utils/metricLiveUpdates'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
 import HostComparisonSelector from '../components/metrics/HostComparisonSelector'
@@ -66,6 +67,8 @@ export default function Metrics() {
   const [customTo, setCustomTo] = useState('')
   const [step, setStep] = useState('1m')
   const [aggregation, setAggregation] = useState('avg')
+  const pendingSocketSamplesRef = useRef([])
+  const liveUpdateRevisionRef = useRef(0)
   const customFromTimestamp = customFrom ? new Date(customFrom).getTime() : NaN
   const customToTimestamp = customTo ? new Date(customTo).getTime() : NaN
 
@@ -113,6 +116,119 @@ export default function Metrics() {
     : timeRange
   const queryRangeFrom = queryRange?.from ?? null
   const queryRangeTo = queryRange?.to ?? null
+  const shouldUseLiveUpdates =
+    timeRange !== 'custom' &&
+    ['1m', '5m', '15m'].includes(timeRange) &&
+    ['avg', 'min', 'max'].includes(effectiveAggregation) &&
+    queryHostIds.length === 1 &&
+    Boolean(selectedHostId) &&
+    queryRangeFrom !== null &&
+    queryRangeTo !== null
+
+
+  useEffect(() => {
+    if (!shouldUseLiveUpdates) return
+
+    const token = localStorage.getItem('token')
+    if (!token) return
+
+    let socket
+
+    try {
+      socket = new WebSocket(
+        `${WS_URL}?token=${encodeURIComponent(token)}&host_id=${encodeURIComponent(selectedHostId)}`
+      )
+    } catch (err) {
+      console.error('Metrics WebSocket connection failed', err)
+      return
+    }
+
+    socket.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data)
+
+        if (
+          !data ||
+          typeof data !== 'object' ||
+          Array.isArray(data) ||
+          String(data.host_id) !== String(selectedHostId)
+        ) {
+          return
+        }
+
+        const mergeOptions = {
+          step: effectiveStep,
+          aggregation: effectiveAggregation,
+          from: queryRangeFrom,
+          to: queryRangeTo
+        }
+
+        const validatedSample = mergeLiveMetricSample(
+          [],
+          data,
+          mergeOptions
+        )
+
+        if (validatedSample.length !== 1) return
+
+        const sampleKey = data.sample_id
+          ? `id:${data.host_id}:${data.sample_id}`
+          : `timestamp:${data.host_id}:${data.collected_at || data.timestamp}`
+
+        if (
+          pendingSocketSamplesRef.current.some(sample =>
+            sample.key === sampleKey
+          )
+        ) {
+          return
+        }
+
+        pendingSocketSamplesRef.current = [
+          ...pendingSocketSamplesRef.current,
+          { key: sampleKey, data }
+        ].slice(-500)
+
+        liveUpdateRevisionRef.current += 1
+
+        setMetricsResult(current => {
+          if (
+            current.hostId !== selectedHostId ||
+            current.hostIdsKey !== hostIdsKey ||
+            current.range !== queryRangeKey ||
+            current.step !== effectiveStep ||
+            current.aggregation !== effectiveAggregation
+          ) {
+            return current
+          }
+
+          return {
+            ...current,
+            data: mergeLiveMetricSample(
+              current.data,
+              data,
+              mergeOptions
+            )
+          }
+        })
+      } catch {
+        console.error('Failed to parse Metrics WebSocket message')
+      }
+    }
+
+    return () => {
+      socket.onmessage = null
+      socket.close()
+    }
+  }, [
+    shouldUseLiveUpdates,
+    selectedHostId,
+    hostIdsKey,
+    queryRangeKey,
+    queryRangeFrom,
+    queryRangeTo,
+    effectiveStep,
+    effectiveAggregation
+  ])
 
   useEffect(() => {
     if (!hostIdsKey || queryRangeFrom === null || queryRangeTo === null) {
@@ -120,8 +236,13 @@ export default function Metrics() {
     }
 
     let ignore = false
+    let requestInFlight = false
 
     const fetchMetrics = async () => {
+      if (requestInFlight) return
+
+      requestInFlight = true
+      const requestRevision = liveUpdateRevisionRef.current
       try {
         const currentQueryRange = { from: queryRangeFrom, to: queryRangeTo }
 
@@ -158,7 +279,7 @@ export default function Metrics() {
             // Keep the generic message when the body is not JSON.
           }
 
-          if (!ignore) {
+          if (!ignore && requestRevision === liveUpdateRevisionRef.current) {
             setErrorResult({
               hostId: selectedHostId,
               hostIdsKey,
@@ -175,7 +296,7 @@ export default function Metrics() {
         const result = await res.json()
 
         if (!result || !Array.isArray(result.data)) {
-          if (!ignore) {
+          if (!ignore && requestRevision === liveUpdateRevisionRef.current) {
             setErrorResult({
               hostId: selectedHostId,
               hostIdsKey,
@@ -190,6 +311,8 @@ export default function Metrics() {
         }
 
         if (!ignore) {
+          if (requestRevision !== liveUpdateRevisionRef.current) return
+
           setMetricsResult({
             hostId: selectedHostId,
             hostIdsKey,
@@ -211,7 +334,7 @@ export default function Metrics() {
       } catch (err) {
         console.error('Failed to fetch metrics', err)
 
-        if (!ignore) {
+        if (!ignore && requestRevision === liveUpdateRevisionRef.current) {
           setErrorResult({
             hostId: selectedHostId,
             hostIdsKey,
@@ -221,9 +344,11 @@ export default function Metrics() {
             message: 'Could not reach the server'
           })
         }
+      } finally {
+        requestInFlight = false
       }
-    }
 
+    }
     fetchMetrics()
 
     const interval = setInterval(fetchMetrics, 5000)
@@ -239,7 +364,8 @@ export default function Metrics() {
     selectedHostId,
     effectiveStep,
     effectiveAggregation,
-    hostIdsKey
+    hostIdsKey,
+
   ])
 
   const metrics = metricsResult.hostId === selectedHostId && metricsResult.hostIdsKey === hostIdsKey && metricsResult.range === queryRangeKey && metricsResult.step === effectiveStep && metricsResult.aggregation === effectiveAggregation

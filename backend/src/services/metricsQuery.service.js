@@ -255,7 +255,9 @@ const fetchMetricQuery = async ({
                 source_timestamp,
                 TIMESTAMPTZ '2000-01-01 00:00:00+00'
             ) AS timestamp,
-            ${aggregateExpressions.join(',\n            ')}
+            ${aggregateExpressions.join(',\n            ')},
+            SUM(sample_count)::bigint AS sample_count,
+            MAX(source_timestamp) AS latest_sample_timestamp
         FROM combined
         GROUP BY
             host_id,

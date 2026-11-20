@@ -263,6 +263,20 @@ describe('rollup1Hour', () => {
         return res.rows[0].h;
     }
 
+    test('does not create an hourly rollup for the current incomplete UTC hour', async () => {
+        const currentHour = await hourStart(0);
+
+        await insertFiveMinute(hostA, currentHour, {
+            cpuAvg: 75,
+            cpuMin: 70,
+            cpuMax: 80,
+            count: 5
+        });
+
+        await rollup1Hour();
+
+        expect(await hourRows(hostA)).toHaveLength(0);
+    });
     test('weights each 5-minute average by its sample count', async () => {
         const h = await hourStart(2);
 
@@ -329,7 +343,7 @@ describe('rollup1Hour', () => {
     });
 
     test('works end to end from raw rows through both rollup levels', async () => {
-        const b = await bucketStart(1);
+        const b = await hourStart(1);
 
         await insertRawAt(hostA, offset(b, 10), { cpu: 20 });
         await insertRawAt(hostA, offset(b, 20), { cpu: 40 });

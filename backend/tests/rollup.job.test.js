@@ -3,6 +3,7 @@ jest.mock('node-cron', () => ({
 }));
 
 jest.mock('../src/services/metricRollup.service', () => ({
+    withMetricRollupLock: jest.fn(async (callback) => callback({ query: jest.fn() })),
     rollup5Minute: jest.fn(),
     rollup1Hour: jest.fn(),
     cleanupRawMetrics: jest.fn(),
@@ -17,6 +18,7 @@ jest.mock('../src/services/monitorRollup.service', () => ({
 
 describe('metric rollup scheduler', () => {
     let cron;
+    let withMetricRollupLock;
     let rollup5Minute;
     let rollup1Hour;
 
@@ -26,10 +28,12 @@ describe('metric rollup scheduler', () => {
         cron = require('node-cron');
 
         ({
+            withMetricRollupLock,
             rollup5Minute,
             rollup1Hour
         } = require('../src/services/metricRollup.service'));
 
+        withMetricRollupLock.mockImplementation(async (callback) => callback({ query: jest.fn() }));
         rollup5Minute.mockResolvedValue();
         rollup1Hour.mockResolvedValue();
 

@@ -18,6 +18,46 @@ const ROLLUP_1H_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_1H_RETENTION_DAYS', 
 const ANOMALY_RETENTION_DAYS = intFromEnv('ANOMALY_RETENTION_DAYS', 30, 1);
 const TRACE_RETENTION_DAYS = intFromEnv('TRACE_RETENTION_DAYS', 7, 1);
 
+function validateRollupRange(range, bucketSeconds, retentionDays, label) {
+    if (!range || typeof range !== 'object') {
+        throw new TypeError(`${label} backfill requires a from/to range`);
+    }
+
+    const from = new Date(range.from);
+    const to = new Date(range.to);
+
+    if (!Number.isFinite(from.getTime()) || !Number.isFinite(to.getTime())) {
+        throw new TypeError(`${label} backfill range must contain valid dates`);
+    }
+
+    const bucketMs = bucketSeconds * 1000;
+
+    if (from.getTime() % bucketMs !== 0 || to.getTime() % bucketMs !== 0) {
+        throw new RangeError(`${label} backfill boundaries must align to UTC bucket boundaries`);
+    }
+
+    if (from >= to) {
+        throw new RangeError(`${label} backfill from must be earlier than to`);
+    }
+
+    const now = Date.now();
+    const retentionCutoff = now - retentionDays * 24 * 60 * 60 * 1000;
+    const earliestSafeBucket = Math.ceil(retentionCutoff / bucketMs) * bucketMs;
+    const latestCompleteBucket = Math.floor(now / bucketMs) * bucketMs;
+
+    if (from.getTime() < earliestSafeBucket) {
+        throw new RangeError(`${label} backfill starts before the safely retained data window`);
+    }
+
+    if (to.getTime() > latestCompleteBucket) {
+        throw new RangeError(`${label} backfill cannot include an incomplete current bucket`);
+    }
+
+    return {
+        from: from.toISOString(),
+        to: to.toISOString()
+    };
+}
 // Aggregates raw `metrics` rows into 5-minute buckets, using the agent's
 // collection time (collected_at) when present and the server time otherwise.
 //
@@ -31,8 +71,12 @@ const TRACE_RETENTION_DAYS = intFromEnv('TRACE_RETENTION_DAYS', 7, 1);
 // rows. The retention cap is rounded UP, so a bucket whose older raw rows may
 // already be deleted is never rebuilt from what is left of it.
 // Uses ON CONFLICT to upsert, so re-running is safe and idempotent.
-async function rollup5Minute() {
-    await pool.query(`
+async function rollup5Minute(client = pool, requestedRange = null) {
+    const range = requestedRange
+        ? validateRollupRange(requestedRange, 300, RAW_RETENTION_DAYS, '5-minute')
+        : null;
+
+    await client.query(`
         INSERT INTO metric_rollups_5m (
             host_id, bucket_start,
             cpu_usage_avg, cpu_usage_min, cpu_usage_max,
@@ -43,9 +87,7 @@ async function rollup5Minute() {
             sample_count
         )
         WITH latest_rollups AS MATERIALIZED (
-            SELECT
-                host_id,
-                MAX(bucket_start) AS latest_bucket
+            SELECT host_id, MAX(bucket_start) AS latest_bucket
             FROM metric_rollups_5m
             GROUP BY host_id
         )
@@ -60,20 +102,27 @@ async function rollup5Minute() {
             COUNT(*)
         FROM metrics m
         LEFT JOIN latest_rollups lr ON lr.host_id = m.host_id
-        WHERE COALESCE(m.collected_at, m.timestamp) >= GREATEST(
-            to_timestamp(
-                ceil(extract(epoch FROM NOW() - INTERVAL '${RAW_RETENTION_DAYS} days') / 300) * 300
-            ),
-            to_timestamp(
-                floor(
-                    extract(epoch FROM LEAST(
-                        NOW() - INTERVAL '2 hours',
-                        COALESCE(
-                            lr.latest_bucket - INTERVAL '5 minutes',
-                            NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'
-                        )
-                    )) / 300
-                ) * 300
+        WHERE (
+            $1::timestamptz IS NOT NULL
+            AND COALESCE(m.collected_at, m.timestamp) >= $1::timestamptz
+            AND COALESCE(m.collected_at, m.timestamp) < $2::timestamptz
+        ) OR (
+            $1::timestamptz IS NULL
+            AND COALESCE(m.collected_at, m.timestamp) >= GREATEST(
+                to_timestamp(
+                    ceil(extract(epoch FROM NOW() - INTERVAL '${RAW_RETENTION_DAYS} days') / 300) * 300
+                ),
+                to_timestamp(
+                    floor(
+                        extract(epoch FROM LEAST(
+                            NOW() - INTERVAL '2 hours',
+                            COALESCE(
+                                lr.latest_bucket - INTERVAL '5 minutes',
+                                NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'
+                            )
+                        )) / 300
+                    ) * 300
+                )
             )
         )
         GROUP BY m.host_id, bucket_start
@@ -94,7 +143,7 @@ async function rollup5Minute() {
             network_out_min = EXCLUDED.network_out_min,
             network_out_max = EXCLUDED.network_out_max,
             sample_count = EXCLUDED.sample_count
-    `);
+    `, [range?.from ?? null, range?.to ?? null]);
 }
 
 // Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
@@ -103,8 +152,12 @@ async function rollup5Minute() {
 // rebuild that hour from only some of them and overwrite its correct values.
 // Averages are sample-count-weighted so a partially-filled 5m bucket doesn't
 // skew the hourly average.
-async function rollup1Hour() {
-    await pool.query(`
+async function rollup1Hour(client = pool, requestedRange = null) {
+    const range = requestedRange
+        ? validateRollupRange(requestedRange, 3600, ROLLUP_5M_RETENTION_DAYS, 'hourly')
+        : null;
+
+    await client.query(`
         INSERT INTO metric_rollups_1h (
             host_id, bucket_start,
             cpu_usage_avg, cpu_usage_min, cpu_usage_max,
@@ -129,7 +182,15 @@ async function rollup1Hour() {
             MIN(network_out_min), MAX(network_out_max),
             SUM(sample_count)
         FROM metric_rollups_5m
-        WHERE bucket_start >= date_trunc('hour', NOW() - INTERVAL '7 days', 'UTC')
+        WHERE (
+            $1::timestamptz IS NOT NULL
+            AND bucket_start >= $1::timestamptz
+            AND bucket_start < $2::timestamptz
+        ) OR (
+            $1::timestamptz IS NULL
+            AND bucket_start >= date_trunc('hour', NOW() - INTERVAL '7 days', 'UTC')
+            AND bucket_start < date_trunc('hour', NOW(), 'UTC')
+        )
         GROUP BY host_id, date_trunc('hour', bucket_start, 'UTC')
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
             cpu_usage_avg = EXCLUDED.cpu_usage_avg,
@@ -148,7 +209,7 @@ async function rollup1Hour() {
             network_out_min = EXCLUDED.network_out_min,
             network_out_max = EXCLUDED.network_out_max,
             sample_count = EXCLUDED.sample_count
-    `);
+    `, [range?.from ?? null, range?.to ?? null]);
 }
 
 // Deletes raw high-resolution metric rows older than the retention window.
@@ -195,7 +256,35 @@ async function cleanupHistoricalData() {
     return deletedCounts;
 }
 
+async function withMetricRollupLock(callback) {
+    if (typeof callback !== 'function') {
+        throw new TypeError('Metric rollup lock requires a callback');
+    }
+
+    const client = await pool.connect();
+
+    try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(7002, 1)');
+
+        const result = await callback(client);
+
+        await client.query('COMMIT');
+        return result;
+    } catch (err) {
+        try {
+            await client.query('ROLLBACK');
+        } catch (rollbackError) {
+            console.error('Metric rollup transaction rollback failed:', rollbackError);
+        }
+
+        throw err;
+    } finally {
+        client.release();
+    }
+}
 module.exports = {
+    withMetricRollupLock,
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,

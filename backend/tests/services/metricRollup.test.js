@@ -4,7 +4,7 @@ jest.mock('../../src/config/db', () => ({
 }));
 
 const pool = require('../../src/config/db');
-const { cleanupHistoricalData } = require('../../src/services/metricRollup.service');
+const { cleanupHistoricalData, rollup5Minute, rollup1Hour } = require('../../src/services/metricRollup.service');
 
 describe('cleanupHistoricalData', () => {
     beforeEach(() => {
@@ -60,5 +60,108 @@ describe('cleanupHistoricalData', () => {
         pool.query.mockRejectedValueOnce(new Error('Database unavailable'));
 
         await expect(cleanupHistoricalData()).rejects.toThrow('Database unavailable');
+    });
+});
+
+describe('metric rollup backfill ranges', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        pool.query.mockResolvedValue({ rowCount: 0 });
+    });
+
+    test('5-minute backfill uses the requested parameterized range', async () => {
+        const bucketMs = 5 * 60 * 1000;
+        const toMs = Math.floor(Date.now() / bucketMs) * bucketMs - bucketMs;
+        const fromMs = toMs - bucketMs;
+
+        const range = {
+            from: new Date(fromMs).toISOString(),
+            to: new Date(toMs).toISOString()
+        };
+
+        await rollup5Minute(pool, range);
+
+        expect(pool.query).toHaveBeenCalledTimes(1);
+
+        const [sql, params] = pool.query.mock.calls[0];
+
+        expect(sql).toContain('$1::timestamptz');
+        expect(sql).toContain('$2::timestamptz');
+        expect(params).toEqual([range.from, range.to]);
+    });
+
+    test('hourly backfill uses the requested parameterized range', async () => {
+        const bucketMs = 60 * 60 * 1000;
+        const toMs = Math.floor(Date.now() / bucketMs) * bucketMs - bucketMs;
+        const fromMs = toMs - bucketMs;
+
+        const range = {
+            from: new Date(fromMs).toISOString(),
+            to: new Date(toMs).toISOString()
+        };
+
+        await rollup1Hour(pool, range);
+
+        expect(pool.query).toHaveBeenCalledTimes(1);
+
+        const [sql, params] = pool.query.mock.calls[0];
+
+        expect(sql).toContain('$1::timestamptz');
+        expect(sql).toContain('$2::timestamptz');
+        expect(params).toEqual([range.from, range.to]);
+    });
+
+    test('rejects misaligned 5-minute boundaries without querying the database', async () => {
+        const bucketMs = 5 * 60 * 1000;
+        const toMs = Math.floor(Date.now() / bucketMs) * bucketMs - bucketMs;
+
+        const range = {
+            from: new Date(toMs - bucketMs + 1000).toISOString(),
+            to: new Date(toMs).toISOString()
+        };
+
+        await expect(rollup5Minute(pool, range))
+            .rejects.toThrow('boundaries must align');
+
+        expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    test('rejects misaligned hourly boundaries without querying the database', async () => {
+        const bucketMs = 60 * 60 * 1000;
+        const toMs = Math.floor(Date.now() / bucketMs) * bucketMs - bucketMs;
+
+        const range = {
+            from: new Date(toMs - bucketMs + 1000).toISOString(),
+            to: new Date(toMs).toISOString()
+        };
+
+        await expect(rollup1Hour(pool, range))
+            .rejects.toThrow('boundaries must align');
+
+        expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    test('rejects ranges older than the retained raw metrics window', async () => {
+        const range = {
+            from: '2020-01-01T00:00:00.000Z',
+            to: '2020-01-01T00:05:00.000Z'
+        };
+
+        await expect(rollup5Minute(pool, range))
+            .rejects.toThrow('safely retained data window');
+
+        expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    test('rejects hourly ranges older than the retained 5-minute rollup window', async () => {
+        const range = {
+            from: '2020-01-01T00:00:00.000Z',
+            to: '2020-01-01T01:00:00.000Z'
+        };
+
+        await expect(rollup1Hour(pool, range))
+            .rejects.toThrow('safely retained data window');
+
+        expect(pool.query).not.toHaveBeenCalled();
     });
 });

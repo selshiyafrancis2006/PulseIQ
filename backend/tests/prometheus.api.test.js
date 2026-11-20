@@ -156,4 +156,33 @@ describe('GET /metrics - Prometheus exporter', () => {
         expect(body).not.toContain(`pulseiq_network_receive_bytes_per_second${hostLabel}`);
         expect(body).not.toContain(`pulseiq_network_transmit_bytes_per_second${hostLabel}`);
     });
+    test('exports metric rollup health for healthy and stale jobs', async () => {
+        process.env.PROMETHEUS_METRICS_TOKEN = 'test-prometheus-secret';
+
+        const {
+            recordRollupSuccess
+        } = require('../src/services/metricRollupHealth.service');
+
+        recordRollupSuccess('5m', new Date());
+        recordRollupSuccess(
+            '1h',
+            new Date(Date.now() - (90 * 60 * 1000) - 1000)
+        );
+
+        const response = await request(app)
+            .get('/metrics')
+            .set('Authorization', 'Bearer test-prometheus-secret');
+
+        expect(response.status).toBe(200);
+
+        const body = response.text;
+
+        expect(body).toContain('# TYPE pulseiq_metric_rollup_healthy gauge');
+        expect(body).toMatch(
+            /pulseiq_metric_rollup_healthy\{job="5m"\} 1/
+        );
+        expect(body).toMatch(
+            /pulseiq_metric_rollup_healthy\{job="1h"\} 0/
+        );
+    });
 });

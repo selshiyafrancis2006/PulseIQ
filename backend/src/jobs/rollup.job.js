@@ -1,5 +1,10 @@
 const cron = require('node-cron');
 const {
+    recordRollupSuccess,
+    recordRollupFailure
+} = require('../services/metricRollupHealth.service');
+const {
+    withMetricRollupLock,
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,
@@ -21,24 +26,26 @@ const enqueueMetricRollup = (rollup) => {
     return execution;
 };
 
-// 5-minute rollup — runs every 5 minutes
-cron.schedule('*/5 * * * *', async () => {
+// Track metric rollup outcomes without changing their shared execution queue.
+async function runTrackedMetricRollup(jobName, rollup, label) {
     try {
-        await enqueueMetricRollup(rollup5Minute);
-        console.log('5-minute metric rollup complete');
+        await enqueueMetricRollup(() => withMetricRollupLock((client) => rollup(client)));
+        recordRollupSuccess(jobName);
+        console.log(`${label} metric rollup complete`);
     } catch (err) {
-        console.error('5-minute rollup error:', err);
+        recordRollupFailure(jobName, err);
+        console.error(`${label} rollup error:`, err);
     }
+}
+
+// 5-minute rollup â€” runs every 5 minutes
+cron.schedule('*/5 * * * *', async () => {
+    await runTrackedMetricRollup('5m', rollup5Minute, '5-minute');
 }, { noOverlap: true });
 
-// 1-hour rollup — runs at minute 2 of every hour
+// 1-hour rollup â€” runs at minute 2 of every hour
 cron.schedule('2 * * * *', async () => {
-    try {
-        await enqueueMetricRollup(rollup1Hour);
-        console.log('1-hour metric rollup complete');
-    } catch (err) {
-        console.error('1-hour rollup error:', err);
-    }
+    await runTrackedMetricRollup('1h', rollup1Hour, '1-hour');
 }, { noOverlap: true });
 // Hourly monitor results rollup â€” runs at minute 5 of every hour
 cron.schedule('5 * * * *', async () => {
