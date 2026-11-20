@@ -437,6 +437,16 @@ ALTER TABLE notification_channels
     );
         `);
 
+                await client.query(`
+            CREATE TABLE IF NOT EXISTS job_runs (
+                job_name TEXT PRIMARY KEY,
+                last_success_at TIMESTAMPTZ,
+                last_failure_at TIMESTAMPTZ,
+                last_error TEXT,
+                consecutive_failures INTEGER NOT NULL DEFAULT 0
+            )
+        `);
+
         await client.query(`CREATE TABLE IF NOT EXISTS monitor_notification_settings (
     monitor_id INTEGER PRIMARY KEY
         REFERENCES monitors(id) ON DELETE CASCADE,

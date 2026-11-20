@@ -156,3 +156,95 @@
         );
     });
 });
+
+describe('metric rollup health - saved state and cleanup job', () => {
+    let health;
+
+    beforeEach(() => {
+        jest.resetModules();
+        health = require('../src/services/metricRollupHealth.service');
+    });
+
+    test('tracks the daily cleanup job and allows 26 hours before it is stale', () => {
+        const now = new Date('2026-11-20T12:00:00.000Z');
+
+        expect(health.getRollupHealth(now).jobs.cleanup.status).toBe('never_succeeded');
+
+        health.recordRollupSuccess('cleanup', new Date(now.getTime() - 26 * 60 * 60 * 1000));
+        expect(health.getRollupHealth(now).jobs.cleanup.status).toBe('healthy');
+
+        health.recordRollupSuccess('cleanup', new Date(now.getTime() - 26 * 60 * 60 * 1000 - 1000));
+        expect(health.getRollupHealth(now).jobs.cleanup.status).toBe('stale');
+    });
+
+    test('hydrates saved state so a restart does not look like a stalled job', () => {
+        const now = new Date('2026-11-20T12:00:00.000Z');
+
+        health.hydrateRollupHealth([
+            {
+                jobName: '5m',
+                lastSuccessAt: '2026-11-20T11:58:00.000Z',
+                lastFailureAt: '2026-11-20T11:30:00.000Z',
+                lastError: 'earlier failure',
+                consecutiveFailures: 0
+            }
+        ]);
+
+        expect(health.getRollupHealth(now).jobs['5m']).toMatchObject({
+            lastSuccessAt: '2026-11-20T11:58:00.000Z',
+            lastFailureAt: '2026-11-20T11:30:00.000Z',
+            lastError: 'earlier failure',
+            healthy: true,
+            status: 'healthy'
+        });
+    });
+
+    test('a hydrated job that is too old is reported stale', () => {
+        health.hydrateRollupHealth([
+            { jobName: '1h', lastSuccessAt: '2026-11-20T08:02:00.000Z', consecutiveFailures: 0 }
+        ]);
+
+        expect(
+            health.getRollupHealth(new Date('2026-11-20T12:00:00.000Z')).jobs['1h'].status
+        ).toBe('stale');
+    });
+
+    test('hydration ignores unknown jobs, malformed rows and non-arrays', () => {
+        expect(() => {
+            health.hydrateRollupHealth(undefined);
+            health.hydrateRollupHealth(null);
+            health.hydrateRollupHealth([
+                null,
+                'text',
+                { jobName: 'nope', lastSuccessAt: '2026-11-20T11:58:00.000Z' },
+                { jobName: '5m', lastSuccessAt: 'not a date', consecutiveFailures: -4 }
+            ]);
+        }).not.toThrow();
+
+        expect(health.getRollupHealth().jobs['5m']).toMatchObject({
+            lastSuccessAt: null,
+            consecutiveFailures: 0
+        });
+    });
+
+    test('hydration does not overwrite a job that already ran in this process', () => {
+        const ranAt = new Date('2026-11-20T11:59:00.000Z');
+
+        health.recordRollupSuccess('5m', ranAt);
+        health.hydrateRollupHealth([
+            { jobName: '5m', lastSuccessAt: '2026-11-19T00:00:00.000Z', consecutiveFailures: 3 }
+        ]);
+
+        expect(health.getJobState('5m')).toMatchObject({
+            lastSuccessAt: ranAt.toISOString(),
+            consecutiveFailures: 0
+        });
+    });
+
+    test('getJobState returns a copy and rejects unknown jobs', () => {
+        health.getJobState('5m').consecutiveFailures = 99;
+
+        expect(health.getJobState('5m').consecutiveFailures).toBe(0);
+        expect(() => health.getJobState('nope')).toThrow('Unknown metric rollup job');
+    });
+});

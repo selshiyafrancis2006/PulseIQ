@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS users (
+﻿CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -965,3 +965,16 @@ CREATE INDEX IF NOT EXISTS idx_status_page_incident_monitors_monitor
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS slo_target_percent NUMERIC(5,2) NOT NULL DEFAULT 99.90
   CHECK (slo_target_percent >= 90.00 AND slo_target_percent <= 100.00);
+
+
+
+-- ===== Background job health =====
+-- Last success/failure of each metric rollup and cleanup job, so the health
+-- endpoint does not report every job as "never succeeded" after a restart.
+CREATE TABLE IF NOT EXISTS job_runs (
+    job_name TEXT PRIMARY KEY,
+    last_success_at TIMESTAMPTZ,
+    last_failure_at TIMESTAMPTZ,
+    last_error TEXT,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0
+);

@@ -36,3 +36,5 @@ structure.txt
 
 # Editor settings
 .vscode/
+*-backup
+ws-test-replacement.txt

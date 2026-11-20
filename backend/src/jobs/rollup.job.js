@@ -1,8 +1,11 @@
 const cron = require('node-cron');
 const {
     recordRollupSuccess,
-    recordRollupFailure
+    recordRollupFailure,
+    getJobState,
+    hydrateRollupHealth
 } = require('../services/metricRollupHealth.service');
+const { saveJobRun, loadJobRuns } = require('../services/jobRunStore.service');
 const {
     withMetricRollupLock,
     rollup5Minute,
@@ -26,6 +29,9 @@ const enqueueMetricRollup = (rollup) => {
     return execution;
 };
 
+// Saves the job's current state so it survives a restart.
+const persistJobState = (jobName) => saveJobRun(jobName, getJobState(jobName));
+
 // Track metric rollup outcomes without changing their shared execution queue.
 async function runTrackedMetricRollup(jobName, rollup, label) {
     try {
@@ -36,6 +42,8 @@ async function runTrackedMetricRollup(jobName, rollup, label) {
         recordRollupFailure(jobName, err);
         console.error(`${label} rollup error:`, err);
     }
+
+    await persistJobState(jobName);
 }
 
 // 5-minute rollup — runs every 5 minutes
@@ -59,12 +67,17 @@ cron.schedule('5 * * * *', async () => {
 
 // Daily retention cleanup — runs at 3 AM
 cron.schedule('0 3 * * *', async () => {
+    // The three cleanup steps are tracked as one job: it counts as successful
+    // only when every step finished, and the first error is what is reported.
+    let firstError = null;
+
     try {
         const deletedRawMetrics = await cleanupRawMetrics();
         console.log(
             `Retention cleanup: removed ${deletedRawMetrics} raw metric rows older than ${RAW_RETENTION_DAYS} days`
         );
     } catch (err) {
+        firstError = firstError || err;
         console.error('Raw metric retention cleanup error:', err);
     }
 
@@ -72,6 +85,7 @@ cron.schedule('0 3 * * *', async () => {
         const deletedCounts = await cleanupHistoricalData();
         console.log('Historical retention cleanup complete:', deletedCounts);
     } catch (err) {
+        firstError = firstError || err;
         console.error('Historical retention cleanup error:', err);
     }
 
@@ -80,6 +94,24 @@ cron.schedule('0 3 * * *', async () => {
         const summary = await cleanupMonitorResults();
         console.log('Monitor results retention complete:', summary);
     } catch (err) {
+        firstError = firstError || err;
         console.error('Monitor results retention error:', err);
     }
+
+    if (firstError) {
+        recordRollupFailure('cleanup', firstError);
+    } else {
+        recordRollupSuccess('cleanup');
+    }
+
+    await persistJobState('cleanup');
 });
+
+// Restore the saved job state so a restart does not look like a stalled job.
+(async () => {
+    try {
+        hydrateRollupHealth(await loadJobRuns());
+    } catch (err) {
+        console.error('Could not restore saved job run state:', err);
+    }
+})();

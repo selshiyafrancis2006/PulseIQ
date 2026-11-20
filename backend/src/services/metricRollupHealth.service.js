@@ -1,8 +1,11 @@
-﻿const JOB_NAMES = ['5m', '1h'];
+﻿// '5m' and '1h' are the metric rollups; 'cleanup' is the daily retention job.
+const JOB_NAMES = ['5m', '1h', 'cleanup'];
 
 const STALE_AFTER_MS = {
     '5m': 15 * 60 * 1000,
-    '1h': 90 * 60 * 1000
+    '1h': 90 * 60 * 1000,
+    // Runs once a day at 03:00, so allow a little over a day.
+    cleanup: 26 * 60 * 60 * 1000
 };
 
 const jobs = Object.fromEntries(
@@ -41,6 +44,46 @@ function recordRollupFailure(jobName, error, failedAt = new Date()) {
         lastError: error instanceof Error ? error.message : String(error),
         consecutiveFailures: jobs[jobName].consecutiveFailures + 1
     };
+}
+
+function getJobState(jobName) {
+    if (!jobs[jobName]) {
+        throw new Error(`Unknown metric rollup job: ${jobName}`);
+    }
+
+    return { ...jobs[jobName] };
+}
+
+const validDateOrNull = (value) => {
+    if (value === null || value === undefined) return null;
+
+    const time = Date.parse(value);
+
+    return Number.isFinite(time) ? new Date(time).toISOString() : null;
+};
+
+// Loads the state saved by an earlier run of the backend, so a restart does
+// not make every job look like it has never succeeded. A job that has already
+// run in this process is left alone, and unknown or malformed rows are ignored.
+function hydrateRollupHealth(rows) {
+    if (!Array.isArray(rows)) return;
+
+    for (const row of rows) {
+        const state = row && jobs[row.jobName];
+
+        if (!state || state.lastSuccessAt !== null || state.lastFailureAt !== null) {
+            continue;
+        }
+
+        const failures = Number(row.consecutiveFailures);
+
+        jobs[row.jobName] = {
+            lastSuccessAt: validDateOrNull(row.lastSuccessAt),
+            lastFailureAt: validDateOrNull(row.lastFailureAt),
+            lastError: typeof row.lastError === 'string' ? row.lastError : null,
+            consecutiveFailures: Number.isInteger(failures) && failures >= 0 ? failures : 0
+        };
+    }
 }
 
 function getJobHealth(jobName, state, now) {
@@ -86,5 +129,7 @@ module.exports = {
     STALE_AFTER_MS,
     recordRollupSuccess,
     recordRollupFailure,
+    getJobState,
+    hydrateRollupHealth,
     getRollupHealth
 };

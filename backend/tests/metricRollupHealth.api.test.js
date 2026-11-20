@@ -52,4 +52,14 @@ describe('GET /api/metrics/rollup-health', () => {
 
         expect(Number.isNaN(Date.parse(res.body.checkedAt))).toBe(false);
     });
+        test('also reports the daily cleanup job', async () => {
+        const res = await request(app)
+            .get('/api/metrics/rollup-health')
+            .set(authHeader(user.token));
+
+        expect(res.body.jobs.cleanup).toEqual(expect.objectContaining({
+            staleAfterSeconds: 26 * 60 * 60,
+            consecutiveFailures: 0
+        }));
+    });
 });
