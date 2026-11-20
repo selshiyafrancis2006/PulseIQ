@@ -7,6 +7,7 @@ const path = require('path');
 const { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { createFileStore } = require('./metric-queue-store');
 const { toRateKBps } = require('./metric-rates');
+const { pickSystemDisk, pickNetworkStats } = require('./metric-selection');
 const { version: AGENT_VERSION } = require('./package.json');
 
 const METADATA_INTERVAL_MS = 5 * 60 * 1000;
@@ -200,6 +201,28 @@ async function collectMetadata() {
 
 }
 
+// The default-route interface rarely changes, so look it up at most every
+// 5 minutes. A failed lookup just means "no preference".
+const DEFAULT_IFACE_TTL_MS = 5 * 60 * 1000;
+let defaultIface = null;
+let defaultIfaceCheckedAt = 0;
+
+async function getDefaultInterface() {
+    if (Date.now() - defaultIfaceCheckedAt < DEFAULT_IFACE_TTL_MS) {
+        return defaultIface;
+    }
+
+    defaultIfaceCheckedAt = Date.now();
+
+    try {
+        defaultIface = (await si.networkInterfaceDefault()) || null;
+    } catch {
+        defaultIface = null;
+    }
+
+    return defaultIface;
+}
+
 async function collectAndSend() {
     // Avoid overlapping system-information collection.
     // Network delivery runs independently through the queue.
@@ -210,8 +233,9 @@ async function collectAndSend() {
     try {
         const cpuLoad = await si.currentLoad();
         const mem = await si.mem();
-        const disk = await si.fsSize();
-        const network = await si.networkStats();
+        const disks = await si.fsSize();
+        const networkStats = await si.networkStats();
+        const preferredIface = await getDefaultInterface();
 
         const collectedAt = new Date().toISOString();
 
@@ -221,19 +245,17 @@ async function collectAndSend() {
             ((mem.used / mem.total) * 100).toFixed(2)
         );
 
-        const disk_usage = disk.length > 0
-            ? Number(disk[0].use.toFixed(2))
+        const systemDisk = pickSystemDisk(disks);
+        const network = pickNetworkStats(networkStats, preferredIface);
+
+        const disk_usage = systemDisk
+            ? Number(Number(systemDisk.use).toFixed(2))
             : 0;
 
         // toRateKBps turns a missing or negative rate into 0, so a bad
         // network reading can never make the server reject the whole sample.
-        const network_in = network.length > 0
-            ? toRateKBps(network[0].rx_sec)
-            : 0;
-
-        const network_out = network.length > 0
-            ? toRateKBps(network[0].tx_sec)
-            : 0;
+        const network_in = network ? toRateKBps(network.rx_sec) : 0;
+        const network_out = network ? toRateKBps(network.tx_sec) : 0;
 
         const payload = {
             sample_id: randomUUID(),

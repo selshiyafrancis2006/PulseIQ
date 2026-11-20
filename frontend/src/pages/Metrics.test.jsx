@@ -8,8 +8,18 @@ class MockWebSocket {
   constructor(url) {
     this.url = url
     this.onmessage = null
+    this.onopen = null
+    this.onclose = null
     this.close = vi.fn()
     MockWebSocket.instances.push(this)
+  }
+
+  open() {
+    this.onopen?.()
+  }
+
+  drop(code = 1006) {
+    this.onclose?.({ code })
   }
 
   receive(data) {
@@ -198,6 +208,101 @@ describe('Metrics page WebSocket live updates', () => {
 
     unmount()
     localStorage.removeItem('token')
+  })
+})
+describe('Metrics page live connection status', () => {
+  beforeEach(() => {
+    vi.stubGlobal('WebSocket', MockWebSocket)
+    localStorage.setItem('token', 'test-jwt-token')
+
+    apiFetch.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [] }),
+    })
+  })
+
+  afterEach(() => {
+    localStorage.removeItem('token')
+  })
+
+  test('shows connecting and live states', async () => {
+    render(<Metrics />)
+
+    expect(await screen.findByText('Connecting to live updates\u2026'))
+      .toBeInTheDocument()
+
+    const socket = MockWebSocket.instances[0]
+
+    act(() => socket.open())
+
+    expect(screen.getByText('Live')).toBeInTheDocument()
+  })
+
+  test('shows reconnecting after an unexpected disconnect', async () => {
+    render(<Metrics />)
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    act(() => MockWebSocket.instances[0].drop(1006))
+
+    expect(screen.getByText('Live updates disconnected \u2014 reconnecting\u2026')).toBeInTheDocument()
+  })
+
+  test('does not reconnect after an authentication rejection', async () => {
+    render(<Metrics />)
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const socket = MockWebSocket.instances[0]
+
+    act(() => {
+      socket.open()
+      socket.drop(4401)
+    })
+
+    expect(screen.getByText('Live updates unavailable \u2014 refreshing every 5 seconds'))
+      .toBeInTheDocument()
+    expect(MockWebSocket.instances).toHaveLength(1)
+  })
+
+  test('pauses while the tab is hidden and reconnects when visible', async () => {
+    render(<Metrics />)
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1)
+    })
+
+    const firstSocket = MockWebSocket.instances[0]
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'hidden',
+    })
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(screen.getByText('Paused while this tab is hidden'))
+      .toBeInTheDocument()
+    expect(firstSocket.close).toHaveBeenCalledOnce()
+
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+
+    act(() => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(2)
+    })
   })
 })
 describe('Metrics page HTTP error handling', () => {

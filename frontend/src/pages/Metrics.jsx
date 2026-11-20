@@ -1,4 +1,6 @@
-﻿import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import useLiveSocket from '../hooks/useLiveSocket'
+import usePageVisible from '../hooks/usePageVisible'
 import { apiFetch } from '../utils/apiFetch'
 import { API_BASE_URL, WS_URL } from '../config/api'
 import {
@@ -23,6 +25,14 @@ import MetricsEmptyState from '../components/metrics/MetricsEmptyState'
 // Stable reference, so "no data yet" doesn't look like a change on every render
 const NO_METRICS = []
 const METRICS_PAGE_NOW = Date.now()
+
+const LIVE_STATUS_LABELS = {
+  connecting: 'Connecting to live updates\u2026',
+  live: 'Live',
+  reconnecting: 'Live updates disconnected \u2014 reconnecting\u2026',
+  paused: 'Paused while this tab is hidden',
+  unavailable: 'Live updates unavailable \u2014 refreshing every 5 seconds'
+}
 
 // Quote a CSV field when it contains a comma, quote or newline
 const csvField = (value) => {
@@ -126,101 +136,70 @@ export default function Metrics() {
     queryRangeTo !== null
 
 
-  useEffect(() => {
-    if (!shouldUseLiveUpdates) return
+  const pageVisible = usePageVisible()
+  const liveToken = shouldUseLiveUpdates ? localStorage.getItem('token') : null
+  const liveUrl = liveToken
+    ? `${WS_URL}?token=${encodeURIComponent(liveToken)}&host_id=${encodeURIComponent(selectedHostId)}`
+    : null
 
-    const token = localStorage.getItem('token')
-    if (!token) return
-
-    let socket
-
+  const handleSocketMessage = useCallback((event) => {
     try {
-      socket = new WebSocket(
-        `${WS_URL}?token=${encodeURIComponent(token)}&host_id=${encodeURIComponent(selectedHostId)}`
-      )
-    } catch (err) {
-      console.error('Metrics WebSocket connection failed', err)
-      return
-    }
+      const data = JSON.parse(event.data)
 
-    socket.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data)
-
-        if (
-          !data ||
-          typeof data !== 'object' ||
-          Array.isArray(data) ||
-          String(data.host_id) !== String(selectedHostId)
-        ) {
-          return
-        }
-
-        const mergeOptions = {
-          step: effectiveStep,
-          aggregation: effectiveAggregation,
-          from: queryRangeFrom,
-          to: queryRangeTo
-        }
-
-        const validatedSample = mergeLiveMetricSample(
-          [],
-          data,
-          mergeOptions
-        )
-
-        if (validatedSample.length !== 1) return
-
-        const sampleKey = data.sample_id
-          ? `id:${data.host_id}:${data.sample_id}`
-          : `timestamp:${data.host_id}:${data.collected_at || data.timestamp}`
-
-        if (
-          pendingSocketSamplesRef.current.some(sample =>
-            sample.key === sampleKey
-          )
-        ) {
-          return
-        }
-
-        pendingSocketSamplesRef.current = [
-          ...pendingSocketSamplesRef.current,
-          { key: sampleKey, data }
-        ].slice(-500)
-
-        liveUpdateRevisionRef.current += 1
-
-        setMetricsResult(current => {
-          if (
-            current.hostId !== selectedHostId ||
-            current.hostIdsKey !== hostIdsKey ||
-            current.range !== queryRangeKey ||
-            current.step !== effectiveStep ||
-            current.aggregation !== effectiveAggregation
-          ) {
-            return current
-          }
-
-          return {
-            ...current,
-            data: mergeLiveMetricSample(
-              current.data,
-              data,
-              mergeOptions
-            )
-          }
-        })
-      } catch {
-        console.error('Failed to parse Metrics WebSocket message')
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data) ||
+        String(data.host_id) !== String(selectedHostId)
+      ) {
+        return
       }
-    }
 
-    return () => {
-      socket.onmessage = null
-      socket.close()
+      const mergeOptions = {
+        step: effectiveStep,
+        aggregation: effectiveAggregation,
+        from: queryRangeFrom,
+        to: queryRangeTo
+      }
+
+      const validatedSample = mergeLiveMetricSample([], data, mergeOptions)
+      if (validatedSample.length !== 1) return
+
+      const sampleKey = data.sample_id
+        ? `id:${data.host_id}:${data.sample_id}`
+        : `timestamp:${data.host_id}:${data.collected_at || data.timestamp}`
+
+      if (pendingSocketSamplesRef.current.some(sample => sample.key === sampleKey)) {
+        return
+      }
+
+      pendingSocketSamplesRef.current = [
+        ...pendingSocketSamplesRef.current,
+        { key: sampleKey, data }
+      ].slice(-500)
+
+      liveUpdateRevisionRef.current += 1
+
+      setMetricsResult(current => {
+        if (
+          current.hostId !== selectedHostId ||
+          current.hostIdsKey !== hostIdsKey ||
+          current.range !== queryRangeKey ||
+          current.step !== effectiveStep ||
+          current.aggregation !== effectiveAggregation
+        ) {
+          return current
+        }
+
+        return {
+          ...current,
+          data: mergeLiveMetricSample(current.data, data, mergeOptions)
+        }
+      })
+    } catch {
+      console.error('Failed to parse Metrics WebSocket message')
     }
   }, [
-    shouldUseLiveUpdates,
     selectedHostId,
     hostIdsKey,
     queryRangeKey,
@@ -230,16 +209,25 @@ export default function Metrics() {
     effectiveAggregation
   ])
 
+  const liveStatus = useLiveSocket({
+    url: liveUrl,
+    paused: !pageVisible,
+    onMessage: handleSocketMessage
+  })
+
+  const pollIntervalMs = liveStatus === 'live' ? 60000 : 5000
+
   useEffect(() => {
-    if (!hostIdsKey || queryRangeFrom === null || queryRangeTo === null) {
+    if (!pageVisible || !hostIdsKey || queryRangeFrom === null || queryRangeTo === null) {
       return
     }
 
     let ignore = false
     let requestInFlight = false
+    let retryTimer = null
 
     const fetchMetrics = async () => {
-      if (requestInFlight) return
+      if (requestInFlight || !pageVisible) return
 
       requestInFlight = true
       const requestRevision = liveUpdateRevisionRef.current
@@ -311,7 +299,15 @@ export default function Metrics() {
         }
 
         if (!ignore) {
-          if (requestRevision !== liveUpdateRevisionRef.current) return
+          if (requestRevision !== liveUpdateRevisionRef.current) {
+            // A newer live sample arrived while this request was in flight.
+            // Fetch again shortly instead of waiting for the next poll.
+            retryTimer = setTimeout(() => {
+              retryTimer = null
+              fetchMetrics()
+            }, 1000)
+            return
+          }
 
           setMetricsResult({
             hostId: selectedHostId,
@@ -347,15 +343,17 @@ export default function Metrics() {
       } finally {
         requestInFlight = false
       }
-
     }
-    fetchMetrics()
 
-    const interval = setInterval(fetchMetrics, 5000)
+    if (!pageVisible) return
+
+    fetchMetrics()
+    const interval = setInterval(fetchMetrics, pollIntervalMs)
 
     return () => {
       ignore = true
       clearInterval(interval)
+      if (retryTimer) clearTimeout(retryTimer)
     }
   }, [
     queryRangeKey,
@@ -365,7 +363,8 @@ export default function Metrics() {
     effectiveStep,
     effectiveAggregation,
     hostIdsKey,
-
+    pageVisible,
+    pollIntervalMs
   ])
 
   const metrics = metricsResult.hostId === selectedHostId && metricsResult.hostIdsKey === hostIdsKey && metricsResult.range === queryRangeKey && metricsResult.step === effectiveStep && metricsResult.aggregation === effectiveAggregation
@@ -469,6 +468,17 @@ export default function Metrics() {
           <p className="text-gray-400 mt-1">
             Explore historical system metrics.
           </p>
+          {shouldUseLiveUpdates && LIVE_STATUS_LABELS[liveStatus] && (
+  <p
+    data-testid="live-status"
+    data-status={liveStatus}
+    className={`mt-1 text-xs ${
+      liveStatus === 'live' ? 'text-emerald-400' : 'text-amber-400'
+    }`}
+  >
+    {LIVE_STATUS_LABELS[liveStatus]}
+  </p>
+)}
 
         </div>
 
