@@ -204,92 +204,130 @@ describe('GET /api/metrics - raw ranges', () => {
     });
 });
 
-describe('GET /api/metrics - rollup ranges', () => {
-    test('6h is served from the 5-minute rollups with raw column names', async () => {
-        await insertRollup('metric_rollups_5m', hostA, 3, 33);
-        await insertRollup('metric_rollups_5m', hostA, 1, 44);
-        await insertRollup('metric_rollups_5m', hostA, 8, 88); // older than 6h
-        await insertRollup('metric_rollups_5m', hostA2, 1, 99); // other host
-        await insertRaw(hostA, 10, 1);                          // raw rows must be ignored
+// Start of the bucket "bucketsAgo" buckets before the current one, in ms.
+const bucketStart = (stepMs, bucketsAgo) =>
+    Math.floor(Date.now() / stepMs) * stepMs - bucketsAgo * stepMs;
 
-        const res = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=6h`)
+const MINUTE = 60 * 1000;
+const HOUR = 60 * MINUTE;
+
+describe('GET /api/metrics - long ranges (6h to 90d)', () => {
+    const get = (range, hostId = hostA) =>
+        request(app)
+            .get(`/api/metrics?host_id=${hostId}&range=${range}`)
             .set(authHeader(userA.token));
+
+    test('6h groups raw samples into 5-minute buckets with avg, min, max and sample_count', async () => {
+        const bucket = bucketStart(5 * MINUTE, 36); // 3 hours ago
+
+        await insertRawAt(hostA, new Date(bucket + MINUTE).toISOString(), { cpu: 20, memory: 10, disk: 70, netIn: 100, netOut: 200 });
+        await insertRawAt(hostA, new Date(bucket + 2 * MINUTE).toISOString(), { cpu: 40, memory: 30, disk: 90, netIn: 300, netOut: 400 });
+        await insertRawAt(hostA, new Date(Date.now() - 8 * HOUR).toISOString(), { cpu: 88 }); // older than 6h
+        await insertRawAt(hostA2, new Date(bucket + MINUTE).toISOString(), { cpu: 99 });       // other host
+
+        const res = await get('6h');
 
         expect(res.status).toBe(200);
-        expect(res.body.map((row) => row.cpu_usage)).toEqual([33, 44]);
+        expect(res.body).toHaveLength(1);
         expect(res.body[0]).toEqual(expect.objectContaining({
             host_id: hostA,
-            memory_usage: 41,
-            disk_usage: 51,
-            network_in: 1001,
-            network_out: 2001,
-            cpu_usage_min: 28,
-            cpu_usage_max: 38,
-            memory_usage_min: 36,
-            memory_usage_max: 46,
-            disk_usage_min: 46,
-            disk_usage_max: 56,
-            network_in_min: 996,
-            network_in_max: 1006,
-            network_out_min: 1996,
-            network_out_max: 2006
+            cpu_usage: 30,
+            cpu_usage_min: 20,
+            cpu_usage_max: 40,
+            memory_usage: 20,
+            memory_usage_min: 10,
+            memory_usage_max: 30,
+            disk_usage: 80,
+            disk_usage_min: 70,
+            disk_usage_max: 90,
+            network_in: 200,
+            network_in_min: 100,
+            network_in_max: 300,
+            network_out: 300,
+            network_out_min: 200,
+            network_out_max: 400,
+            sample_count: '2'
         }));
-        expect(res.body[0].timestamp).toBeDefined();
+        expect(new Date(res.body[0].timestamp).getTime()).toBe(bucket);
     });
 
-    test('24h range keeps rows up to a day old', async () => {
-        await insertRollup('metric_rollups_5m', hostA, 20, 20);
-        await insertRollup('metric_rollups_5m', hostA, 30, 30);
+    test.each(['6h', '24h', '3d', '7d'])(
+        '%s includes the newest raw sample, with no stale tail',
+        async (range) => {
+            await insertRaw(hostA, 10, 55);
 
-        const res = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=24h`)
-            .set(authHeader(userA.token));
+            const res = await get(range);
+
+            expect(res.status).toBe(200);
+            expect(res.body.at(-1).cpu_usage).toBe(55);
+        }
+    );
+
+    test('24h keeps data up to a day old and drops older data', async () => {
+        await insertRawAt(hostA, new Date(Date.now() - 20 * HOUR).toISOString(), { cpu: 20 });
+        await insertRawAt(hostA, new Date(Date.now() - 30 * HOUR).toISOString(), { cpu: 30 });
+
+        const res = await get('24h');
 
         expect(res.body.map((row) => row.cpu_usage)).toEqual([20]);
     });
 
-    test('3d, 7d, 30d and 90d are served from the hourly rollups', async () => {
-        await insertRollup('metric_rollups_1h', hostA, 24, 24);
-        await insertRollup('metric_rollups_1h', hostA, 24 * 5, 50);
+    test('3d returns 15-minute buckets', async () => {
+        const bucket = bucketStart(15 * MINUTE, 8); // 2 hours ago
+
+        await insertRawAt(hostA, new Date(bucket + MINUTE).toISOString(), { cpu: 10 });
+        await insertRawAt(hostA, new Date(bucket + 11 * MINUTE).toISOString(), { cpu: 30 });
+
+        const res = await get('3d');
+
+        expect(res.body).toHaveLength(1);
+        expect(res.body[0].cpu_usage).toBe(20);
+        expect(res.body[0].cpu_usage_min).toBe(10);
+        expect(res.body[0].cpu_usage_max).toBe(30);
+    });
+
+    test('7d reads 5-minute rollups for data older than raw retention, in hourly buckets', async () => {
+        await insertRollup('metric_rollups_5m', hostA, 24 * 5, 50);
+        await insertRollup('metric_rollups_1h', hostA2, 24 * 5, 77); // other host
+        await insertRaw(hostA, 10, 1);
+
+        const res = await get('7d');
+
+        expect(res.status).toBe(200);
+        expect(res.body.map((row) => row.cpu_usage)).toEqual([50, 1]);
+        expect(res.body[0]).toEqual(expect.objectContaining({
+            cpu_usage_min: 45,
+            cpu_usage_max: 55,
+            memory_usage_min: 36,
+            memory_usage_max: 46,
+            sample_count: '10'
+        }));
+    });
+
+    test('30d and 90d read hourly rollups for old data and ignore data beyond the range', async () => {
         await insertRollup('metric_rollups_1h', hostA, 24 * 9, 90);
         await insertRollup('metric_rollups_1h', hostA, 24 * 20, 20);
         await insertRollup('metric_rollups_1h', hostA, 24 * 40, 40);
         await insertRollup('metric_rollups_1h', hostA, 24 * 80, 80);
         await insertRollup('metric_rollups_1h', hostA, 24 * 95, 95);
-        await insertRollup('metric_rollups_5m', hostA, 1, 1); // wrong table, must be ignored
 
-        const threeDays = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=3d`)
-            .set(authHeader(userA.token));
-        const sevenDays = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=7d`)
-            .set(authHeader(userA.token));
-        const thirtyDays = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=30d`)
-            .set(authHeader(userA.token));
-        const ninetyDays = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=90d`)
-            .set(authHeader(userA.token));
+        const thirty = await get('30d');
+        const ninety = await get('90d');
 
-        expect(threeDays.body.map((row) => row.cpu_usage)).toEqual([24]);
-
-        expect(threeDays.body[0]).toEqual(expect.objectContaining({
-            cpu_usage: 24,
-            cpu_usage_min: 19,
-            cpu_usage_max: 29,
-            memory_usage_min: 36,
-            memory_usage_max: 46,
-            disk_usage_min: 46,
-            disk_usage_max: 56,
-            network_in_min: 996,
-            network_in_max: 1006,
-            network_out_min: 1996,
-            network_out_max: 2006
+        expect(thirty.status).toBe(200);
+        expect(thirty.body.map((row) => row.cpu_usage)).toEqual([20, 90]);
+        expect(ninety.body.map((row) => row.cpu_usage)).toEqual([80, 40, 20, 90]);
+        expect(ninety.body[0]).toEqual(expect.objectContaining({
+            cpu_usage_min: 75,
+            cpu_usage_max: 85
         }));
-        expect(sevenDays.body.map((row) => row.cpu_usage)).toEqual([50, 24]);
-        expect(thirtyDays.body.map((row) => row.cpu_usage)).toEqual([20, 90, 50, 24]);
-        expect(ninetyDays.body.map((row) => row.cpu_usage)).toEqual([80, 40, 20, 90, 50, 24]);
+    });
+
+    test('returns an empty array when the host has no data', async () => {
+        const res = await get('7d');
+
+        expect(res.status).toBe(200);
+        expect(res.body).toEqual([]);
     });
 });
 
@@ -727,71 +765,7 @@ describe('GET /api/metrics/query - access and validation', () => {
     });
 });
 // ===== Step 3: min/max on rollup ranges =====
-describe('GET /api/metrics - min/max on rollup ranges', () => {
-    async function insertRollupWithBounds(table, hostId, hoursAgo) {
-        await pool.query(
-            `INSERT INTO ${table}
-                (host_id, bucket_start,
-                 cpu_usage_avg, cpu_usage_min, cpu_usage_max,
-                 memory_usage_avg, memory_usage_min, memory_usage_max,
-                 disk_usage_avg, disk_usage_min, disk_usage_max,
-                 network_in_avg, network_in_min, network_in_max,
-                 network_out_avg, network_out_min, network_out_max,
-                 sample_count)
-             VALUES ($1, date_trunc('hour', NOW()) - ($2 || ' hours')::interval,
-                     40, 10, 90,
-                     41, 11, 91,
-                     51, 21, 81,
-                     1001, 101, 9001,
-                     2001, 201, 8001,
-                     12)`,
-            [hostId, String(hoursAgo)]
-        );
-    }
-
-    test('5-minute rollup ranges return min, max and sample_count next to the average', async () => {
-        await insertRollupWithBounds('metric_rollups_5m', hostA, 1);
-
-        const res = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=6h`)
-            .set(authHeader(userA.token));
-
-        expect(res.status).toBe(200);
-        expect(res.body).toHaveLength(1);
-        expect(res.body[0]).toEqual(expect.objectContaining({
-            cpu_usage: 40,
-            cpu_usage_min: 10,
-            cpu_usage_max: 90,
-            memory_usage: 41,
-            memory_usage_min: 11,
-            memory_usage_max: 91,
-            disk_usage: 51,
-            disk_usage_min: 21,
-            disk_usage_max: 81,
-            network_in: 1001,
-            network_in_min: 101,
-            network_in_max: 9001,
-            network_out: 2001,
-            network_out_min: 201,
-            network_out_max: 8001,
-            sample_count: 12
-        }));
-    });
-
-    test('hourly rollup ranges return min and max too', async () => {
-        await insertRollupWithBounds('metric_rollups_1h', hostA, 24);
-
-        const res = await request(app)
-            .get(`/api/metrics?host_id=${hostA}&range=7d`)
-            .set(authHeader(userA.token));
-
-        expect(res.status).toBe(200);
-        expect(res.body).toHaveLength(1);
-        expect(res.body[0].cpu_usage_min).toBe(10);
-        expect(res.body[0].cpu_usage_max).toBe(90);
-        expect(res.body[0].sample_count).toBe(12);
-    });
-
+describe('GET /api/metrics - raw ranges carry no min/max', () => {
     test('raw ranges have no min/max fields', async () => {
         await insertRaw(hostA, 10, 33);
 

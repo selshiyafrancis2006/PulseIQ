@@ -1,9 +1,8 @@
 const pool = require('../config/db');
+const metricsQueryService = require('./metricsQuery.service');
 
-// Raw metrics are kept for 3 days, so longer ranges are served from the
-// rollup tables: 5-minute buckets up to 24h, 1-hour buckets beyond that.
-// The maps below are fixed internal values, never user input, so they are
-// safe to interpolate into the SQL.
+// Short ranges return raw samples. The map below is a fixed internal value,
+// never user input, so it is safe to interpolate into the SQL.
 const RAW_RANGES = {
     '1m': '1 minute',
     '5m': '5 minutes',
@@ -11,23 +10,30 @@ const RAW_RANGES = {
     '1h': '1 hour'
 };
 
-const ROLLUP_5M_RANGES = {
-    '6h': '6 hours',
-    '24h': '24 hours'
+// Longer ranges are built by the same mixed raw / 5-minute / hourly query
+// engine as /api/metrics/query, so the newest minutes are never missing, and
+// are returned in these bucket sizes.
+const LONG_RANGES = {
+    '6h':  { ms: 6 * 60 * 60 * 1000,       step: '5m' },
+    '24h': { ms: 24 * 60 * 60 * 1000,      step: '5m' },
+    '3d':  { ms: 3 * 24 * 60 * 60 * 1000,  step: '15m' },
+    '7d':  { ms: 7 * 24 * 60 * 60 * 1000,  step: '1h' },
+    '30d': { ms: 30 * 24 * 60 * 60 * 1000, step: '1h' },
+    '90d': { ms: 90 * 24 * 60 * 60 * 1000, step: '1h' }
 };
 
-const ROLLUP_1H_RANGES = {
-    '3d': '3 days',
-    '7d': '7 days',
-    '30d': '30 days',
-    '90d': '90 days'
-};
+const LONG_RANGE_METRICS = [
+    'cpu_usage',
+    'memory_usage',
+    'disk_usage',
+    'network_in',
+    'network_out'
+];
 
 const isSupportedRange = (range) => {
     return (
         Object.prototype.hasOwnProperty.call(RAW_RANGES, range) ||
-        Object.prototype.hasOwnProperty.call(ROLLUP_5M_RANGES, range) ||
-        Object.prototype.hasOwnProperty.call(ROLLUP_1H_RANGES, range)
+        Object.prototype.hasOwnProperty.call(LONG_RANGES, range)
     );
 };
 const verifyHostOwnership = async (hostId, userId) => {
@@ -40,51 +46,54 @@ const verifyHostOwnership = async (hostId, userId) => {
     return result.rows.length > 0;
 };
 
-// Rollup rows use the raw column names for each bucket's average, so every
-// chart and table that reads raw metrics works unchanged. They also carry
-// each metric's <name>_min / <name>_max and the bucket's sample_count, so
-// short spikes stay visible on long ranges. Raw rows have none of these.
-const fetchRollup = async (table, interval, hostId) => {
+// Builds one row per bucket carrying the average under the plain metric name
+// (as raw rows do) plus <name>_min / <name>_max and sample_count, so short
+// spikes stay visible on long ranges.
+const fetchLongRange = async (range, hostId, now = Date.now()) => {
+    const { ms, step } = LONG_RANGES[range];
+    const stepMs = metricsQueryService.QUERY_STEP_MS[step];
 
-    const result = await pool.query(
-        `SELECT
-            id,
-            host_id,
-            bucket_start AS timestamp,
-            cpu_usage_avg AS cpu_usage,
-            cpu_usage_min,
-            cpu_usage_max,
-            memory_usage_avg AS memory_usage,
-            memory_usage_min,
-            memory_usage_max,
-            disk_usage_avg AS disk_usage,
-            disk_usage_min,
-            disk_usage_max,
-            network_in_avg AS network_in,
-            network_in_min,
-            network_in_max,
-            network_out_avg AS network_out,
-            network_out_min,
-            network_out_max,
-            sample_count
-         FROM ${table}
-         WHERE host_id = $1
-           AND bucket_start >= NOW() - INTERVAL '${interval}'
-         ORDER BY bucket_start ASC`,
-        [hostId]
-    );
+    const from = new Date(Math.floor((now - ms) / stepMs) * stepMs);
+    const to = new Date(now);
+    const sources = metricsQueryService.getQuerySources(from, to, now);
 
-    return result.rows;
+    const query = (agg) => metricsQueryService.fetchMetricQuery({
+        hostIds: [hostId],
+        from,
+        to,
+        step,
+        agg,
+        sources
+    });
+
+    const [avgRows, minRows, maxRows] = await Promise.all([
+        query('avg'),
+        query('min'),
+        query('max')
+    ]);
+
+    const keyOf = (row) => new Date(row.timestamp).getTime();
+    const minByTime = new Map(minRows.map((row) => [keyOf(row), row]));
+    const maxByTime = new Map(maxRows.map((row) => [keyOf(row), row]));
+
+    return avgRows.map((row) => {
+        const minRow = minByTime.get(keyOf(row));
+        const maxRow = maxByTime.get(keyOf(row));
+        const merged = { ...row };
+
+        for (const metric of LONG_RANGE_METRICS) {
+            merged[`${metric}_min`] = minRow ? minRow[metric] : null;
+            merged[`${metric}_max`] = maxRow ? maxRow[metric] : null;
+        }
+
+        return merged;
+    });
 };
 
 const fetchMetrics = async (range, hostId) => {
 
-    if (ROLLUP_5M_RANGES[range]) {
-        return fetchRollup('metric_rollups_5m', ROLLUP_5M_RANGES[range], hostId);
-    }
-
-    if (ROLLUP_1H_RANGES[range]) {
-        return fetchRollup('metric_rollups_1h', ROLLUP_1H_RANGES[range], hostId);
+    if (LONG_RANGES[range]) {
+        return fetchLongRange(range, hostId);
     }
 
     const interval = RAW_RANGES[range] || '1 minute';

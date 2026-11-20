@@ -277,6 +277,7 @@ const fetchMetricQuery = async ({
 
 module.exports = {
     QUERY_STEPS,
+    QUERY_STEP_MS,
     MAX_QUERY_ROWS,
     getQuerySource,
     getQuerySources,
