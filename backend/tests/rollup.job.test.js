@@ -1,4 +1,4 @@
-jest.mock('node-cron', () => ({
+﻿jest.mock('node-cron', () => ({
     schedule: jest.fn()
 }));
 
@@ -13,12 +13,16 @@ jest.mock('../src/services/metricRollup.service', () => ({
 
 jest.mock('../src/services/jobRunStore.service', () => ({
     saveJobRun: jest.fn(async () => {}),
-    loadJobRuns: jest.fn(async () => [])
+    loadJobRunsStrict: jest.fn(async () => [])
 }));
 
 jest.mock('../src/services/monitorRollup.service', () => ({
     rollupRecentMonitorResults: jest.fn(),
     cleanupMonitorResults: jest.fn()
+}));
+
+jest.mock('../src/services/metricRollupAlert.service', () => ({
+    processRollupAlerts: jest.fn().mockResolvedValue({})
 }));
 
 describe('metric rollup scheduler', () => {
@@ -199,9 +203,9 @@ describe('metric rollup scheduler - saved job state', () => {
     test('restores saved state when the backend starts', async () => {
         jest.resetModules();
 
-        const { loadJobRuns } = require('../src/services/jobRunStore.service');
+        const { loadJobRunsStrict } = require('../src/services/jobRunStore.service');
 
-        loadJobRuns.mockResolvedValueOnce([
+        loadJobRunsStrict.mockResolvedValueOnce([
             {
                 jobName: '5m',
                 lastSuccessAt: '2026-11-20T11:58:00.000Z',
@@ -217,5 +221,142 @@ describe('metric rollup scheduler - saved job state', () => {
         const health = require('../src/services/metricRollupHealth.service');
 
         expect(health.getJobState('5m').lastSuccessAt).toBe('2026-11-20T11:58:00.000Z');
+    });
+});
+describe('metric rollup scheduler - hydration retry', () => {
+    beforeEach(() => {
+        jest.resetModules();
+    });
+
+    test('does not mark health ready when strict hydration fails', async () => {
+        const { loadJobRunsStrict } =
+            require('../src/services/jobRunStore.service');
+
+        loadJobRunsStrict.mockRejectedValueOnce(
+            new Error('Database unavailable')
+        );
+
+        const errorSpy = jest
+            .spyOn(console, 'error')
+            .mockImplementation(() => {});
+
+        try {
+            const { ensureRollupHealthReady } =
+                require('../src/jobs/rollup.job');
+
+            await expect(ensureRollupHealthReady()).resolves.toBe(false);
+
+            expect(loadJobRunsStrict).toHaveBeenCalledTimes(1);
+            expect(errorSpy).toHaveBeenCalledWith(
+                'Could not restore saved job run state:',
+                expect.objectContaining({
+                    message: 'Database unavailable'
+                })
+            );
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
+
+    test('retries failed hydration and restores saved state after recovery', async () => {
+        const { loadJobRunsStrict } =
+            require('../src/services/jobRunStore.service');
+
+        loadJobRunsStrict
+            .mockRejectedValueOnce(new Error('Database unavailable'))
+            .mockResolvedValueOnce([
+                {
+                    jobName: '5m',
+                    lastSuccessAt: '2026-11-20T11:58:00.000Z',
+                    lastFailureAt: null,
+                    lastError: null,
+                    consecutiveFailures: 0
+                }
+            ]);
+
+        const errorSpy = jest
+            .spyOn(console, 'error')
+            .mockImplementation(() => {});
+
+        try {
+            const { ensureRollupHealthReady } =
+                require('../src/jobs/rollup.job');
+
+            await expect(ensureRollupHealthReady()).resolves.toBe(false);
+            await expect(ensureRollupHealthReady()).resolves.toBe(true);
+
+            expect(loadJobRunsStrict).toHaveBeenCalledTimes(2);
+
+            const health = require('../src/services/metricRollupHealth.service');
+
+            expect(health.getJobState('5m').lastSuccessAt)
+                .toBe('2026-11-20T11:58:00.000Z');
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
+});
+
+
+describe('metric rollup alert scheduler', () => {
+    beforeEach(() => {
+        jest.resetModules();
+    });
+
+    test('registers a non-overlapping once-per-minute alert check', () => {
+        const cron = require('node-cron');
+
+        require('../src/jobs/rollup.job');
+
+        expect(cron.schedule).toHaveBeenNthCalledWith(
+            5,
+            '* * * * *',
+            expect.any(Function),
+            { noOverlap: true }
+        );
+    });
+
+    test('evaluates rollup alerts after health hydration succeeds', async () => {
+        const { processRollupAlerts } =
+            require('../src/services/metricRollupAlert.service');
+
+        const { runRollupAlertCheck } =
+            require('../src/jobs/rollup.job');
+
+        await runRollupAlertCheck();
+
+        expect(processRollupAlerts).toHaveBeenCalledTimes(1);
+        expect(processRollupAlerts).toHaveBeenCalledWith(
+            expect.objectContaining({
+                jobs: expect.any(Object)
+            })
+        );
+    });
+
+    test('skips alert evaluation when health hydration fails', async () => {
+        const { loadJobRunsStrict } =
+            require('../src/services/jobRunStore.service');
+
+        const { processRollupAlerts } =
+            require('../src/services/metricRollupAlert.service');
+
+        loadJobRunsStrict.mockRejectedValueOnce(
+            new Error('Database unavailable')
+        );
+
+        const errorSpy = jest
+            .spyOn(console, 'error')
+            .mockImplementation(() => {});
+
+        try {
+            const { runRollupAlertCheck } =
+                require('../src/jobs/rollup.job');
+
+            await runRollupAlertCheck();
+
+            expect(processRollupAlerts).not.toHaveBeenCalled();
+        } finally {
+            errorSpy.mockRestore();
+        }
     });
 });

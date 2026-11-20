@@ -31,24 +31,28 @@ async function saveJobRun(jobName, state) {
     }
 }
 
+async function loadJobRunsStrict() {
+    const result = await pool.query(
+        `SELECT job_name, last_success_at, last_failure_at, last_error, consecutive_failures
+         FROM job_runs`
+    );
+
+    return result.rows.map((row) => ({
+        jobName: row.job_name,
+        lastSuccessAt: row.last_success_at ? row.last_success_at.toISOString() : null,
+        lastFailureAt: row.last_failure_at ? row.last_failure_at.toISOString() : null,
+        lastError: row.last_error,
+        consecutiveFailures: row.consecutive_failures
+    }));
+}
+
 async function loadJobRuns() {
     try {
-        const result = await pool.query(
-            `SELECT job_name, last_success_at, last_failure_at, last_error, consecutive_failures
-             FROM job_runs`
-        );
-
-        return result.rows.map((row) => ({
-            jobName: row.job_name,
-            lastSuccessAt: row.last_success_at ? row.last_success_at.toISOString() : null,
-            lastFailureAt: row.last_failure_at ? row.last_failure_at.toISOString() : null,
-            lastError: row.last_error,
-            consecutiveFailures: row.consecutive_failures
-        }));
+        return await loadJobRunsStrict();
     } catch (err) {
         console.error('Could not load saved job run state:', err.message);
         return [];
     }
 }
 
-module.exports = { saveJobRun, loadJobRuns };
+module.exports = { saveJobRun, loadJobRuns, loadJobRunsStrict };

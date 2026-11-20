@@ -64,6 +64,17 @@ function buildSlackPayload(event) {
         case 'CERTIFICATE_EXPIRED':
             lines.push(`:red_circle: *${name}* SSL certificate has EXPIRED`);
             break;
+        case "SYSTEM_ROLLUP_STALE":
+            lines.push(`:warning: *PulseIQ ${escapeSlack(event.jobName)} rollup is STALE*`);
+            if (event.message) lines.push(escapeSlack(event.message));
+            if (event.lastSuccessAt) lines.push(`Last successful run: ${event.lastSuccessAt}`);
+            if (event.staleAfterSeconds != null) lines.push(`Stale threshold: ${event.staleAfterSeconds}s`);
+            break;
+        case "SYSTEM_ROLLUP_RECOVERED":
+            lines.push(`:large_green_circle: *PulseIQ ${escapeSlack(event.jobName)} rollup recovered*`);
+            if (event.message) lines.push(escapeSlack(event.message));
+            if (event.lastSuccessAt) lines.push(`Last successful run: ${event.lastSuccessAt}`);
+            break;
         default:
             lines.push(':test_tube: PulseIQ test notification');
     }
@@ -145,6 +156,13 @@ function buildWebhookPayload(event) {
         payload.current_status = event.currentStatus ?? null;
     }
 
+    if (event.type === 'SYSTEM_ROLLUP_STALE' ||
+        event.type === 'SYSTEM_ROLLUP_RECOVERED') {
+        payload.job_name = event.jobName ?? null;
+        payload.last_success_at = event.lastSuccessAt ?? null;
+        payload.stale_after_seconds = event.staleAfterSeconds ?? null;
+    }
+
     return payload;
 }
 
@@ -180,16 +198,36 @@ function buildEmailMessage(event) {
         case 'CERTIFICATE_EXPIRED':
             subject = `${subjectPrefix} SSL certificate expired: ${monitorName}`;
             break;
+        case 'SYSTEM_ROLLUP_STALE':
+            subject = `${subjectPrefix} Rollup stale: ${event.jobName || "unknown"}`;
+            break;
+        case 'SYSTEM_ROLLUP_RECOVERED':
+            subject = `${subjectPrefix} Rollup recovered: ${event.jobName || "unknown"}`;
+            break;
         default:
             subject = `${subjectPrefix} Test notification`;
     }
 
+    const isSystemRollupEvent =
+        event.type === 'SYSTEM_ROLLUP_STALE' ||
+        event.type === 'SYSTEM_ROLLUP_RECOVERED';
+
     const lines = [
         `PulseIQ notification: ${event.type}`,
-        '',
-        `Monitor: ${monitorName}`
+        ''
     ];
 
+    if (isSystemRollupEvent) {
+        lines.push(`Rollup job: ${event.jobName || 'Unknown'}`);
+        if (event.lastSuccessAt) {
+            lines.push(`Last successful run: ${event.lastSuccessAt}`);
+        }
+        if (event.staleAfterSeconds != null) {
+            lines.push(`Stale threshold: ${event.staleAfterSeconds} seconds`);
+        }
+    } else {
+        lines.push(`Monitor: ${monitorName}`);
+    }
     if (monitorUrl) lines.push(`URL: ${monitorUrl}`);
     if (event.message) lines.push(`Message: ${event.message}`);
     if (event.errorType) lines.push(`Error type: ${event.errorType}`);
@@ -339,6 +377,106 @@ async function sendToChannel(channel, event) {
     }
 }
 
+function getSystemAlertChannels() {
+    const channels = [];
+
+    const emails = (process.env.PULSEIQ_SYSTEM_ALERT_EMAILS || '')
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean);
+
+    for (const email of new Set(emails)) {
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            channels.push({
+                type: 'invalid',
+                name: 'System alert email',
+                error: 'Invalid system alert email address.'
+            });
+        } else {
+            channels.push({ type: 'email', email });
+        }
+    }
+
+    const destinations = [
+        { env: 'PULSEIQ_SYSTEM_ALERT_WEBHOOKS', type: 'webhook' },
+        { env: 'PULSEIQ_SYSTEM_ALERT_SLACK_WEBHOOKS', type: 'slack' }
+    ];
+
+    for (const destination of destinations) {
+        const urls = (process.env[destination.env] || '')
+            .split(',')
+            .map((value) => value.trim())
+            .filter(Boolean);
+
+        for (const url of new Set(urls)) {
+            let parsed;
+
+            try {
+                parsed = new URL(url);
+            } catch {
+                channels.push({
+                    type: 'invalid',
+                    name: destination.env,
+                    error: `Invalid URL in ${destination.env}.`
+                });
+                continue;
+            }
+
+            if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+                channels.push({
+                    type: 'invalid',
+                    name: destination.env,
+                    error: `Destination in ${destination.env} must be HTTPS without embedded credentials.`
+                });
+                continue;
+            }
+
+            channels.push({ type: destination.type, url });
+        }
+    }
+
+    return channels;
+}
+
+async function sendSystemAlert(event) {
+    const channels = getSystemAlertChannels();
+
+    if (channels.length === 0) {
+        return {
+            configured: false,
+            delivered: 0,
+            failed: 0,
+            results: []
+        };
+    }
+
+    const results = await Promise.all(channels.map(async (channel) => {
+        try {
+            if (channel.type === 'invalid') {
+                throw new Error(channel.error);
+            }
+
+            await sendToChannel(channel, event);
+
+            return { type: channel.type, ok: true, error: null };
+        } catch (err) {
+            console.error('System alert delivery failed:', err.message);
+
+            return {
+                type: channel.type,
+                ok: false,
+                error: err.message
+            };
+        }
+    }));
+
+    return {
+        configured: true,
+        delivered: results.filter((result) => result.ok).length,
+        failed: results.filter((result) => !result.ok).length,
+        results
+    };
+}
 // Fan out to every active channel the user owns. Never throws:
 // a broken channel must not break monitor checking.
 async function notifyUser(userId, event, channelIdsOverride = null, bypassMonitorRouting = false) {
@@ -428,6 +566,8 @@ async function notifyUser(userId, event, channelIdsOverride = null, bypassMonito
 }
 
 module.exports = {
+    sendSystemAlert,
+    getSystemAlertChannels,
     sendToChannel,
     notifyUser,
     buildSlackPayload,

@@ -447,6 +447,16 @@ ALTER TABLE notification_channels
             )
         `);
 
+        await client.query(`
+            CREATE TABLE IF NOT EXISTS metric_rollup_alert_state (
+                job_name TEXT PRIMARY KEY,
+                is_stale BOOLEAN NOT NULL DEFAULT FALSE,
+                pending_event JSONB,
+                last_transition_at TIMESTAMPTZ,
+                last_notified_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
         await client.query(`CREATE TABLE IF NOT EXISTS monitor_notification_settings (
     monitor_id INTEGER PRIMARY KEY
         REFERENCES monitors(id) ON DELETE CASCADE,

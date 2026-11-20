@@ -16,6 +16,8 @@ if (!process.env.NOTIFICATION_ENCRYPTION_KEY) {
 const { encryptUrl } = require('../src/services/notificationChannelCrypto.service');
 
 const {
+    sendSystemAlert,
+    getSystemAlertChannels,
     sendToChannel,
     buildSlackPayload,
     buildWebhookPayload,
@@ -757,3 +759,243 @@ describe('notifyUser email channel delivery', () => {
     });
 });
 
+
+
+describe('system rollup health notification formatting', () => {
+    const event = {
+        type: 'SYSTEM_ROLLUP_STALE',
+        jobName: '5m',
+        message: 'The 5-minute metric rollup is stale.',
+        lastSuccessAt: '2026-11-20T11:40:00.000Z',
+        staleAfterSeconds: 900,
+        occurredAt: '2026-11-20T12:00:00.000Z'
+    };
+
+    test('builds a specific Slack stale-rollup alert', () => {
+        const payload = buildSlackPayload(event);
+
+        expect(payload.text).toContain('5m');
+        expect(payload.text).toContain('stale');
+        expect(payload.text).toContain('2026-11-20T11:40:00.000Z');
+        expect(payload.text).not.toContain('test notification');
+    });
+
+    test('builds a specific Slack rollup recovery notification', () => {
+        const payload = buildSlackPayload({
+            ...event,
+            type: 'SYSTEM_ROLLUP_RECOVERED',
+            message: 'The 5-minute metric rollup has recovered.'
+        });
+
+        expect(payload.text).toContain('5m');
+        expect(payload.text).toContain('recovered');
+        expect(payload.text).not.toContain('test notification');
+    });
+
+    test('includes system rollup details in webhook payloads', () => {
+        expect(buildWebhookPayload(event)).toMatchObject({
+            source: 'pulseiq',
+            event: 'SYSTEM_ROLLUP_STALE',
+            job_name: '5m',
+            message: event.message,
+            last_success_at: event.lastSuccessAt,
+            stale_after_seconds: 900,
+            occurred_at: event.occurredAt
+        });
+    });
+
+    test('uses a system-specific email subject and body', () => {
+        const message = buildEmailMessage(event);
+
+        expect(message.subject).toContain('Rollup stale');
+        expect(message.text).toContain('5m');
+        expect(message.text).toContain('stale');
+        expect(message.text).toContain(event.lastSuccessAt);
+    });
+});
+
+describe('system rollup alert delivery', () => {
+    const { checkHttp } = require('../src/services/httpCheck.service');
+    const nodemailer = require('nodemailer');
+
+    const envNames = [
+        'PULSEIQ_SYSTEM_ALERT_EMAILS',
+        'PULSEIQ_SYSTEM_ALERT_WEBHOOKS',
+        'PULSEIQ_SYSTEM_ALERT_SLACK_WEBHOOKS',
+        'SMTP_HOST',
+        'SMTP_PORT',
+        'SMTP_USER',
+        'SMTP_PASS',
+        'SMTP_FROM'
+    ];
+
+    let originalEnv;
+
+    const event = {
+        type: 'SYSTEM_ROLLUP_STALE',
+        jobName: '5m',
+        message: 'The 5-minute metric rollup is stale.',
+        occurredAt: '2026-11-20T12:00:00.000Z'
+    };
+
+    beforeEach(() => {
+        originalEnv = Object.fromEntries(
+            envNames.map((name) => [name, process.env[name]])
+        );
+
+        envNames.forEach((name) => delete process.env[name]);
+        jest.clearAllMocks();
+    });
+
+    afterEach(() => {
+        envNames.forEach((name) => {
+            if (originalEnv[name] === undefined) {
+                delete process.env[name];
+            } else {
+                process.env[name] = originalEnv[name];
+            }
+        });
+    });
+
+    test('does not report delivery when no destinations are configured', async () => {
+        await expect(sendSystemAlert(event)).resolves.toEqual({
+            configured: false,
+            delivered: 0,
+            failed: 0,
+            results: []
+        });
+
+        expect(checkHttp).not.toHaveBeenCalled();
+        expect(nodemailer.createTransport).not.toHaveBeenCalled();
+    });
+
+    test('parses and deduplicates configured destinations', () => {
+        process.env.PULSEIQ_SYSTEM_ALERT_EMAILS =
+            'ops@example.com, ops@example.com, admin@example.com';
+
+        process.env.PULSEIQ_SYSTEM_ALERT_WEBHOOKS =
+            'https://example.com/hook,https://example.com/hook';
+
+        process.env.PULSEIQ_SYSTEM_ALERT_SLACK_WEBHOOKS =
+            'https://hooks.slack.com/services/test';
+
+        expect(getSystemAlertChannels()).toEqual([
+            { type: 'email', email: 'ops@example.com' },
+            { type: 'email', email: 'admin@example.com' },
+            { type: 'webhook', url: 'https://example.com/hook' },
+            { type: 'slack', url: 'https://hooks.slack.com/services/test' }
+        ]);
+    });
+
+    test('rejects invalid email addresses and non-HTTPS destinations', () => {
+        process.env.PULSEIQ_SYSTEM_ALERT_EMAILS = 'not-an-email';
+        process.env.PULSEIQ_SYSTEM_ALERT_WEBHOOKS =
+            'http://example.com/hook';
+        process.env.PULSEIQ_SYSTEM_ALERT_SLACK_WEBHOOKS =
+            'https://user:password@example.com/hook';
+
+        const channels = getSystemAlertChannels();
+
+        expect(channels).toHaveLength(3);
+        expect(channels.every((channel) => channel.type === 'invalid')).toBe(true);
+    });
+
+    test('reports invalid destinations as failed delivery', async () => {
+        process.env.PULSEIQ_SYSTEM_ALERT_WEBHOOKS =
+            'http://example.com/system-alerts';
+
+        const result = await sendSystemAlert(event);
+
+        expect(result).toMatchObject({
+            configured: true,
+            delivered: 0,
+            failed: 1
+        });
+        expect(result.results[0]).toMatchObject({
+            type: 'invalid',
+            ok: false
+        });
+        expect(checkHttp).not.toHaveBeenCalled();
+    });
+
+    test('sends webhook alerts through the secure HTTP checker', async () => {
+        process.env.PULSEIQ_SYSTEM_ALERT_WEBHOOKS =
+            'https://example.com/system-alerts';
+
+        checkHttp.mockResolvedValueOnce({ statusCode: 200 });
+
+        const result = await sendSystemAlert(event);
+
+        expect(result).toMatchObject({
+            configured: true,
+            delivered: 1,
+            failed: 0
+        });
+
+        expect(checkHttp).toHaveBeenCalledWith(
+            expect.objectContaining({
+                url: 'https://example.com/system-alerts',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                timeout_ms: 5000
+            })
+        );
+    });
+
+    test('continues delivery when one configured destination fails', async () => {
+        process.env.PULSEIQ_SYSTEM_ALERT_WEBHOOKS =
+            'https://example.com/failing,https://example.com/working';
+
+        checkHttp
+            .mockRejectedValueOnce(new Error('Connection refused'))
+            .mockResolvedValueOnce({ statusCode: 200 });
+
+        const result = await sendSystemAlert(event);
+
+        expect(result).toMatchObject({
+            configured: true,
+            delivered: 1,
+            failed: 1
+        });
+
+        expect(result.results).toHaveLength(2);
+        expect(result.results[0].ok).toBe(false);
+        expect(result.results[1].ok).toBe(true);
+        expect(checkHttp).toHaveBeenCalledTimes(2);
+    });
+
+    test('delivers system email alerts through the SMTP path', async () => {
+        process.env.PULSEIQ_SYSTEM_ALERT_EMAILS = 'ops@example.com';
+
+        const sendMail = jest.fn().mockResolvedValue({});
+        const close = jest.fn();
+
+        nodemailer.createTransport.mockReturnValue({
+            sendMail,
+            close
+        });
+
+        process.env.SMTP_HOST = 'smtp.example.com';
+        process.env.SMTP_PORT = '587';
+        process.env.SMTP_USER = 'pulseiq';
+        process.env.SMTP_PASS = 'test-password';
+        process.env.SMTP_FROM = 'alerts@example.com';
+
+        const result = await sendSystemAlert(event);
+
+        expect(result).toMatchObject({
+            configured: true,
+            delivered: 1,
+            failed: 0
+        });
+
+        expect(sendMail).toHaveBeenCalledWith(
+            expect.objectContaining({
+                to: 'ops@example.com',
+                subject: expect.stringContaining('Rollup stale')
+            })
+        );
+
+        expect(close).toHaveBeenCalledTimes(1);
+    });
+});

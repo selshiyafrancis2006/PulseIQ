@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -977,4 +977,12 @@ CREATE TABLE IF NOT EXISTS job_runs (
     last_failure_at TIMESTAMPTZ,
     last_error TEXT,
     consecutive_failures INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS metric_rollup_alert_state (
+    job_name TEXT PRIMARY KEY,
+    is_stale BOOLEAN NOT NULL DEFAULT FALSE,
+    pending_event JSONB,
+    last_transition_at TIMESTAMPTZ,
+    last_notified_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

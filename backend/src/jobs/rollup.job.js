@@ -1,11 +1,13 @@
-const cron = require('node-cron');
+﻿const cron = require('node-cron');
 const {
     recordRollupSuccess,
     recordRollupFailure,
     getJobState,
-    hydrateRollupHealth
+    hydrateRollupHealth,
+    getRollupHealth
 } = require('../services/metricRollupHealth.service');
-const { saveJobRun, loadJobRuns } = require('../services/jobRunStore.service');
+const { processRollupAlerts } = require('../services/metricRollupAlert.service');
+const { saveJobRun, loadJobRunsStrict } = require('../services/jobRunStore.service');
 const {
     withMetricRollupLock,
     rollup5Minute,
@@ -32,6 +34,32 @@ const enqueueMetricRollup = (rollup) => {
 // Saves the job's current state so it survives a restart.
 const persistJobState = (jobName) => saveJobRun(jobName, getJobState(jobName));
 
+// Hydrate saved health state before stale-health evaluation.
+let rollupHealthReady = false;
+let rollupHealthLoading = null;
+
+async function ensureRollupHealthReady() {
+    if (rollupHealthReady) return true;
+
+    if (!rollupHealthLoading) {
+        rollupHealthLoading = loadJobRunsStrict()
+            .then((rows) => {
+                hydrateRollupHealth(rows);
+                rollupHealthReady = true;
+                return true;
+            })
+            .catch((err) => {
+                console.error('Could not restore saved job run state:', err);
+                return false;
+            })
+            .finally(() => {
+                rollupHealthLoading = null;
+            });
+    }
+
+    return rollupHealthLoading;
+}
+
 // Track metric rollup outcomes without changing their shared execution queue.
 async function runTrackedMetricRollup(jobName, rollup, label) {
     try {
@@ -46,16 +74,16 @@ async function runTrackedMetricRollup(jobName, rollup, label) {
     await persistJobState(jobName);
 }
 
-// 5-minute rollup — runs every 5 minutes
+// 5-minute rollup â€” runs every 5 minutes
 cron.schedule('*/5 * * * *', async () => {
     await runTrackedMetricRollup('5m', rollup5Minute, '5-minute');
 }, { noOverlap: true });
 
-// 1-hour rollup — runs at minute 2 of every hour
+// 1-hour rollup â€” runs at minute 2 of every hour
 cron.schedule('2 * * * *', async () => {
     await runTrackedMetricRollup('1h', rollup1Hour, '1-hour');
 }, { noOverlap: true });
-// Hourly monitor results rollup — runs at minute 5 of every hour
+// Hourly monitor results rollup â€” runs at minute 5 of every hour
 cron.schedule('5 * * * *', async () => {
     try {
         const buckets = await rollupRecentMonitorResults(3);
@@ -65,7 +93,7 @@ cron.schedule('5 * * * *', async () => {
     }
 });
 
-// Daily retention cleanup — runs at 3 AM
+// Daily retention cleanup â€” runs at 3 AM
 cron.schedule('0 3 * * *', async () => {
     // The three cleanup steps are tracked as one job: it counts as successful
     // only when every step finished, and the first error is what is reported.
@@ -107,11 +135,29 @@ cron.schedule('0 3 * * *', async () => {
     await persistJobState('cleanup');
 });
 
-// Restore the saved job state so a restart does not look like a stalled job.
-(async () => {
+
+// Start hydration during scheduler startup; failed attempts remain retryable.
+void ensureRollupHealthReady();
+
+async function runRollupAlertCheck() {
     try {
-        hydrateRollupHealth(await loadJobRuns());
+        const ready = await ensureRollupHealthReady();
+
+        if (!ready) {
+            return;
+        }
+
+        await processRollupAlerts(getRollupHealth());
     } catch (err) {
-        console.error('Could not restore saved job run state:', err);
+        console.error('Metric rollup alert check failed:', err);
     }
-})();
+}
+
+cron.schedule('* * * * *', runRollupAlertCheck, { noOverlap: true });
+
+module.exports = {
+    ensureRollupHealthReady,
+    runRollupAlertCheck
+};
+
+
