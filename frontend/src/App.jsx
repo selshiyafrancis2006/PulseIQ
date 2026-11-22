@@ -1,33 +1,35 @@
-﻿import {
+import {
   BrowserRouter,
   Routes,
   Route,
   Navigate
 } from 'react-router-dom'
-
-import Landing from './pages/Landing'
-import Login from './pages/Login'
-import Dashboard from './pages/Dashboard'
-import Uptime from './pages/Uptime'
-import MonitorDetails from './pages/MonitorDetails'
-import AlertRules from './pages/AlertRules'
+import { lazy, Suspense } from 'react'
 import DashboardLayout from './layouts/DashboardLayout'
-import Metrics from './pages/Metrics'
-import Processes from './pages/Processes'
-import AlertHistory from './pages/AlertHistory'
-import ServiceHealth from './pages/ServiceHealth'
-import Logs from './pages/Logs'
-import Settings from './pages/Settings'
-import Hosts from './pages/Hosts'
-import HostDetails from './pages/HostDetails'
-import Apm from './pages/Apm'
-import Anomalies from './pages/Anomalies'
-import Dashboards from './pages/Dashboards'
-import DashboardBuilder from './pages/DashboardBuilder'
-import StatusPageSettings from './pages/StatusPageSettings'
-import PublicStatusPage from './pages/PublicStatusPage'
-import ApiTests from './pages/ApiTests'
-import MaintenanceWindows from './pages/MaintenanceWindows'
+
+const Landing = lazy(() => import('./pages/Landing'))
+const Login = lazy(() => import('./pages/Login'))
+const Dashboard = lazy(() => import('./pages/Dashboard'))
+const Uptime = lazy(() => import('./pages/Uptime'))
+const MonitorDetails = lazy(() => import('./pages/MonitorDetails'))
+const AlertRules = lazy(() => import('./pages/AlertRules'))
+
+const Metrics = lazy(() => import('./pages/Metrics'))
+const Processes = lazy(() => import('./pages/Processes'))
+const AlertHistory = lazy(() => import('./pages/AlertHistory'))
+const ServiceHealth = lazy(() => import('./pages/ServiceHealth'))
+const Logs = lazy(() => import('./pages/Logs'))
+const Settings = lazy(() => import('./pages/Settings'))
+const Hosts = lazy(() => import('./pages/Hosts'))
+const HostDetails = lazy(() => import('./pages/HostDetails'))
+const Apm = lazy(() => import('./pages/Apm'))
+const Anomalies = lazy(() => import('./pages/Anomalies'))
+const Dashboards = lazy(() => import('./pages/Dashboards'))
+const DashboardBuilder = lazy(() => import('./pages/DashboardBuilder'))
+const StatusPageSettings = lazy(() => import('./pages/StatusPageSettings'))
+const PublicStatusPage = lazy(() => import('./pages/PublicStatusPage'))
+const ApiTests = lazy(() => import('./pages/ApiTests'))
+const MaintenanceWindows = lazy(() => import('./pages/MaintenanceWindows'))
 
 
 const ProtectedRoute = ({ children }) => {
@@ -43,7 +45,8 @@ export default function App() {
 
     <BrowserRouter>
 
-      <Routes>
+      <Suspense fallback={<div className="min-h-screen flex items-center justify-center text-gray-400">Loading...</div>}>
+        <Routes>
 
         {/* PUBLIC ROUTES */}
         <Route path="/" element={<Landing />} />
@@ -258,10 +261,13 @@ export default function App() {
           }
         />
 
-      </Routes>
+        </Routes>
+      </Suspense>
 
     </BrowserRouter>
 
   )
 }
+
+
 

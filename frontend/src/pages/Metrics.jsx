@@ -24,7 +24,6 @@ import MetricsEmptyState from '../components/metrics/MetricsEmptyState'
 
 // Stable reference, so "no data yet" doesn't look like a change on every render
 const NO_METRICS = []
-const METRICS_PAGE_NOW = Date.now()
 
 const LIVE_STATUS_LABELS = {
   connecting: 'Connecting to live updates\u2026',
@@ -77,6 +76,7 @@ export default function Metrics() {
   const [customTo, setCustomTo] = useState('')
   const [step, setStep] = useState('1m')
   const [aggregation, setAggregation] = useState('avg')
+  const metricsPageNow = Date.now()
   const pendingSocketSamplesRef = useRef([])
   const liveUpdateRevisionRef = useRef(0)
   const customFromTimestamp = customFrom ? new Date(customFrom).getTime() : NaN
@@ -92,9 +92,9 @@ export default function Metrics() {
       customRangeError = 'Enter valid start and end date/time.'
     } else if (customFromTimestamp >= customToTimestamp) {
       customRangeError = 'Start must be before end.'
-    } else if (customToTimestamp > METRICS_PAGE_NOW) {
+    } else if (customToTimestamp > metricsPageNow) {
       customRangeError = 'End time cannot be in the future.'
-    } else if (customFromTimestamp < METRICS_PAGE_NOW - 90 * 24 * 60 * 60 * 1000) {
+    } else if (customFromTimestamp < metricsPageNow - 90 * 24 * 60 * 60 * 1000) {
       customRangeError = 'Start cannot be older than 90 days.'
     } else {
       queryRange = getAlignedCustomQueryRange(customFromTimestamp, customToTimestamp)
