@@ -111,6 +111,30 @@ describe('metric rollup backfill ranges', () => {
         expect(params).toEqual([range.from, range.to]);
     });
 
+    test('hourly rollup includes the final :55 bucket but excludes the next hour', async () => {
+        const hourMs = 60 * 60 * 1000;
+        const toMs = Math.floor(Date.now() / hourMs) * hourMs;
+        const fromMs = toMs - hourMs;
+        const finalBucketMs = fromMs + 55 * 60 * 1000;
+
+        const range = {
+            from: new Date(fromMs).toISOString(),
+            to: new Date(toMs).toISOString()
+        };
+
+        await rollup1Hour(pool, range);
+
+        const [sql, params] = pool.query.mock.calls[0];
+
+        expect(params).toEqual([range.from, range.to]);
+        expect(sql).toMatch(/bucket_start\s*>=\s*\$1::timestamptz/);
+        expect(sql).toMatch(/bucket_start\s*<\s*\$2::timestamptz/);
+
+        expect(finalBucketMs).toBeGreaterThanOrEqual(Date.parse(params[0]));
+        expect(finalBucketMs).toBeLessThan(Date.parse(params[1]));
+        expect(toMs).toBe(Date.parse(params[1]));
+    });
+
     test('rejects misaligned 5-minute boundaries without querying the database', async () => {
         const bucketMs = 5 * 60 * 1000;
         const toMs = Math.floor(Date.now() / bucketMs) * bucketMs - bucketMs;
