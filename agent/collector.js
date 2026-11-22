@@ -111,7 +111,7 @@ const metricQueue = new MetricDeliveryQueue({
     maxSize: config.queueMaxSize,
     maxAgeMs: QUEUE_MAX_AGE_MS,
     store: config.queueFile ? createFileStore(config.queueFile) : null,
-    maxAttempts: 5,
+    maxAttempts: Infinity,
     baseDelayMs: 1000,
     maxDelayMs: 8000,
     send: async (payload) => {
