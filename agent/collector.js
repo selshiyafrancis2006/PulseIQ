@@ -8,12 +8,14 @@ const { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { createFileStore } = require('./metric-queue-store');
 const { toRateKBps } = require('./metric-rates');
 const { pickSystemDisk, pickNetworkStats } = require('./metric-selection');
+const { createProcessReporter } = require('./process-snapshot');
 const { version: AGENT_VERSION } = require('./package.json');
 
 const METADATA_INTERVAL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10000;
 const INGEST_PATH = '/api/agent/metrics';
 const DEFAULT_QUEUE_MAX_SIZE = 100;
+const DEFAULT_PROCESS_INTERVAL_MS = 30000;
 const NETWORK_WARMUP_MS = 1000;
 const SHUTDOWN_FLUSH_MS = 5000;
 // The 5-minute rollup only re-reads about the last 2 hours, so a sample that
@@ -85,8 +87,20 @@ function loadConfig() {
         (process.env.QUEUE_FILE || '').trim() || path.join(__dirname, 'queue.json')
     );
 
+        // How often to send the process list. 0 turns it off; minimum 5 seconds.
+    const processInterval = Number(process.env.PROCESS_INTERVAL_MS);
+    const processIntervalMs = process.env.PROCESS_INTERVAL_MS === undefined ||
+        process.env.PROCESS_INTERVAL_MS.trim() === '' ||
+        !Number.isFinite(processInterval)
+        ? DEFAULT_PROCESS_INTERVAL_MS
+        : processInterval === 0
+            ? 0
+            : Math.max(processInterval, 5000);
+
     return {
         metricsUrl,
+        processesUrl: metricsUrl ? metricsUrl.replace(/\/metrics$/, '/processes') : null,
+        processIntervalMs,
         apiKey,
         queueFile: persistQueue ? queueFile : null,
         intervalMs: Number.isFinite(interval) && interval >= 1000 ? interval : 5000,
@@ -99,6 +113,7 @@ function loadConfig() {
 
 const config = loadConfig();
 
+let processReporter = null;
 let lastMetadataSentAt = 0;
 let collecting = false;
 let shuttingDown = false;
@@ -304,6 +319,10 @@ async function shutdown(signal) {
         monitorRunner.stop();
     }
 
+        if (processReporter) {
+        processReporter.stop();
+    }
+
     // Let a collection that is already running finish and enqueue its sample.
     for (let waited = 0; collecting && waited < 2000; waited += 50) {
         await sleep(50);
@@ -357,6 +376,24 @@ async function start() {
     collectAndSend();
 
     collectTimer = setInterval(collectAndSend, config.intervalMs);
+
+        // Send the busiest processes of this host (PROCESS_INTERVAL_MS=0 turns it off).
+    if (config.processIntervalMs > 0) {
+        processReporter = createProcessReporter({
+            listProcesses: async () => (await si.processes()).list,
+            intervalMs: config.processIntervalMs,
+            send: (payload) =>
+                axios.post(config.processesUrl, payload, {
+                    headers: {
+                        'X-API-Key': config.apiKey,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: REQUEST_TIMEOUT_MS
+                })
+        });
+
+        processReporter.start();
+    }
 
     // G1.4: run the monitor checks that PulseIQ assigned to this host
     // (multi-location monitoring). Set MONITOR_CHECKS=false to turn it off.

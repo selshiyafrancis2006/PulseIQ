@@ -5,6 +5,11 @@ const authenticateAgent = require('../middleware/agentAuth.middleware');
 const { evaluateAlerts } = require('../services/alert.service');
 const { detectAnomalies } = require('../services/baseline.service');
 const { broadcastMetrics } = require('../services/websocket.service');
+const {
+    sanitizeProcesses,
+    resolveCollectedAt,
+    saveHostProcesses
+} = require('../services/hostProcesses.service');
 
 function cleanString(value, max = 255) {
     if (typeof value !== 'string') return null;
@@ -396,6 +401,40 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         });
     }
 });
+
+// Latest process snapshot of this host. Replaces the previous one; a late
+// retry of an older snapshot is accepted but ignored.
+router.post('/processes', authenticateAgent, async (req, res) => {
+    try {
+        const body = req.body;
+
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+            return res.status(400).json({ error: 'Invalid processes payload' });
+        }
+
+        if (!Array.isArray(body.processes)) {
+            return res.status(400).json({ error: 'processes must be an array' });
+        }
+
+        const processes = sanitizeProcesses(body.processes);
+
+        const stored = await saveHostProcesses(
+            req.agentHost.id,
+            resolveCollectedAt(body.collected_at),
+            processes
+        );
+
+        return res.status(stored ? 201 : 200).json({
+            host_id: req.agentHost.id,
+            count: processes.length,
+            stored
+        });
+    } catch (err) {
+        console.error('Failed to save host processes:', err);
+        return res.status(500).json({ error: 'Failed to save processes' });
+    }
+});
+
 router.post('/traces', authenticateAgent, async (req, res) => {
     try {
         const body = req.body;
