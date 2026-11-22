@@ -1124,3 +1124,71 @@ describe('GET /api/metrics/query - rollup aggregation', () => {
     });
 });
 // ===== End Gap 5 rollup aggregation tests =====
+
+describe('GET /api/metrics/rollup-health - admin access', () => {
+    const originalAdminIds = process.env.PULSEIQ_ADMIN_USER_IDS;
+
+    afterEach(() => {
+        if (originalAdminIds === undefined) {
+            delete process.env.PULSEIQ_ADMIN_USER_IDS;
+        } else {
+            process.env.PULSEIQ_ADMIN_USER_IDS = originalAdminIds;
+        }
+    });
+
+    async function getUserId(user) {
+        const result = await pool.query(
+            'SELECT id FROM users WHERE email = $1',
+            [user.email]
+        );
+
+        expect(result.rows).toHaveLength(1);
+        return String(result.rows[0].id);
+    }
+
+    test('rejects requests without authentication', async () => {
+        const res = await request(app)
+            .get('/api/metrics/rollup-health');
+
+        expect(res.status).toBe(401);
+    });
+
+    test('denies authenticated users when no admin IDs are configured', async () => {
+        delete process.env.PULSEIQ_ADMIN_USER_IDS;
+
+        const res = await request(app)
+            .get('/api/metrics/rollup-health')
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(403);
+        expect(res.body).toEqual({ error: 'Forbidden' });
+    });
+
+    test('denies authenticated users who are not in the admin allowlist', async () => {
+        const userBId = await getUserId(userB);
+        process.env.PULSEIQ_ADMIN_USER_IDS = userBId;
+
+        const res = await request(app)
+            .get('/api/metrics/rollup-health')
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(403);
+        expect(res.body).toEqual({ error: 'Forbidden' });
+    });
+
+    test('allows an authenticated user whose ID is in the admin allowlist', async () => {
+        const userAId = await getUserId(userA);
+        process.env.PULSEIQ_ADMIN_USER_IDS = userAId;
+
+        const res = await request(app)
+            .get('/api/metrics/rollup-health')
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body).toHaveProperty('checkedAt');
+        expect(res.body).toHaveProperty('jobs');
+        expect(Object.keys(res.body.jobs)).toEqual(
+            expect.arrayContaining(['5m', '1h', 'cleanup'])
+        );
+    });
+});

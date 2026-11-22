@@ -9,14 +9,42 @@
 
 describe('GET /api/metrics/rollup-health', () => {
     let user;
+    let regularUser;
+    let previousAdminIds;
 
     beforeAll(async () => {
         await resetDb();
         user = await createUser();
+        regularUser = await createUser();
+
+        // The route is admin-only. Set the admin list here so the test does
+        // not depend on a developer's local .env (CI has none).
+        previousAdminIds = process.env.PULSEIQ_ADMIN_USER_IDS;
+
+        const admin = await pool.query(
+            'SELECT id FROM users WHERE email = $1',
+            [user.email]
+        );
+
+        process.env.PULSEIQ_ADMIN_USER_IDS = String(admin.rows[0].id);
     });
 
     afterAll(async () => {
+        if (previousAdminIds === undefined) {
+            delete process.env.PULSEIQ_ADMIN_USER_IDS;
+        } else {
+            process.env.PULSEIQ_ADMIN_USER_IDS = previousAdminIds;
+        }
+
         await pool.end();
+    });
+
+    test('rejects a logged-in user who is not an admin', async () => {
+        const res = await request(app)
+            .get('/api/metrics/rollup-health')
+            .set(authHeader(regularUser.token));
+
+        expect(res.status).toBe(403);
     });
 
     test('rejects requests without authentication', async () => {

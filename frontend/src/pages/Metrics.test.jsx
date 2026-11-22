@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { apiFetch } from '../utils/apiFetch'
 import Metrics from './Metrics'
 class MockWebSocket {
@@ -43,9 +43,10 @@ vi.mock('../components/shared/hostSelector', () => ({
   default: () => null,
 }))
 
-vi.mock('../components/metrics/MetricSelector', () => ({
-  default: () => null,
-}))
+vi.mock('../components/metrics/MetricSelector', async () => {
+  const actual = await vi.importActual('../components/metrics/MetricSelector')
+  return { default: actual.default }
+})
 
 vi.mock('../components/metrics/StatsCards', () => ({
   default: () => null,
@@ -358,3 +359,48 @@ describe('Metrics page loading and empty states', () => {
   })
 })
 
+
+describe('Metrics custom date range validation', () => {
+  test('accepts an end time that became valid while the page was open', async () => {
+    const initialTime = Date.now()
+    let currentTime = initialTime
+
+    vi.spyOn(Date, 'now').mockImplementation(() => currentTime)
+
+    apiFetch.mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [] }),
+    })
+
+    render(<Metrics />)
+
+    // Simulate the page remaining open for one minute.
+    currentTime = initialTime + 60 * 1000
+
+    fireEvent.change(screen.getByLabelText('Time Range'), {
+      target: { value: 'custom' },
+    })
+
+    const toDateTimeLocal = (timestamp) => {
+      const date = new Date(timestamp)
+      return new Date(
+        timestamp - date.getTimezoneOffset() * 60 * 1000
+      ).toISOString().slice(0, 16)
+    }
+
+    const startTime = toDateTimeLocal(initialTime - 30 * 60 * 1000)
+    const endTime = toDateTimeLocal(initialTime + 30 * 1000)
+
+    fireEvent.change(screen.getByLabelText('Start date/time'), {
+      target: { value: startTime },
+    })
+
+    fireEvent.change(screen.getByLabelText('End date/time'), {
+      target: { value: endTime },
+    })
+
+    expect(
+      screen.queryByText('End time cannot be in the future.')
+    ).not.toBeInTheDocument()
+  })
+})

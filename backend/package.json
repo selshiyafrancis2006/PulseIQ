@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "test": "jest --runInBand",
-    "backfill:metrics": "node scripts/backfillMetricRollups.js"
+    "backfill:metrics": "node scripts/backfillMetricRollups.js",
+    "test:coverage": "jest --runInBand --coverage"
   },
   "keywords": [],
   "author": "",
