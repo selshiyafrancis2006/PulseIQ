@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-include=metric-delivery-queue.js --test-coverage-include=metric-queue-store.js --test-coverage-include=metric-rates.js --test-coverage-include=metric-selection.js --test-coverage-lines=85 --test-coverage-branches=75 --test-coverage-functions=80"
   },
   "keywords": [],
   "author": "",

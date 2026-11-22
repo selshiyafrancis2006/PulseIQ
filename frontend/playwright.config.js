@@ -1,4 +1,4 @@
-﻿import { defineConfig } from '@playwright/test';
+import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
     testDir: './e2e',
@@ -19,6 +19,7 @@ export default defineConfig({
             url: 'http://127.0.0.1:5051/',
             env: {
                 PORT: '5051',
+                CORS_ORIGINS: 'http://127.0.0.1:5174',
             },
             reuseExistingServer: false,
             timeout: 60000,

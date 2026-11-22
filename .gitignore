@@ -38,3 +38,8 @@ structure.txt
 .vscode/
 *-backup
 ws-test-replacement.txt
+*.pre-*-edit
+backup-*/
+*-failure.txt
+test-results/
+playwright-report/
