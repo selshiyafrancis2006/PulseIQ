@@ -438,6 +438,15 @@ ALTER TABLE notification_channels
         `);
 
                 await client.query(`
+            CREATE TABLE IF NOT EXISTS host_processes (
+                host_id INTEGER PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+                collected_at TIMESTAMPTZ NOT NULL,
+                processes JSONB NOT NULL DEFAULT '[]'::jsonb,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        `);
+
+        await client.query(`
             CREATE TABLE IF NOT EXISTS job_runs (
                 job_name TEXT PRIMARY KEY,
                 last_success_at TIMESTAMPTZ,

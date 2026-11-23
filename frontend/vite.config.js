@@ -11,6 +11,10 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.js'],
     include: ['src/**/*.test.{js,jsx}'],
+    // Slow machines spend minutes starting jsdom under coverage; the default
+    // 5s limit then fails tests that are not actually broken.
+    testTimeout: 20000,
+    hookTimeout: 20000,
     coverage: {
       provider: 'v8',
       include: [

@@ -1,4 +1,5 @@
 const express = require('express');
+const { getHostProcesses } = require('../services/hostProcesses.service');
 const { generateApiKey, hashApiKey } = require('../utils/apiKey');
 const router = express.Router();
 const pool = require('../config/db');
@@ -114,6 +115,27 @@ router.get('/', async (req, res) => {
 
     }
 
+});
+
+router.get('/:id/processes', async (req, res) => {
+    try {
+        const id = Number(req.params.id);
+
+        if (!Number.isInteger(id) || id <= 0) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        const snapshot = await getHostProcesses(id, req.user.id);
+
+        if (!snapshot) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        res.json(snapshot);
+    } catch (err) {
+        console.error('Failed to fetch host processes:', err);
+        res.status(500).json({ error: 'Failed to fetch processes' });
+    }
 });
 
 router.get('/:id', async (req, res) => {

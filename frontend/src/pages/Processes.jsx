@@ -1,41 +1,87 @@
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '../utils/apiFetch'
 import { API_BASE_URL } from '../config/api'
+import useHosts from '../hooks/useHosts'
+import HostSelector from '../components/shared/hostSelector'
+
+const REFRESH_INTERVAL_MS = 10000
+
+// Stable reference, so "no processes yet" doesn't change on every render
+const NO_PROCESSES = []
+
+// Agents send a new list every 30 seconds by default; past this the host has
+// probably stopped reporting.
+const STALE_AFTER_MS = 2 * 60 * 1000
 
 export default function Processes() {
 
+  const { hosts, selectedHostId, setSelectedHostId, loading: hostsLoading } = useHosts()
+
   const [processes, setProcesses] = useState([])
+  const [collectedAt, setCollectedAt] = useState(null)
+  const [loadedHostId, setLoadedHostId] = useState(null)
+  const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState('cpu')
   const [status, setStatus] = useState('all')
-  const [lastUpdated, setLastUpdated] = useState(null)
 
   useEffect(() => {
+
+    if (!selectedHostId) return
+
+    let ignore = false
 
     const fetchProcesses = async () => {
 
       try {
-        const res = await apiFetch(`${API_BASE_URL}/api/processes`)
+        const res = await apiFetch(
+          `${API_BASE_URL}/api/hosts/${selectedHostId}/processes`
+        )
+
+        if (!res.ok) {
+          throw new Error(`Request failed (${res.status})`)
+        }
+
         const data = await res.json()
-        setProcesses(data)
-        setLastUpdated(new Date())
+
+        if (ignore) return
+
+        setProcesses(Array.isArray(data.processes) ? data.processes : [])
+        setCollectedAt(data.collected_at ? new Date(data.collected_at) : null)
+        setLoadedHostId(selectedHostId)
+        setError('')
       }
       catch (err) {
+        if (ignore) return
+
         console.error(err)
+        setError('Could not load processes. Retrying\u2026')
       }
 
     }
 
     fetchProcesses()
 
-    const interval = setInterval(fetchProcesses, 5000)
-    return () => clearInterval(interval)
+    const interval = setInterval(fetchProcesses, REFRESH_INTERVAL_MS)
 
-  }, [])
+    return () => {
+      ignore = true
+      clearInterval(interval)
+    }
+
+  }, [selectedHostId])
+
+  // Never show the previous host's processes under a newly selected host
+  const hasLoadedSelectedHost = loadedHostId === selectedHostId
+  const visibleProcesses = hasLoadedSelectedHost ? processes : NO_PROCESSES
+  const visibleCollectedAt = hasLoadedSelectedHost ? collectedAt : null
+
+  const isStale = visibleCollectedAt !== null &&
+    Date.now() - visibleCollectedAt.getTime() > STALE_AFTER_MS
 
   const filteredProcesses = useMemo(() => {
 
-    let data = [...processes]
+    let data = [...visibleProcesses]
 
     if (search) {
   data = data.filter(process =>
@@ -59,16 +105,16 @@ export default function Processes() {
 
     return data
 
-  }, [processes, search, sortBy, status])
+  }, [visibleProcesses, search, sortBy, status])
 
-  const highestCpuPid = processes.length
-  ? processes.reduce((max, p) =>
+  const highestCpuPid = visibleProcesses.length
+  ? visibleProcesses.reduce((max, p) =>
       (p.cpu ?? 0) > (max.cpu ?? 0) ? p : max
     ).pid
   : null;
 
   const maxMemory = Math.max(
-  ...processes.map(process => process.memory ?? 0),
+  ...visibleProcesses.map(process => process.memory ?? 0),
   1
 );
 
@@ -85,15 +131,54 @@ export default function Processes() {
           </h1>
 
           <p className="text-gray-400 mt-1">
-            Monitor running processes in real time.
+            The busiest processes on the selected host, as reported by its agent.
           </p>
         </div>
 
-        <div className="text-emerald-400 text-sm">
-          ● Live
+        <div className="flex flex-col items-end gap-2">
+          <HostSelector
+            hosts={hosts}
+            selectedHostId={selectedHostId}
+            onChange={setSelectedHostId}
+          />
+
+          {visibleCollectedAt && (
+            <div
+              data-testid="processes-updated"
+              className={`text-sm ${isStale ? 'text-amber-400' : 'text-emerald-400'}`}
+            >
+              {isStale ? '● Last reported ' : '● Reported '}
+              {visibleCollectedAt.toLocaleTimeString()}
+            </div>
+          )}
         </div>
 
       </div>
+
+      {error && (
+        <div role="alert" className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+          {error}
+        </div>
+      )}
+
+      {!hostsLoading && hosts.length === 0 && (
+        <div className="mb-6 rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-4 py-6 text-center text-gray-400">
+          No hosts yet. Register a host and start its agent to see its processes.
+        </div>
+      )}
+
+      {hosts.length > 0 && hasLoadedSelectedHost && visibleCollectedAt === null && (
+        <div className="mb-6 rounded-lg border border-[#2a2a2a] bg-[#1a1a1a] px-4 py-6 text-center text-gray-400">
+          This host has not reported any processes yet. Update its agent and
+          make sure PROCESS_INTERVAL_MS is not set to 0.
+        </div>
+      )}
+
+      {isStale && (
+        <div className="mb-6 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-300">
+          This list is more than 2 minutes old. The host's agent may be offline.
+        </div>
+      )}
 
       {/* SUMMARY */}
 <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
@@ -104,7 +189,7 @@ export default function Processes() {
     </p>
 
     <p className="text-3xl font-bold text-emerald-400 mt-2">
-      {processes.length}
+      {visibleProcesses.length}
     </p>
   </div>
 
@@ -115,7 +200,7 @@ export default function Processes() {
 
     <p className="text-3xl font-bold text-emerald-400 mt-2">
       {
-        processes.filter(
+        visibleProcesses.filter(
           process => process.status === 'Running'
         ).length
       }
@@ -128,14 +213,14 @@ export default function Processes() {
   </p>
 
   <p className="text-3xl font-bold text-emerald-400 mt-2">
-    {processes.length
-      ? `${Math.max(...processes.map(p => p.memory ?? 0))} MB`
+    {visibleProcesses.length
+      ? `${Math.max(...visibleProcesses.map(p => p.memory ?? 0))} MB`
       : '0 MB'}
   </p>
 
   <p className="text-xs text-gray-500 mt-1">
-    {processes.length
-      ? processes.reduce((max, p) =>
+    {visibleProcesses.length
+      ? visibleProcesses.reduce((max, p) =>
           (p.memory ?? 0) > (max.memory ?? 0) ? p : max
         ).name
       : '--'}
@@ -148,14 +233,14 @@ export default function Processes() {
   </p>
 
   <p className="text-3xl font-bold text-emerald-400 mt-2">
-    {processes.length
-      ? `${Math.max(...processes.map(p => p.cpu ?? 0)).toFixed(1)}%`
+    {visibleProcesses.length
+      ? `${Math.max(...visibleProcesses.map(p => p.cpu ?? 0)).toFixed(1)}%`
       : '0%'}
   </p>
 
   <p className="text-xs text-gray-500 mt-1">
-    {processes.length
-      ? processes.reduce((max, p) =>
+    {visibleProcesses.length
+      ? visibleProcesses.reduce((max, p) =>
           (p.cpu ?? 0) > (max.cpu ?? 0) ? p : max
         ).name
       : '--'}
@@ -295,8 +380,8 @@ export default function Processes() {
 
       {/* Last Updated */}
       <td className="p-4 text-gray-400">
-        {lastUpdated
-          ? lastUpdated.toLocaleTimeString()
+        {visibleCollectedAt
+          ? visibleCollectedAt.toLocaleTimeString()
           : "--"}
       </td>
     </tr>
@@ -307,11 +392,11 @@ export default function Processes() {
         <div className="flex justify-between items-center px-4 py-3 border-t border-[#2a2a2a] text-sm text-gray-400">
 
   <span>
-    Showing {filteredProcesses.length} of {processes.length} processes
+    Showing {filteredProcesses.length} of {visibleProcesses.length} processes
   </span>
 
   <span>
-    Auto refresh every 5 seconds
+    Refreshes every 10 seconds; the agent reports about every 30 seconds
   </span>
 
 </div>

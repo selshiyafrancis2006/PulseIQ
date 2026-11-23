@@ -986,3 +986,12 @@ CREATE TABLE IF NOT EXISTS metric_rollup_alert_state (
     last_notified_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ===== Per-host process snapshot =====
+-- Latest top processes reported by each host's agent (one row per host).
+CREATE TABLE IF NOT EXISTS host_processes (
+    host_id INTEGER PRIMARY KEY REFERENCES hosts(id) ON DELETE CASCADE,
+    collected_at TIMESTAMPTZ NOT NULL,
+    processes JSONB NOT NULL DEFAULT '[]'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
