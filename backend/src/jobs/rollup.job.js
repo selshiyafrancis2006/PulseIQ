@@ -17,6 +17,7 @@ const {
     cleanupHistoricalData,
     RAW_RETENTION_DAYS
 } = require('../services/metricRollup.service');
+const { detectHourlyAnomalies } = require('../services/baseline.service');
 // Monitor results rollups and retention
 const {
     rollupRecentMonitorResults,
@@ -81,8 +82,13 @@ cron.schedule('*/5 * * * *', async () => {
 }, { noOverlap: true });
 
 // 1-hour rollup â€” runs at minute 2 of every hour
+const runHourlyRollupAndAnomalies = async (client) => {
+    await rollup1Hour(client);
+    await detectHourlyAnomalies(client);
+};
+
 cron.schedule('2 * * * *', async () => {
-    await runTrackedMetricRollup('1h', rollup1Hour, '1-hour');
+    await runTrackedMetricRollup('1h', runHourlyRollupAndAnomalies, '1-hour');
 }, { noOverlap: true });
 // Hourly monitor results rollup â€” runs at minute 5 of every hour
 cron.schedule('5 * * * *', async () => {

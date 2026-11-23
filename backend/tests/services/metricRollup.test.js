@@ -4,7 +4,7 @@ jest.mock('../../src/config/db', () => ({
 }));
 
 const pool = require('../../src/config/db');
-const { cleanupRawMetrics, cleanupHistoricalData, rollup5Minute, rollup1Hour, RAW_RETENTION_DAYS } = require('../../src/services/metricRollup.service');
+const { cleanupRawMetrics, cleanupHistoricalData, rollup5Minute, rollup1Hour, RAW_RETENTION_DAYS, ANOMALY_BUCKET_RETENTION_DAYS } = require('../../src/services/metricRollup.service');
 
 describe('cleanupRawMetrics', () => {
     beforeEach(() => {
@@ -50,7 +50,7 @@ describe('cleanupHistoricalData', () => {
     test('deletes expired rollups, anomalies, and traces using the intended retention windows', async () => {
         const result = await cleanupHistoricalData();
 
-        expect(pool.query).toHaveBeenCalledTimes(4);
+        expect(pool.query).toHaveBeenCalledTimes(5);
 
         const queries = pool.query.mock.calls.map(([sql]) => sql);
 
@@ -63,13 +63,16 @@ describe('cleanupHistoricalData', () => {
         expect(queries[2]).toContain('DELETE FROM anomalies');
         expect(queries[2]).toContain("INTERVAL '30 days'");
 
-        expect(queries[3]).toContain('DELETE FROM traces');
-        expect(queries[3]).toContain("INTERVAL '7 days'");
+        expect(queries[3]).toContain('DELETE FROM anomaly_detection_buckets');
+        expect(queries[3]).toContain(`INTERVAL '${ANOMALY_BUCKET_RETENTION_DAYS} days'`);
+        expect(queries[4]).toContain('DELETE FROM traces');
+        expect(queries[4]).toContain("INTERVAL '7 days'");
 
         expect(result).toEqual({
             '5-minute rollups': 0,
             'hourly rollups': 0,
             anomalies: 0,
+            'anomaly detection buckets': 0,
             traces: 0
         });
     });
@@ -79,6 +82,7 @@ describe('cleanupHistoricalData', () => {
             .mockResolvedValueOnce({ rowCount: 5 })
             .mockResolvedValueOnce({ rowCount: 2 })
             .mockResolvedValueOnce({ rowCount: 3 })
+            .mockResolvedValueOnce({ rowCount: 4 })
             .mockResolvedValueOnce({ rowCount: 7 });
 
         const result = await cleanupHistoricalData();
@@ -87,6 +91,7 @@ describe('cleanupHistoricalData', () => {
             '5-minute rollups': 5,
             'hourly rollups': 2,
             anomalies: 3,
+            'anomaly detection buckets': 4,
             traces: 7
         });
     });

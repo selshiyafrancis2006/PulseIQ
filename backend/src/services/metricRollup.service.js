@@ -1,4 +1,4 @@
-﻿const pool = require('../config/db');
+const pool = require('../config/db');
 
 function intFromEnv(name, fallback, min) {
     const value = Number.parseInt(process.env[name], 10);
@@ -16,6 +16,7 @@ const RAW_RETENTION_DAYS = intFromEnv('METRICS_RAW_RETENTION_DAYS', 3, 1);
 const ROLLUP_5M_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_5M_RETENTION_DAYS', 8, 8);
 const ROLLUP_1H_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_1H_RETENTION_DAYS', 90, 90);
 const ANOMALY_RETENTION_DAYS = intFromEnv('ANOMALY_RETENTION_DAYS', 30, 1);
+const ANOMALY_BUCKET_RETENTION_DAYS = intFromEnv('ANOMALY_BUCKET_RETENTION_DAYS', 8, 8);
 const TRACE_RETENTION_DAYS = intFromEnv('TRACE_RETENTION_DAYS', 7, 1);
 
 function validateRollupRange(range, bucketSeconds, retentionDays, label) {
@@ -240,6 +241,11 @@ async function cleanupHistoricalData() {
                   WHERE timestamp < NOW() - INTERVAL '${ANOMALY_RETENTION_DAYS} days'`
         },
         {
+            name: 'anomaly detection buckets',
+            sql: `DELETE FROM anomaly_detection_buckets
+                  WHERE processed_at < NOW() - INTERVAL '${ANOMALY_BUCKET_RETENTION_DAYS} days'`
+        },
+        {
             name: 'traces',
             sql: `DELETE FROM traces
                   WHERE timestamp < NOW() - INTERVAL '${TRACE_RETENTION_DAYS} days'`
@@ -294,6 +300,7 @@ module.exports = {
     ROLLUP_5M_RETENTION_DAYS,
     ROLLUP_1H_RETENTION_DAYS,
     ANOMALY_RETENTION_DAYS,
+    ANOMALY_BUCKET_RETENTION_DAYS,
     TRACE_RETENTION_DAYS
 };
 
@@ -305,6 +312,3 @@ async function cleanupCustomMetrics() {
 
     return result.rowCount;
 }
-
-
-

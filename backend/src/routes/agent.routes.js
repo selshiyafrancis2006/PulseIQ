@@ -3,7 +3,6 @@ const router = express.Router();
 const pool = require('../config/db');
 const authenticateAgent = require('../middleware/agentAuth.middleware');
 const { evaluateAlerts } = require('../services/alert.service');
-const { detectAnomalies } = require('../services/baseline.service');
 const { broadcastMetrics } = require('../services/websocket.service');
 const {
     sanitizeProcesses,
@@ -380,7 +379,6 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         // Run side effects only for newly inserted samples.
         const sideEffects = [
             ['evaluateAlerts', () => evaluateAlerts(savedMetric)],
-            ['detectAnomalies', () => detectAnomalies(savedMetric)],
             ['broadcastMetrics', () => broadcastMetrics(savedMetric)]
         ];
 

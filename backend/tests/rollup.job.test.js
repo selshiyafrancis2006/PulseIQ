@@ -1,4 +1,4 @@
-﻿jest.mock('node-cron', () => ({
+jest.mock('node-cron', () => ({
     schedule: jest.fn()
 }));
 
@@ -10,6 +10,10 @@ jest.mock('../src/services/metricRollup.service', () => ({
     cleanupCustomMetrics: jest.fn(),
     cleanupHistoricalData: jest.fn(),
     RAW_RETENTION_DAYS: 3
+}));
+
+jest.mock('../src/services/baseline.service', () => ({
+    detectHourlyAnomalies: jest.fn()
 }));
 
 jest.mock('../src/services/jobRunStore.service', () => ({
@@ -31,6 +35,7 @@ describe('metric rollup scheduler', () => {
     let withMetricRollupLock;
     let rollup5Minute;
     let rollup1Hour;
+    let detectHourlyAnomalies;
 
     beforeEach(() => {
         jest.resetModules();
@@ -46,6 +51,9 @@ describe('metric rollup scheduler', () => {
         withMetricRollupLock.mockImplementation(async (callback) => callback({ query: jest.fn() }));
         rollup5Minute.mockResolvedValue();
         rollup1Hour.mockResolvedValue();
+
+        ({ detectHourlyAnomalies } = require('../src/services/baseline.service'));
+        detectHourlyAnomalies.mockResolvedValue({ examined: 0, detected: 0 });
 
         require('../src/jobs/rollup.job');
     });
@@ -66,6 +74,36 @@ describe('metric rollup scheduler', () => {
         );
     });
 
+    test('runs hourly anomaly detection after rollup using the same transaction client', async () => {
+        let transactionClient;
+        withMetricRollupLock.mockImplementation(async (callback) => {
+            transactionClient = { query: jest.fn() };
+            return callback(transactionClient);
+        });
+
+        await cron.schedule.mock.calls[1][1]();
+
+        expect(rollup1Hour).toHaveBeenCalledTimes(1);
+        expect(detectHourlyAnomalies).toHaveBeenCalledTimes(1);
+        expect(detectHourlyAnomalies).toHaveBeenCalledWith(transactionClient);
+        expect(rollup1Hour.mock.invocationCallOrder[0]).toBeLessThan(
+            detectHourlyAnomalies.mock.invocationCallOrder[0]
+        );
+    });
+
+    test('does not run hourly anomaly detection when the hourly rollup fails', async () => {
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            rollup1Hour.mockRejectedValueOnce(new Error('Hourly rollup failed'));
+
+            await cron.schedule.mock.calls[1][1]();
+
+            expect(detectHourlyAnomalies).not.toHaveBeenCalled();
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
     test('waits for the 5-minute rollup before starting the hourly rollup', async () => {
         let finishFiveMinute;
 
@@ -155,6 +193,30 @@ describe('metric rollup scheduler', () => {
         }
     });
 
+    test('records hourly anomaly detection failures', async () => {
+        const { saveJobRun } = require('../src/services/jobRunStore.service');
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            detectHourlyAnomalies.mockRejectedValueOnce(
+                new Error('Hourly anomaly detection failed')
+            );
+
+            await cron.schedule.mock.calls[1][1]();
+
+            expect(rollup1Hour).toHaveBeenCalledTimes(1);
+            expect(detectHourlyAnomalies).toHaveBeenCalledTimes(1);
+            expect(saveJobRun).toHaveBeenCalledWith(
+                '1h',
+                expect.objectContaining({
+                    lastError: 'Hourly anomaly detection failed',
+                    consecutiveFailures: 1
+                })
+            );
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
     test('tracks the daily cleanup as one job that succeeds when every step succeeds', async () => {
         const { saveJobRun } = require('../src/services/jobRunStore.service');
         const cleanup = cron.schedule.mock.calls.find((call) => call[0] === '0 3 * * *')[1];

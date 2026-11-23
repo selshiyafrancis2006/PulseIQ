@@ -423,11 +423,27 @@ CREATE TABLE IF NOT EXISTS anomalies (
   baseline_mean FLOAT NOT NULL,
   baseline_stddev FLOAT NOT NULL,
   deviation_score FLOAT NOT NULL,
+  bucket_start TIMESTAMPTZ,
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp
   ON anomalies (host_id, timestamp DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_host_metric_bucket
+  ON anomalies (host_id, metric_name, bucket_start)
+  WHERE bucket_start IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS anomaly_detection_buckets (
+  host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  metric_name VARCHAR(50) NOT NULL,
+  bucket_start TIMESTAMPTZ NOT NULL,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (host_id, metric_name, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_anomaly_detection_buckets_processed
+  ON anomaly_detection_buckets (processed_at);
 
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';

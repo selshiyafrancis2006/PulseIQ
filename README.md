@@ -84,6 +84,13 @@ JWT_SECRET=your_jwt_secret
 PORT=5000
 ```
 
+### Prometheus Metrics Export
+
+PulseIQ exposes a Prometheus-compatible endpoint at `GET /metrics`.
+
+Configure `PROMETHEUS_METRICS_TOKEN` in the backend environment to enable it. Generate a strong secret using Node.js crypto.
+
+**Security:** This is a platform-wide credential. It exposes host status and metrics across ALL tenants. Keep it exclusively in trusted server-side infrastructure. Never expose it in frontend code, browser requests, or public repositories. If unset, the endpoint returns HTTP 503.
 ### Email Notifications (SMTP)
 
 Email notifications require SMTP configuration in `backend/.env`:
