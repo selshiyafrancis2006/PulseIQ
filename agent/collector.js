@@ -8,6 +8,7 @@ const os = require('os');
 const { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { createFileStore } = require('./metric-queue-store');
 const { toRateKBps } = require('./metric-rates');
+const { getMemoryUsagePercent } = require('./metric-memory');
 const { pickSystemDisk, pickNetworkStats } = require('./metric-selection');
 const { buildSystemCustomMetrics } = require('./custom-metrics');
 const { getMetricsEndpoint } = require('./metric-endpoint');
@@ -269,9 +270,7 @@ async function collectAndSend() {
 
         const cpu_usage = Number(cpuLoad.currentLoad.toFixed(2));
 
-        const memory_usage = Number(
-            ((mem.used / mem.total) * 100).toFixed(2)
-        );
+        const memory_usage = getMemoryUsagePercent(mem);
 
         const systemDisk = pickSystemDisk(disks);
         const network = pickNetworkStats(networkStats, preferredIface);
