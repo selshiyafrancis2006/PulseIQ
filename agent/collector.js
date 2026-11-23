@@ -1,19 +1,23 @@
-require('dotenv').config();
+﻿require('dotenv').config();
 
 const si = require('systeminformation');
 const axios = require('axios');
 const { randomUUID } = require('crypto');
 const path = require('path');
+const os = require('os');
 const { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { createFileStore } = require('./metric-queue-store');
 const { toRateKBps } = require('./metric-rates');
 const { pickSystemDisk, pickNetworkStats } = require('./metric-selection');
+const { buildSystemCustomMetrics } = require('./custom-metrics');
+const { getMetricsEndpoint } = require('./metric-endpoint');
 const { createProcessReporter } = require('./process-snapshot');
 const { version: AGENT_VERSION } = require('./package.json');
 
 const METADATA_INTERVAL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10000;
 const INGEST_PATH = '/api/agent/metrics';
+const CUSTOM_METRICS_PATH = '/api/agent/custom-metrics';
 const DEFAULT_QUEUE_MAX_SIZE = 100;
 const DEFAULT_PROCESS_INTERVAL_MS = 30000;
 const NETWORK_WARMUP_MS = 1000;
@@ -77,6 +81,11 @@ function loadConfig() {
         process.exit(1);
     }
 
+    const customMetricsEnabled = (process.env.CUSTOM_METRICS_ENABLED || 'false').trim().toLowerCase() === 'true';
+    const customMetricsUrl = metricsUrl
+        ? metricsUrl.replace(/\/api\/agent\/metrics$/, CUSTOM_METRICS_PATH)
+        : null;
+
     const interval = Number(process.env.INTERVAL_MS);
     const queueMaxSize = Number.parseInt(process.env.QUEUE_MAX_SIZE, 10);
 
@@ -99,6 +108,8 @@ function loadConfig() {
 
     return {
         metricsUrl,
+        customMetricsUrl,
+        customMetricsEnabled,
         processesUrl: metricsUrl ? metricsUrl.replace(/\/metrics$/, '/processes') : null,
         processIntervalMs,
         apiKey,
@@ -133,8 +144,10 @@ const metricQueue = new MetricDeliveryQueue({
         let response;
 
         try {
+            const endpoint = getMetricsEndpoint(payload, config);
+
             response = await axios.post(
-                config.metricsUrl,
+                endpoint,
                 payload,
                 {
                     headers: {
@@ -147,7 +160,7 @@ const metricQueue = new MetricDeliveryQueue({
         } catch (error) {
             if (error.response?.status === 401) {
                 console.error(
-                    '[PulseIQ Agent] API key rejected (401) — check that API_KEY matches the key shown when this host was registered'
+                    '[PulseIQ Agent] API key rejected (401) â€” check that API_KEY matches the key shown when this host was registered'
                 );
             }
 
@@ -159,7 +172,7 @@ const metricQueue = new MetricDeliveryQueue({
         }
 
         console.log(
-            `[${new Date().toISOString()}] Delivered metrics — host_id: ${response.data?.host_id ?? 'unknown'}${payload.metadata ? ' (+ metadata)' : ''}`
+            `[${new Date().toISOString()}] Delivered metrics â€” host_id: ${response.data?.host_id ?? 'unknown'}${payload.metadata ? ' (+ metadata)' : ''}`
         );
     }
 });
@@ -293,7 +306,35 @@ async function collectAndSend() {
             }
         }
 
+        // Always enqueue the original five fixed metrics first.
         metricQueue.enqueue(payload);
+
+        // Custom dimensions use a separate endpoint and payload.
+        // Their failure must never interrupt fixed-metric collection.
+        if (config.customMetricsEnabled) {
+            try {
+                const customMetrics = buildSystemCustomMetrics({
+                    disks,
+                    networkStats,
+                    loadAverage: process.platform === 'win32'
+                        ? null
+                        : os.loadavg()
+                });
+
+                if (customMetrics.length > 0) {
+                    metricQueue.enqueue({
+                        sample_id: payload.sample_id,
+                        collected_at: collectedAt,
+                        metrics: customMetrics
+                    });
+                }
+            } catch (customMetricsError) {
+                console.warn(
+                    `[${new Date().toISOString()}] Custom metric collection failed:`,
+                    customMetricsError.message
+                );
+            }
+        }
 
     } catch (err) {
         console.error(
@@ -310,7 +351,7 @@ async function shutdown(signal) {
     shuttingDown = true;
 
     console.log(
-        `[PulseIQ Agent] ${signal} received — stopping and flushing ${metricQueue.size} queued sample(s)`
+        `[PulseIQ Agent] ${signal} received â€” stopping and flushing ${metricQueue.size} queued sample(s)`
     );
 
     clearInterval(collectTimer);
@@ -350,12 +391,12 @@ async function shutdown(signal) {
 
 async function start() {
     console.log(
-        `PulseIQ Agent v${AGENT_VERSION} starting — sending to ${config.metricsUrl} every ${config.intervalMs}ms (queue holds up to ${config.queueMaxSize} samples${config.queueFile ? `, saved to ${config.queueFile}` : ', memory only'})`
+        `PulseIQ Agent v${AGENT_VERSION} starting â€” sending to ${config.metricsUrl} every ${config.intervalMs}ms (queue holds up to ${config.queueMaxSize} samples${config.queueFile ? `, saved to ${config.queueFile}` : ', memory only'})`
     );
 
     if (config.insecureRemote) {
         console.warn(
-            'WARNING: BACKEND_URL uses plain http:// to a remote host — your API key and metrics are sent unencrypted. Use https:// in production.'
+            'WARNING: BACKEND_URL uses plain http:// to a remote host â€” your API key and metrics are sent unencrypted. Use https:// in production.'
         );
     }
 
@@ -411,3 +452,5 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 start();
+
+

@@ -13,6 +13,7 @@ const {
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,
+    cleanupCustomMetrics,
     cleanupHistoricalData,
     RAW_RETENTION_DAYS
 } = require('../services/metricRollup.service');
@@ -110,6 +111,15 @@ cron.schedule('0 3 * * *', async () => {
     }
 
     try {
+        const deletedCustomMetrics = await cleanupCustomMetrics();
+        console.log(
+            `Retention cleanup: removed ${deletedCustomMetrics} custom metric rows older than ${RAW_RETENTION_DAYS} days`
+        );
+    } catch (err) {
+        firstError = firstError || err;
+        console.error('Custom metric retention cleanup error:', err);
+    }
+    try {
         const deletedCounts = await cleanupHistoricalData();
         console.log('Historical retention cleanup complete:', deletedCounts);
     } catch (err) {
@@ -159,5 +169,6 @@ module.exports = {
     ensureRollupHealthReady,
     runRollupAlertCheck
 };
+
 
 

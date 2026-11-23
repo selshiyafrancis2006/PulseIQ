@@ -1,4 +1,4 @@
-const {
+﻿const {
     app,
     pool,
     request,
@@ -10,7 +10,8 @@ const {
 const {
     rollup5Minute,
     rollup1Hour,
-    cleanupRawMetrics
+    cleanupRawMetrics,
+    cleanupCustomMetrics
 } = require('../src/services/metricRollup.service');
 
 let hostA;
@@ -360,6 +361,42 @@ describe('rollup1Hour', () => {
     });
 });
 
+describe('cleanupCustomMetrics', () => {
+    test('deletes custom metric rows older than 3 days and keeps newer ones', async () => {
+        const sampleIds = [
+            '11111111-1111-4111-8111-111111111111',
+            '22222222-2222-4222-8222-222222222222',
+            '33333333-3333-4333-8333-333333333333'
+        ];
+
+        await pool.query(
+            `INSERT INTO custom_metrics
+                (host_id, sample_id, metric_name, value, unit, tags, collected_at)
+             VALUES
+                ($1, $2, 'disk_usage_percent', 70, '%', '{"mount":"/"}',
+                    NOW() - INTERVAL '4 days'),
+                ($1, $3, 'disk_usage_percent', 80, '%', '{"mount":"/data"}',
+                    NOW() - INTERVAL '3 days 12 hours'),
+                ($1, $4, 'disk_usage_percent', 60, '%', '{"mount":"/"}',
+                    NOW() - INTERVAL '2 days')`,
+            [hostA, ...sampleIds]
+        );
+
+        const deleted = await cleanupCustomMetrics();
+
+        expect(deleted).toBe(2);
+
+        const remaining = await pool.query(
+            `SELECT value
+             FROM custom_metrics
+             WHERE host_id = $1
+             ORDER BY value`,
+            [hostA]
+        );
+
+        expect(remaining.rows.map((row) => Number(row.value))).toEqual([60]);
+    });
+});
 describe('cleanupRawMetrics', () => {
     test('deletes raw rows older than 3 days and keeps newer ones', async () => {
         const now = Date.now();
@@ -497,3 +534,4 @@ describe('rollup windows: catch-up and edge alignment', () => {
     });
 });
 // ===== end Step 2 =====
+

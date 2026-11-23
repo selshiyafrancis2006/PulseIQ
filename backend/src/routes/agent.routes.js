@@ -1,4 +1,4 @@
-const express = require('express');
+﻿const express = require('express');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateAgent = require('../middleware/agentAuth.middleware');
@@ -10,6 +10,8 @@ const {
     resolveCollectedAt,
     saveHostProcesses
 } = require('../services/hostProcesses.service');
+const { validateCustomMetrics } = require('../services/customMetrics.service');
+const { saveCustomMetrics } = require('../services/customMetricsIngestion.service');
 
 function cleanString(value, max = 255) {
     if (typeof value !== 'string') return null;
@@ -401,6 +403,31 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
         });
     }
 });
+router.post('/custom-metrics', authenticateAgent, async (req, res) => {
+    try {
+        const validation = validateCustomMetrics(req.body);
+
+        if (validation.error) {
+            return res.status(400).json({ error: validation.error });
+        }
+
+        const sample = validation.value;
+        const result = await saveCustomMetrics(req.agentHost.id, sample);
+
+        return res.status(result.inserted > 0 ? 201 : 200).json({
+            sample_id: sample.sample_id,
+            inserted: result.inserted,
+            duplicates: result.duplicates,
+            observations: result.observations
+        });
+    } catch (err) {
+        console.error('Agent custom metrics ingestion error:', err);
+
+        return res.status(500).json({
+            error: 'Failed to save custom metrics'
+        });
+    }
+});
 // Latest process snapshot of this host. Replaces the previous one; a late
 // retry of an older snapshot is accepted but ignored.
 router.post('/processes', authenticateAgent, async (req, res) => {
@@ -506,3 +533,4 @@ router.post('/traces', authenticateAgent, async (req, res) => {
 });
 
 module.exports = router;
+

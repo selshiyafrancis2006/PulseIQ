@@ -1,4 +1,4 @@
-const {
+﻿const {
     app,
     pool,
     request,
@@ -99,7 +99,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
-    await pool.query('TRUNCATE metrics, metric_rollups_5m, metric_rollups_1h RESTART IDENTITY');
+    await pool.query('TRUNCATE custom_metrics, metrics, metric_rollups_5m, metric_rollups_1h RESTART IDENTITY');
 });
 
 describe('GET /api/metrics - access and validation', () => {
@@ -1192,3 +1192,226 @@ describe('GET /api/metrics/rollup-health - admin access', () => {
         );
     });
 });
+
+
+describe('GET /api/metrics/custom - access and validation', () => {
+    const buildQuery = (overrides = {}) => {
+        const to = new Date(Date.now() - 1000);
+        const from = new Date(to.getTime() - 60 * 60 * 1000);
+
+        return new URLSearchParams({
+            host_id: String(hostA),
+            metric_name: 'disk.usage',
+            from: from.toISOString(),
+            to: to.toISOString(),
+            step: '5m',
+            agg: 'avg',
+            ...overrides
+        }).toString();
+    };
+
+    test('rejects a request without a token', async () => {
+        const res = await request(app)
+            .get('/api/metrics/custom?' + buildQuery());
+
+        expect(res.status).toBe(401);
+    });
+
+    test.each([
+        'host_id',
+        'metric_name',
+        'from',
+        'to',
+        'step',
+        'agg'
+    ])('returns 400 when %s is missing', async (parameter) => {
+        const params = new URLSearchParams(buildQuery());
+        params.delete(parameter);
+
+        const res = await request(app)
+            .get('/api/metrics/custom?' + params.toString())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test.each([
+        ['invalid host ID', { host_id: '1.5' }],
+        ['invalid metric name', { metric_name: 'disk usage; DROP TABLE' }],
+        ['invalid calendar date', { from: '2026-02-30T10:00:00.000Z' }],
+        ['invalid timestamp', { to: 'not-a-date' }],
+        ['future end timestamp', {
+            to: new Date(Date.now() + 60 * 1000).toISOString()
+        }],
+        ['unsupported step', { step: 'banana' }],
+        ['unsupported aggregation', { agg: 'median' }]
+    ])('returns 400 for %s', async (_label, overrides) => {
+        const res = await request(app)
+            .get('/api/metrics/custom?' + buildQuery(overrides))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('rejects a query outside custom metric retention', async () => {
+        const to = new Date(Date.now() - 1000);
+        const from = new Date(
+            to.getTime() - (RAW_RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000
+        );
+
+        const res = await request(app)
+            .get('/api/metrics/custom?' + buildQuery({
+                from: from.toISOString()
+            }))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('does not allow access to another user host', async () => {
+        const foreignHost = await registerHost(
+            userB.token,
+            'custom-metrics-foreign-host'
+        );
+
+        const res = await request(app)
+            .get('/api/metrics/custom?' + buildQuery({
+                host_id: String(foreignHost)
+            }))
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(404);
+    });
+
+    test('returns an empty data array when no matching metrics exist', async () => {
+        const res = await request(app)
+            .get('/api/metrics/custom?' + buildQuery())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toEqual([]);
+    });
+
+    test('aggregates matching custom metric samples', async () => {
+        const sampleId1 = '11111111-1111-4111-8111-111111111111';
+        const sampleId2 = '22222222-2222-4222-8222-222222222222';
+
+        await pool.query(
+            `INSERT INTO custom_metrics
+                (host_id, sample_id, metric_name, value, unit, tags, collected_at)
+             VALUES
+                ($1, $2::uuid, 'disk.usage', 40, 'percent',
+                 '{"mount":"/"}'::jsonb, (date_bin('5 minutes', NOW(), TIMESTAMPTZ '1970-01-01 00:00:00+00') - INTERVAL '30 seconds')),
+                ($1, $3::uuid, 'disk.usage', 60, 'percent',
+                 '{"mount":"/"}'::jsonb, (date_bin('5 minutes', NOW(), TIMESTAMPTZ '1970-01-01 00:00:00+00') - INTERVAL '10 seconds'))`,
+            [hostA, sampleId1, sampleId2]
+        );
+
+        const res = await request(app)
+            .get('/api/metrics/custom?' + buildQuery())
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.data).toHaveLength(1);
+        expect(Number(res.body.data[0].value)).toBe(50);
+        expect(res.body.data[0].sample_count).toBe(2);
+        expect(res.body.data[0].tags).toEqual({ mount: '/' });
+        expect(res.body.aggregation).toBe('avg');
+    });
+});
+
+
+describe('GET /api/metrics/custom/names - access and validation', () => {
+    test('rejects a request without authentication', async () => {
+        const res = await request(app)
+            .get(`/api/metrics/custom/names?host_id=${hostA}`);
+
+        expect(res.status).toBe(401);
+    });
+
+    test.each([
+        ['missing', ''],
+        ['non-numeric', 'abc'],
+        ['zero', '0'],
+        ['negative', '-1'],
+        ['decimal', '1.5']
+    ])('rejects %s host ID', async (_label, hostId) => {
+        const query = hostId
+            ? `?host_id=${hostId}`
+            : '';
+
+        const res = await request(app)
+            .get(`/api/metrics/custom/names${query}`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('does not expose metric names belonging to another user host', async () => {
+        const foreignHost = await registerHost(
+            userB.token,
+            'custom-names-foreign-host'
+        );
+
+        const res = await request(app)
+            .get(`/api/metrics/custom/names?host_id=${foreignHost}`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(404);
+    });
+
+    test('returns an empty metrics array when the host has no custom metrics', async () => {
+        const res = await request(app)
+            .get(`/api/metrics/custom/names?host_id=${hostA}`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.host_id).toBe(hostA);
+        expect(res.body.metrics).toEqual([]);
+    });
+
+    test('returns distinct custom metric names, units and sample counts', async () => {
+        const sampleIds = [
+            '33333333-3333-4333-8333-333333333333',
+            '44444444-4444-4444-8444-444444444444',
+            '55555555-5555-4555-8555-555555555555'
+        ];
+
+        await pool.query(
+            `INSERT INTO custom_metrics
+                (host_id, sample_id, metric_name, value, unit, tags, collected_at)
+             VALUES
+                ($1, $2::uuid, 'disk.usage', 40, 'percent',
+                 '{"mount":"/"}'::jsonb, (date_bin('5 minutes', NOW(), TIMESTAMPTZ '1970-01-01 00:00:00+00') - INTERVAL '30 seconds')),
+                ($1, $3::uuid, 'disk.usage', 60, 'percent',
+                 '{"mount":"/"}'::jsonb, (date_bin('5 minutes', NOW(), TIMESTAMPTZ '1970-01-01 00:00:00+00') - INTERVAL '10 seconds')),
+                ($1, $4::uuid, 'system.load', 1.5, 'load',
+                 '{}'::jsonb, NOW() - INTERVAL '30 seconds')`,
+            [hostA, ...sampleIds]
+        );
+
+        const res = await request(app)
+            .get(`/api/metrics/custom/names?host_id=${hostA}`)
+            .set(authHeader(userA.token));
+
+        expect(res.status).toBe(200);
+        expect(res.body.host_id).toBe(hostA);
+        expect(res.body.metrics).toHaveLength(2);
+
+        expect(res.body.metrics).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    metric_name: 'disk.usage',
+                    unit: 'percent',
+                    sample_count: 2
+                }),
+                expect.objectContaining({
+                    metric_name: 'system.load',
+                    unit: 'load',
+                    sample_count: 1
+                })
+            ])
+        );
+    });
+});
+

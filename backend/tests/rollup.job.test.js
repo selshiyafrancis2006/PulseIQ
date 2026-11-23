@@ -7,6 +7,7 @@ jest.mock('../src/services/metricRollup.service', () => ({
     rollup5Minute: jest.fn(),
     rollup1Hour: jest.fn(),
     cleanupRawMetrics: jest.fn(),
+    cleanupCustomMetrics: jest.fn(),
     cleanupHistoricalData: jest.fn(),
     RAW_RETENTION_DAYS: 3
 }));
@@ -169,6 +170,39 @@ describe('metric rollup scheduler', () => {
         );
     });
 
+    test('custom metric cleanup runs and does not block later cleanup steps when it fails', async () => {
+        const { saveJobRun } = require('../src/services/jobRunStore.service');
+        const { cleanupRawMetrics, cleanupCustomMetrics, cleanupHistoricalData } =
+            require('../src/services/metricRollup.service');
+        const { cleanupMonitorResults } =
+            require('../src/services/monitorRollup.service');
+        const errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+        try {
+            cleanupCustomMetrics.mockRejectedValueOnce(
+                new Error('Custom metric cleanup failed')
+            );
+
+            const cleanup = cron.schedule.mock.calls.find((call) => call[0] === '0 3 * * *')[1];
+
+            await cleanup();
+
+            expect(cleanupRawMetrics).toHaveBeenCalled();
+            expect(cleanupCustomMetrics).toHaveBeenCalled();
+            expect(cleanupHistoricalData).toHaveBeenCalled();
+            expect(cleanupMonitorResults).toHaveBeenCalled();
+
+            expect(saveJobRun).toHaveBeenCalledWith(
+                'cleanup',
+                expect.objectContaining({
+                    lastError: 'Custom metric cleanup failed',
+                    consecutiveFailures: 1
+                })
+            );
+        } finally {
+            errorSpy.mockRestore();
+        }
+    });
     test('a failing cleanup step still runs the other steps and records a failure', async () => {
         const { saveJobRun } = require('../src/services/jobRunStore.service');
         const { cleanupRawMetrics, cleanupHistoricalData } =
@@ -422,7 +456,9 @@ describe('metric rollup scheduler - remaining job paths', () => {
 
         cleanupHistoricalData.mockRejectedValueOnce(new Error('Historical cleanup failed'));
 
-        await findJob('0 3 * * *')();
+        const cleanup = cron.schedule.mock.calls.find((call) => call[0] === '0 3 * * *')[1];
+
+            await cleanup();
 
         expect(cleanupRawMetrics).toHaveBeenCalled();
         expect(cleanupMonitorResults).toHaveBeenCalled();
@@ -442,7 +478,9 @@ describe('metric rollup scheduler - remaining job paths', () => {
 
         cleanupMonitorResults.mockRejectedValueOnce(new Error('Monitor cleanup failed'));
 
-        await findJob('0 3 * * *')();
+        const cleanup = cron.schedule.mock.calls.find((call) => call[0] === '0 3 * * *')[1];
+
+            await cleanup();
 
         expect(saveJobRun).toHaveBeenCalledWith(
             'cleanup',
@@ -464,7 +502,9 @@ describe('metric rollup scheduler - remaining job paths', () => {
         cleanupHistoricalData.mockRejectedValueOnce(new Error('second failure'));
         cleanupMonitorResults.mockRejectedValueOnce(new Error('third failure'));
 
-        await findJob('0 3 * * *')();
+        const cleanup = cron.schedule.mock.calls.find((call) => call[0] === '0 3 * * *')[1];
+
+            await cleanup();
 
         expect(saveJobRun).toHaveBeenCalledWith(
             'cleanup',
@@ -501,3 +541,5 @@ describe('metric rollup scheduler - remaining job paths', () => {
         expect(loadJobRunsStrict).toHaveBeenCalledTimes(1);
     });
 });
+
+

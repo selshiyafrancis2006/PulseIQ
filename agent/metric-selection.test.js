@@ -89,3 +89,39 @@ test('returns null when there is nothing but loopback or bad data', () => {
     assert.equal(pickNetworkStats(null), null);
     assert.equal(pickNetworkStats([{ iface: 'lo' }, { rx_bytes: 1 }]), null);
 });
+test('lists all usable disks and excludes malformed or empty disks', () => {
+    const { listUsableDisks } = require('./metric-selection');
+
+    const disks = listUsableDisks([
+        { mount: '/', size: 1000, use: 40 },
+        { mount: '/data', size: 9000, use: 80 },
+        { mount: '/empty', size: 0, use: 0 },
+        { mount: '/invalid', size: 100, use: NaN },
+        null
+    ]);
+
+    assert.deepEqual(disks.map((disk) => disk.mount), ['/', '/data']);
+});
+
+test('lists all usable non-loopback network interfaces', () => {
+    const { listUsableNetworkStats } = require('./metric-selection');
+
+    const stats = listUsableNetworkStats([
+        { iface: 'lo', operstate: 'up' },
+        { iface: 'eth0', operstate: 'up' },
+        { iface: 'wlan0', operstate: 'down' },
+        { iface: 'Loopback Pseudo-Interface 1', operstate: 'up' },
+        { iface: '' },
+        null,
+        { rx_bytes: 100 }
+    ]);
+
+    assert.deepEqual(stats.map((entry) => entry.iface), ['eth0', 'wlan0']);
+});
+
+test('returns empty lists when disk or network input is not an array', () => {
+    const { listUsableDisks, listUsableNetworkStats } = require('./metric-selection');
+
+    assert.deepEqual(listUsableDisks(null), []);
+    assert.deepEqual(listUsableNetworkStats(undefined), []);
+});

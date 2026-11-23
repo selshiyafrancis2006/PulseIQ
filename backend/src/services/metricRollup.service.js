@@ -1,4 +1,4 @@
-const pool = require('../config/db');
+﻿const pool = require('../config/db');
 
 function intFromEnv(name, fallback, min) {
     const value = Number.parseInt(process.env[name], 10);
@@ -288,6 +288,7 @@ module.exports = {
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,
+    cleanupCustomMetrics,
     cleanupHistoricalData,
     RAW_RETENTION_DAYS,
     ROLLUP_5M_RETENTION_DAYS,
@@ -295,3 +296,15 @@ module.exports = {
     ANOMALY_RETENTION_DAYS,
     TRACE_RETENTION_DAYS
 };
+
+async function cleanupCustomMetrics() {
+    const result = await pool.query(
+        `DELETE FROM custom_metrics
+         WHERE collected_at < NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'`
+    );
+
+    return result.rowCount;
+}
+
+
+

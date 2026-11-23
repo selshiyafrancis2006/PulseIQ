@@ -1,10 +1,45 @@
-
+﻿
 jest.mock('../../src/config/db', () => ({
     query: jest.fn()
 }));
 
 const pool = require('../../src/config/db');
-const { cleanupHistoricalData, rollup5Minute, rollup1Hour } = require('../../src/services/metricRollup.service');
+const { cleanupRawMetrics, cleanupHistoricalData, rollup5Minute, rollup1Hour, RAW_RETENTION_DAYS } = require('../../src/services/metricRollup.service');
+
+describe('cleanupRawMetrics', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        pool.query.mockResolvedValue({ rowCount: 0 });
+    });
+
+    test('deletes raw metrics older than the configured retention window', async () => {
+        const result = await cleanupRawMetrics();
+
+        expect(pool.query).toHaveBeenCalledTimes(1);
+
+        const [sql] = pool.query.mock.calls[0];
+
+        expect(sql).toContain('DELETE FROM metrics');
+        expect(sql).toContain('COALESCE(collected_at, timestamp)');
+        expect(sql).toContain(`INTERVAL '${RAW_RETENTION_DAYS} days'`);
+
+        expect(result).toBe(0);
+    });
+
+    test('returns the number of deleted raw metric rows', async () => {
+        pool.query.mockResolvedValueOnce({ rowCount: 12 });
+
+        const result = await cleanupRawMetrics();
+
+        expect(result).toBe(12);
+    });
+
+    test('propagates database errors', async () => {
+        pool.query.mockRejectedValueOnce(new Error('Database unavailable'));
+
+        await expect(cleanupRawMetrics()).rejects.toThrow('Database unavailable');
+    });
+});
 
 describe('cleanupHistoricalData', () => {
     beforeEach(() => {
