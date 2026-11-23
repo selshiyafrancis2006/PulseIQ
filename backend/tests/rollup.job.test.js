@@ -360,3 +360,144 @@ describe('metric rollup alert scheduler', () => {
         }
     });
 });
+
+
+describe('metric rollup scheduler - remaining job paths', () => {
+    let cron;
+    let errorSpy;
+    let logSpy;
+
+    const findJob = (expression) =>
+        cron.schedule.mock.calls.find((call) => call[0] === expression)[1];
+
+    beforeEach(() => {
+        jest.resetModules();
+
+        errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+        logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+        cron = require('node-cron');
+        require('../src/jobs/rollup.job');
+    });
+
+    afterEach(() => {
+        errorSpy.mockRestore();
+        logSpy.mockRestore();
+    });
+
+    test('hourly monitor rollup reports how many buckets it upserted', async () => {
+        const { rollupRecentMonitorResults } =
+            require('../src/services/monitorRollup.service');
+
+        rollupRecentMonitorResults.mockResolvedValueOnce(7);
+
+        await findJob('5 * * * *')();
+
+        expect(rollupRecentMonitorResults).toHaveBeenCalledWith(3);
+        expect(logSpy).toHaveBeenCalledWith(
+            'Monitor rollup complete: 7 hourly buckets upserted'
+        );
+    });
+
+    test('hourly monitor rollup logs a failure instead of throwing', async () => {
+        const { rollupRecentMonitorResults } =
+            require('../src/services/monitorRollup.service');
+
+        rollupRecentMonitorResults.mockRejectedValueOnce(new Error('monitor db down'));
+
+        await expect(findJob('5 * * * *')()).resolves.toBeUndefined();
+
+        expect(errorSpy).toHaveBeenCalledWith(
+            'Monitor rollup error:',
+            expect.objectContaining({ message: 'monitor db down' })
+        );
+    });
+
+    test('daily cleanup records a failure when only the historical cleanup fails', async () => {
+        const { saveJobRun } = require('../src/services/jobRunStore.service');
+        const { cleanupRawMetrics, cleanupHistoricalData } =
+            require('../src/services/metricRollup.service');
+        const { cleanupMonitorResults } =
+            require('../src/services/monitorRollup.service');
+
+        cleanupHistoricalData.mockRejectedValueOnce(new Error('Historical cleanup failed'));
+
+        await findJob('0 3 * * *')();
+
+        expect(cleanupRawMetrics).toHaveBeenCalled();
+        expect(cleanupMonitorResults).toHaveBeenCalled();
+        expect(saveJobRun).toHaveBeenCalledWith(
+            'cleanup',
+            expect.objectContaining({
+                lastError: 'Historical cleanup failed',
+                consecutiveFailures: 1
+            })
+        );
+    });
+
+    test('daily cleanup records a failure when only the monitor cleanup fails', async () => {
+        const { saveJobRun } = require('../src/services/jobRunStore.service');
+        const { cleanupMonitorResults } =
+            require('../src/services/monitorRollup.service');
+
+        cleanupMonitorResults.mockRejectedValueOnce(new Error('Monitor cleanup failed'));
+
+        await findJob('0 3 * * *')();
+
+        expect(saveJobRun).toHaveBeenCalledWith(
+            'cleanup',
+            expect.objectContaining({
+                lastError: 'Monitor cleanup failed',
+                consecutiveFailures: 1
+            })
+        );
+    });
+
+    test('daily cleanup reports the first error when several steps fail', async () => {
+        const { saveJobRun } = require('../src/services/jobRunStore.service');
+        const { cleanupRawMetrics, cleanupHistoricalData } =
+            require('../src/services/metricRollup.service');
+        const { cleanupMonitorResults } =
+            require('../src/services/monitorRollup.service');
+
+        cleanupRawMetrics.mockRejectedValueOnce(new Error('first failure'));
+        cleanupHistoricalData.mockRejectedValueOnce(new Error('second failure'));
+        cleanupMonitorResults.mockRejectedValueOnce(new Error('third failure'));
+
+        await findJob('0 3 * * *')();
+
+        expect(saveJobRun).toHaveBeenCalledWith(
+            'cleanup',
+            expect.objectContaining({
+                lastError: 'first failure',
+                consecutiveFailures: 1
+            })
+        );
+    });
+
+    test('the alert check logs an error instead of throwing when alert processing fails', async () => {
+        const { processRollupAlerts } =
+            require('../src/services/metricRollupAlert.service');
+        const { runRollupAlertCheck } = require('../src/jobs/rollup.job');
+
+        processRollupAlerts.mockRejectedValueOnce(new Error('notification outage'));
+
+        await expect(runRollupAlertCheck()).resolves.toBeUndefined();
+
+        expect(errorSpy).toHaveBeenCalledWith(
+            'Metric rollup alert check failed:',
+            expect.objectContaining({ message: 'notification outage' })
+        );
+    });
+
+    test('saved job state is loaded once and reused after it is ready', async () => {
+        const { loadJobRunsStrict } = require('../src/services/jobRunStore.service');
+        const { ensureRollupHealthReady } = require('../src/jobs/rollup.job');
+
+        await expect(ensureRollupHealthReady()).resolves.toBe(true);
+        await expect(ensureRollupHealthReady()).resolves.toBe(true);
+        await expect(ensureRollupHealthReady()).resolves.toBe(true);
+
+        expect(loadJobRunsStrict).toHaveBeenCalledTimes(1);
+    });
+});
