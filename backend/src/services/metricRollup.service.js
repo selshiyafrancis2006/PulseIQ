@@ -1,4 +1,19 @@
 const pool = require('../config/db');
+const { METRIC_NAMES } = require('../config/metricRegistry');
+
+// Rollup SQL is generated from the shared metric registry, so a built-in
+// metric is added in one place (shared/metrics.json) plus its table columns.
+const ROLLUP_COLUMNS = METRIC_NAMES.flatMap(name => [`${name}_avg`, `${name}_min`, `${name}_max`]);
+const ROLLUP_COLUMN_LIST = ROLLUP_COLUMNS.join(',\n            ');
+const RAW_AGGREGATES = METRIC_NAMES
+    .map(name => `AVG(m.${name}), MIN(m.${name}), MAX(m.${name})`)
+    .join(',\n            ');
+const HOURLY_AGGREGATES = METRIC_NAMES
+    .map(name => `SUM(${name}_avg * sample_count) / NULLIF(SUM(sample_count), 0),\n            MIN(${name}_min), MAX(${name}_max)`)
+    .join(',\n            ');
+const CONFLICT_UPDATES = ROLLUP_COLUMNS
+    .map(column => `${column} = EXCLUDED.${column}`)
+    .join(',\n            ');
 
 function intFromEnv(name, fallback, min) {
     const value = Number.parseInt(process.env[name], 10);
@@ -80,11 +95,7 @@ async function rollup5Minute(client = pool, requestedRange = null) {
     await client.query(`
         INSERT INTO metric_rollups_5m (
             host_id, bucket_start,
-            cpu_usage_avg, cpu_usage_min, cpu_usage_max,
-            memory_usage_avg, memory_usage_min, memory_usage_max,
-            disk_usage_avg, disk_usage_min, disk_usage_max,
-            network_in_avg, network_in_min, network_in_max,
-            network_out_avg, network_out_min, network_out_max,
+            ${ROLLUP_COLUMN_LIST},
             sample_count
         )
         WITH latest_rollups AS MATERIALIZED (
@@ -95,11 +106,7 @@ async function rollup5Minute(client = pool, requestedRange = null) {
         SELECT
             m.host_id,
             to_timestamp(floor(extract(epoch FROM COALESCE(m.collected_at, m.timestamp)) / 300) * 300) AS bucket_start,
-            AVG(m.cpu_usage), MIN(m.cpu_usage), MAX(m.cpu_usage),
-            AVG(m.memory_usage), MIN(m.memory_usage), MAX(m.memory_usage),
-            AVG(m.disk_usage), MIN(m.disk_usage), MAX(m.disk_usage),
-            AVG(m.network_in), MIN(m.network_in), MAX(m.network_in),
-            AVG(m.network_out), MIN(m.network_out), MAX(m.network_out),
+            ${RAW_AGGREGATES},
             COUNT(*)
         FROM metrics m
         LEFT JOIN latest_rollups lr ON lr.host_id = m.host_id
@@ -128,21 +135,7 @@ async function rollup5Minute(client = pool, requestedRange = null) {
         )
         GROUP BY m.host_id, bucket_start
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
-            cpu_usage_avg = EXCLUDED.cpu_usage_avg,
-            cpu_usage_min = EXCLUDED.cpu_usage_min,
-            cpu_usage_max = EXCLUDED.cpu_usage_max,
-            memory_usage_avg = EXCLUDED.memory_usage_avg,
-            memory_usage_min = EXCLUDED.memory_usage_min,
-            memory_usage_max = EXCLUDED.memory_usage_max,
-            disk_usage_avg = EXCLUDED.disk_usage_avg,
-            disk_usage_min = EXCLUDED.disk_usage_min,
-            disk_usage_max = EXCLUDED.disk_usage_max,
-            network_in_avg = EXCLUDED.network_in_avg,
-            network_in_min = EXCLUDED.network_in_min,
-            network_in_max = EXCLUDED.network_in_max,
-            network_out_avg = EXCLUDED.network_out_avg,
-            network_out_min = EXCLUDED.network_out_min,
-            network_out_max = EXCLUDED.network_out_max,
+            ${CONFLICT_UPDATES},
             sample_count = EXCLUDED.sample_count
     `, [range?.from ?? null, range?.to ?? null]);
 }
@@ -161,26 +154,13 @@ async function rollup1Hour(client = pool, requestedRange = null) {
     await client.query(`
         INSERT INTO metric_rollups_1h (
             host_id, bucket_start,
-            cpu_usage_avg, cpu_usage_min, cpu_usage_max,
-            memory_usage_avg, memory_usage_min, memory_usage_max,
-            disk_usage_avg, disk_usage_min, disk_usage_max,
-            network_in_avg, network_in_min, network_in_max,
-            network_out_avg, network_out_min, network_out_max,
+            ${ROLLUP_COLUMN_LIST},
             sample_count
         )
         SELECT
             host_id,
             date_trunc('hour', bucket_start, 'UTC') AS bucket_start,
-            SUM(cpu_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(cpu_usage_min), MAX(cpu_usage_max),
-            SUM(memory_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(memory_usage_min), MAX(memory_usage_max),
-            SUM(disk_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(disk_usage_min), MAX(disk_usage_max),
-            SUM(network_in_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(network_in_min), MAX(network_in_max),
-            SUM(network_out_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(network_out_min), MAX(network_out_max),
+            ${HOURLY_AGGREGATES},
             SUM(sample_count)
         FROM metric_rollups_5m
         WHERE (
@@ -194,21 +174,7 @@ async function rollup1Hour(client = pool, requestedRange = null) {
         )
         GROUP BY host_id, date_trunc('hour', bucket_start, 'UTC')
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
-            cpu_usage_avg = EXCLUDED.cpu_usage_avg,
-            cpu_usage_min = EXCLUDED.cpu_usage_min,
-            cpu_usage_max = EXCLUDED.cpu_usage_max,
-            memory_usage_avg = EXCLUDED.memory_usage_avg,
-            memory_usage_min = EXCLUDED.memory_usage_min,
-            memory_usage_max = EXCLUDED.memory_usage_max,
-            disk_usage_avg = EXCLUDED.disk_usage_avg,
-            disk_usage_min = EXCLUDED.disk_usage_min,
-            disk_usage_max = EXCLUDED.disk_usage_max,
-            network_in_avg = EXCLUDED.network_in_avg,
-            network_in_min = EXCLUDED.network_in_min,
-            network_in_max = EXCLUDED.network_in_max,
-            network_out_avg = EXCLUDED.network_out_avg,
-            network_out_min = EXCLUDED.network_out_min,
-            network_out_max = EXCLUDED.network_out_max,
+            ${CONFLICT_UPDATES},
             sample_count = EXCLUDED.sample_count
     `, [range?.from ?? null, range?.to ?? null]);
 }

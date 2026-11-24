@@ -91,6 +91,12 @@ PulseIQ exposes a Prometheus-compatible endpoint at `GET /metrics`.
 Configure `PROMETHEUS_METRICS_TOKEN` in the backend environment to enable it. Generate a strong secret using Node.js crypto.
 
 **Security:** This is a platform-wide credential. It exposes host status and metrics across ALL tenants. Keep it exclusively in trusted server-side infrastructure. Never expose it in frontend code, browser requests, or public repositories. If unset, the endpoint returns HTTP 503.
+### Metric query limits
+
+- Raw samples are kept for 3 days, 5-minute rollups for 8 days and hourly rollups for 90 days.
+- The 95th percentile (p95) is only available for ranges served from raw samples (up to 3 days). Rollups store average, minimum and maximum only, so older ranges cannot report p95 and the explorer says so instead of showing a wrong number.
+- Custom metrics are stored raw only and are removed after the same 3-day window.
+
 ### Email Notifications (SMTP)
 
 Email notifications require SMTP configuration in `backend/.env`:

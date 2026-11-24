@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import useLiveSocket from '../hooks/useLiveSocket'
 import usePageVisible from '../hooks/usePageVisible'
 import { apiFetch } from '../utils/apiFetch'
@@ -10,6 +10,7 @@ import {
   isP95Available
 } from '../utils/metricsQuery'
 import { formatMetricColumnHeader } from '../utils/metricFormatting'
+import { METRICS } from '../config/metricNames'
 import { mergeLiveMetricSample } from '../utils/metricLiveUpdates'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
@@ -597,10 +598,18 @@ export default function Metrics() {
         />
       ) : (
         <>
-          <StatsCards
-            metrics={primaryMetrics}
-            selectedMetric={selectedMetrics[0]}
-          />
+          {selectedMetrics.map(metricName => (
+            <StatsCards
+              key={metricName}
+              metrics={primaryMetrics}
+              selectedMetric={metricName}
+              title={
+                selectedMetrics.length > 1
+                  ? (METRICS[metricName]?.name ?? metricName)
+                  : undefined
+              }
+            />
+          ))}
 
           <MetricsChart
             metrics={metrics}

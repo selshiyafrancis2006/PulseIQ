@@ -1,4 +1,4 @@
-﻿import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import CustomMetricsExplorer from './CustomMetricsExplorer'
 import { apiFetch } from '../../utils/apiFetch'
@@ -170,6 +170,7 @@ describe('CustomMetricsExplorer', () => {
     render(<CustomMetricsExplorer hostId={7} hostName="Test Host" />)
 
     await screen.findByRole('option', { name: 'disk.usage (%)' })
+    await screen.findByTestId('custom-chart')
 
     const initialQueryCount = apiFetch.mock.calls.filter(([url]) =>
       url.includes('/api/metrics/custom?')
@@ -197,6 +198,7 @@ describe('CustomMetricsExplorer', () => {
     expect(finalQueryCount).toBe(initialQueryCount)
   })
 })
+
 
 
 
