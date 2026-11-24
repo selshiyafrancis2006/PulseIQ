@@ -49,6 +49,7 @@ async function evaluateAlerts(metric) {
             JOIN hosts h ON h.user_id = ar.user_id
             WHERE h.id = $1
               AND ar.is_active = true
+              AND (ar.host_id IS NULL OR ar.host_id = h.id)
             ORDER BY ar.id
             FOR UPDATE OF ar
         `, [metric.host_id]);
@@ -258,14 +259,97 @@ async function fetchRules(userId) {
     return result.rows;
 }
 
-async function updateRule(id, userId, threshold, is_active) {
+async function createRule(userId, rule) {
+    const result = await pool.query(
+        `INSERT INTO alert_rules (
+            metric_name, operator, threshold, duration,
+            is_active, user_id, host_id
+         )
+         SELECT $1, $2, $3, $4, $5, $6, $7
+         WHERE $7::integer IS NULL
+            OR EXISTS (
+                SELECT 1 FROM hosts
+                WHERE id = $7 AND user_id = $6
+            )
+         RETURNING *`,
+        [
+            rule.metric_name,
+            rule.operator,
+            rule.threshold,
+            rule.duration,
+            rule.is_active,
+            userId,
+            rule.host_id
+        ]
+    );
+
+    return result.rows[0] || null;
+}
+
+async function updateRule(id, userId, updates) {
+    const allowedFields = [
+        'metric_name',
+        'operator',
+        'threshold',
+        'duration',
+        'is_active',
+        'host_id'
+    ];
+
+    const fields = allowedFields.filter(field =>
+        Object.prototype.hasOwnProperty.call(updates, field)
+    );
+
+    if (fields.length === 0) {
+        return null;
+    }
+
+    const values = fields.map(field => updates[field]);
+    const assignments = fields.map(
+        (field, index) => `${field} = $${index + 1}`
+    );
+
+    values.push(id, userId);
+
+    let ownershipCondition = '';
+
+    if (Object.prototype.hasOwnProperty.call(updates, 'host_id')) {
+        values.push(updates.host_id);
+        const hostParam = `$${values.length}`;
+        const userParam = `$${fields.length + 2}`;
+
+        ownershipCondition = `
+            AND (
+                ${hostParam}::integer IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM hosts
+                    WHERE id = ${hostParam} AND user_id = ${userParam}
+                )
+            )
+        `;
+    }
+
     const result = await pool.query(
         `UPDATE alert_rules
-         SET threshold = $1, is_active = $2
-         WHERE id = $3 AND user_id = $4
+         SET ${assignments.join(', ')}
+         WHERE id = $${fields.length + 1}
+           AND user_id = $${fields.length + 2}
+           ${ownershipCondition}
          RETURNING *`,
-        [threshold, is_active, id, userId]
+        values
     );
+
+    return result.rows[0] || null;
+}
+
+async function deleteRule(id, userId) {
+    const result = await pool.query(
+        `DELETE FROM alert_rules
+         WHERE id = $1 AND user_id = $2
+         RETURNING id`,
+        [id, userId]
+    );
+
     return result.rows[0] || null;
 }
 
@@ -274,5 +358,7 @@ module.exports = {
     fetchAlerts,
     acknowledgeAlert,
     fetchRules,
-    updateRule
+    createRule,
+    updateRule,
+    deleteRule
 };

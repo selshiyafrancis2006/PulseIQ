@@ -1,4 +1,4 @@
-﻿CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS users (
   id SERIAL PRIMARY KEY,
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
@@ -384,6 +384,13 @@ ALTER TABLE alert_rules
   REFERENCES users(id) ON DELETE CASCADE;
 
 CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules (user_id);
+
+ALTER TABLE alert_rules
+  ADD COLUMN IF NOT EXISTS host_id INTEGER
+  REFERENCES hosts(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_alert_rules_host_scope
+  ON alert_rules (user_id, host_id, is_active);
 
 ALTER TABLE hosts
   ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
