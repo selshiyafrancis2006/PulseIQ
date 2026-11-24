@@ -392,6 +392,27 @@ ALTER TABLE alert_rules
 CREATE INDEX IF NOT EXISTS idx_alert_rules_host_scope
   ON alert_rules (user_id, host_id, is_active);
 
+-- Clear a rule's breach state when it is switched on or off, moved to another
+-- host, or pointed at another metric (see migrations/20261124_alert_rule_state_reset.sql).
+CREATE OR REPLACE FUNCTION reset_alert_rule_state() RETURNS trigger AS $$
+BEGIN
+  DELETE FROM alert_rule_states WHERE rule_id = NEW.id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_alert_rule_state_reset ON alert_rules;
+
+CREATE TRIGGER trg_alert_rule_state_reset
+AFTER UPDATE OF is_active, host_id, metric_name ON alert_rules
+FOR EACH ROW
+WHEN (
+  OLD.is_active IS DISTINCT FROM NEW.is_active
+  OR OLD.host_id IS DISTINCT FROM NEW.host_id
+  OR OLD.metric_name IS DISTINCT FROM NEW.metric_name
+)
+EXECUTE PROCEDURE reset_alert_rule_state();
+
 ALTER TABLE hosts
   ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
 
