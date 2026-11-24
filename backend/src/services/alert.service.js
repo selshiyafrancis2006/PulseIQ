@@ -1,5 +1,11 @@
 
 const pool = require('../config/db');
+const { notifyUser } = require('./notification.service');
+const {
+    HOST_METRIC_ALERT,
+    HOST_METRIC_RECOVERED,
+    buildHostMetricEvent
+} = require('./hostMetricEvents');
 
 function getAlertSeverity(metricName, value) {
     const percentageMetrics = new Set([
@@ -15,16 +21,30 @@ function getAlertSeverity(metricName, value) {
     return 'Warning';
 }
 
+// Sends the notifications collected during an evaluation. This runs after the
+// database transaction is committed and its connection released, so a slow or
+// broken channel can never hold locks or lose an alert. notifyUser never
+// throws, but one failure must not stop the remaining messages either.
+async function sendPendingNotifications(pending) {
+    for (const { userId, event } of pending) {
+        try {
+            await notifyUser(userId, event);
+        } catch (err) {
+            console.error('Host metric notification failed:', err);
+        }
+    }
+}
 
 async function evaluateAlerts(metric) {
     let client;
+    const pendingNotifications = [];
 
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
         const rulesResult = await client.query(`
-            SELECT ar.*
+            SELECT ar.*, h.user_id AS host_user_id, h.name AS host_name
             FROM alert_rules ar
             JOIN hosts h ON h.user_id = ar.user_id
             WHERE h.id = $1
@@ -79,6 +99,7 @@ async function evaluateAlerts(metric) {
             `, [metric.host_id, rule.id]);
 
             const state = lockedState.rows[0];
+            const host = { id: metric.host_id, name: rule.host_name };
 
             if (conditionMet) {
                 if (state.is_breaching) {
@@ -116,6 +137,17 @@ async function evaluateAlerts(metric) {
                         WHERE host_id = $1 AND rule_id = $2
                     `, [metric.host_id, rule.id]);
 
+                    pendingNotifications.push({
+                        userId: rule.host_user_id,
+                        event: buildHostMetricEvent({
+                            type: HOST_METRIC_ALERT,
+                            host,
+                            rule,
+                            value,
+                            severity
+                        })
+                    });
+
                     console.log(
                         `Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id})`
                     );
@@ -135,10 +167,28 @@ async function evaluateAlerts(metric) {
                         updated_at = NOW()
                     WHERE host_id = $1 AND rule_id = $2
                 `, [metric.host_id, rule.id]);
+
+                // Only announce a recovery for a breach that was announced.
+                if (state.is_breaching) {
+                    pendingNotifications.push({
+                        userId: rule.host_user_id,
+                        event: buildHostMetricEvent({
+                            type: HOST_METRIC_RECOVERED,
+                            host,
+                            rule,
+                            value
+                        })
+                    });
+                }
             }
         }
 
         await client.query('COMMIT');
+
+        client.release();
+        client = null;
+
+        await sendPendingNotifications(pendingNotifications);
 
     } catch (err) {
         if (client) {

@@ -5,6 +5,13 @@ const { decryptUrl } = require('./notificationChannelCrypto.service');
 
 const SEND_TIMEOUT_MS = 5000;
 
+const {
+    isHostMetricEvent,
+    buildHostMetricSlack,
+    buildHostMetricWebhook,
+    buildHostMetricEmail
+} = require('./hostMetricEvents');
+
 // Escape the three characters Slack treats specially in mrkdwn.
 function escapeSlack(text) {
     return String(text ?? '')
@@ -28,6 +35,8 @@ function formatDuration(totalSeconds) {
 }
 
 function buildSlackPayload(event) {
+    if (isHostMetricEvent(event)) return buildHostMetricSlack(event);
+
     const name = escapeSlack(event.monitor?.name);
     const url = escapeSlack(event.monitor?.url);
     const lines = [];
@@ -120,6 +129,8 @@ function buildSlackPayload(event) {
 }
 
 function buildWebhookPayload(event) {
+    if (isHostMetricEvent(event)) return buildHostMetricWebhook(event);
+
     const payload = {
         source: 'pulseiq',
         event: event.type,
@@ -167,6 +178,8 @@ function buildWebhookPayload(event) {
 }
 
 function buildEmailMessage(event) {
+    if (isHostMetricEvent(event)) return buildHostMetricEmail(event);
+
     const monitorName = event.monitor?.name || 'PulseIQ monitor';
     const monitorUrl = event.monitor?.url || '';
     const subjectPrefix = '[PulseIQ]';
