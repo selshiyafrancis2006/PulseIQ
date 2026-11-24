@@ -1,25 +1,8 @@
-﻿const metricOptions = [
-  {
-    label: 'CPU Usage',
-    value: 'cpu_usage'
-  },
-  {
-    label: 'Memory Usage',
-    value: 'memory_usage'
-  },
-  {
-    label: 'Disk Usage',
-    value: 'disk_usage'
-  },
-  {
-    label: 'Network In',
-    value: 'network_in'
-  },
-  {
-    label: 'Network Out',
-    value: 'network_out'
-  }
-]
+import { METRIC_NAMES, METRICS } from '../../config/metricNames'
+
+const metricOptions = METRIC_NAMES
+  .filter((name) => METRICS[name].capabilities.query)
+  .map((name) => ({ label: METRICS[name].name, value: name }))
 
 export default function MetricSelector({
   selectedMetrics,

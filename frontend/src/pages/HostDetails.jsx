@@ -465,7 +465,7 @@ export default function HostDetails() {
         {BUILT_IN_METRICS.map((metric) => (
           <KpiCard
             key={metric.name}
-            label={metric.name}
+            label={metric.label}
             value={
               metric.unit === '%'
                 ? percent(host[metric.name])
