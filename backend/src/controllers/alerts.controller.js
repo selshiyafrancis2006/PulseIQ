@@ -1,4 +1,4 @@
-const {
+﻿const {
     fetchAlerts,
     fetchRules,
     createRule,
@@ -7,20 +7,11 @@ const {
     acknowledgeAlert
 } = require('../services/alert.service');
 
-const VALID_METRICS = new Set([
-    'cpu_usage',
-    'memory_usage',
-    'disk_usage',
-    'network_in',
-    'network_out'
-]);
+const { METRIC_NAMES, isPercentageMetric } = require('../config/metricRegistry');
+const VALID_METRICS = new Set(METRIC_NAMES);
 
 const VALID_OPERATORS = new Set(['>', '<', '>=', '<=']);
-const PERCENTAGE_METRICS = new Set([
-    'cpu_usage',
-    'memory_usage',
-    'disk_usage'
-]);
+
 
 const RULE_FIELDS = new Set([
     'metric_name',
@@ -77,7 +68,7 @@ function validateRuleFields(body, { creating = false } = {}) {
 
         if (
             metricName &&
-            PERCENTAGE_METRICS.has(metricName) &&
+            isPercentageMetric(metricName) &&
             threshold > 100
         ) {
             return 'Percentage metric thresholds must not exceed 100';

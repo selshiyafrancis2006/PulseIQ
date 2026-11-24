@@ -1,12 +1,7 @@
 const pool = require('../config/db');
+const { METRIC_NAMES } = require('../config/metricRegistry');
 
-const METRIC_NAMES = [
-    'cpu_usage',
-    'memory_usage',
-    'disk_usage',
-    'network_in',
-    'network_out'
-];
+
 
 const MIN_SAMPLE_COUNT = 12;
 
@@ -72,11 +67,7 @@ const detectHourlyAnomalies = async (client) => {
             b.stddev AS baseline_stddev
         FROM metric_rollups_1h r
         CROSS JOIN LATERAL (VALUES
-            ('cpu_usage', r.cpu_usage_avg),
-            ('memory_usage', r.memory_usage_avg),
-            ('disk_usage', r.disk_usage_avg),
-            ('network_in', r.network_in_avg),
-            ('network_out', r.network_out_avg)
+            ${METRIC_NAMES.map(metricName => `('${metricName}', r.${metricName}_avg)`).join(',\n            ')}
         ) AS metric_values(metric_name, value)
         INNER JOIN metric_baselines b
             ON b.host_id = r.host_id

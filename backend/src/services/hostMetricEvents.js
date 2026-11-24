@@ -7,13 +7,7 @@
 const HOST_METRIC_ALERT = 'HOST_METRIC_ALERT';
 const HOST_METRIC_RECOVERED = 'HOST_METRIC_RECOVERED';
 
-const METRIC_INFO = {
-    cpu_usage: { label: 'CPU usage', unit: '%' },
-    memory_usage: { label: 'Memory usage', unit: '%' },
-    disk_usage: { label: 'Disk usage', unit: '%' },
-    network_in: { label: 'Incoming network', unit: ' KB/s' },
-    network_out: { label: 'Outgoing network', unit: ' KB/s' }
-};
+const { getMetric } = require('../config/metricRegistry');
 
 function isHostMetricEvent(event) {
     return Boolean(
@@ -33,20 +27,21 @@ function formatValue(value, unit) {
 
 // Builds the event object that notifyUser() sends.
 function buildHostMetricEvent({ type, host, rule, value, severity }) {
-    const info = METRIC_INFO[rule.metric_name] || {
-        label: rule.metric_name,
-        unit: ''
-    };
+    const metric = getMetric(rule.metric_name);
+    const label = metric?.label || rule.metric_name;
+    const unit = metric?.unit
+        ? (metric.unit === '%' ? '%' : ` ${metric.unit}`)
+        : '';
 
     const isAlert = type === HOST_METRIC_ALERT;
-    const valueText = formatValue(value, info.unit);
-    const thresholdText = formatValue(rule.threshold, info.unit);
+    const valueText = formatValue(value, unit);
+    const thresholdText = formatValue(rule.threshold, unit);
 
     return {
         type,
         host: { id: host.id, name: host.name },
         metricName: rule.metric_name,
-        metricLabel: info.label,
+        metricLabel: label,
         operator: rule.operator,
         value: Number(value),
         threshold: Number(rule.threshold),
@@ -54,8 +49,8 @@ function buildHostMetricEvent({ type, host, rule, value, severity }) {
         thresholdText,
         severity: isAlert ? severity : null,
         message: isAlert
-            ? `${info.label} is ${valueText} (rule: ${rule.operator} ${thresholdText})`
-            : `${info.label} is back to normal at ${valueText}`,
+            ? `${label} is ${valueText} (rule: ${rule.operator} ${thresholdText})`
+            : `${label} is back to normal at ${valueText}`,
         occurredAt: new Date().toISOString()
     };
 }

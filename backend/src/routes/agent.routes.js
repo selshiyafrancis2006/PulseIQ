@@ -1,4 +1,5 @@
 ﻿const express = require('express');
+const { METRIC_NAMES, isPercentageMetric } = require('../config/metricRegistry');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateAgent = require('../middleware/agentAuth.middleware');
@@ -230,20 +231,16 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             collected_at
         } = req.body;
 
-        const metricValues = {
-            cpu_usage,
-            memory_usage,
-            disk_usage,
-            network_in,
-            network_out
-        };
+        const metricValues = Object.fromEntries(
+            METRIC_NAMES.map(name => [name, req.body[name]])
+        );
 
         for (const [key, value] of Object.entries(metricValues)) {
             if (
                 typeof value !== 'number' ||
                 !Number.isFinite(value) ||
                 value < 0 ||
-                (['cpu_usage', 'memory_usage', 'disk_usage'].includes(key) && value > 100)
+                (isPercentageMetric(key) && value > 100)
             ) {
                 return res.status(400).json({
                     error: `Invalid metric value: ${key}`
@@ -531,4 +528,3 @@ router.post('/traces', authenticateAgent, async (req, res) => {
 });
 
 module.exports = router;
-

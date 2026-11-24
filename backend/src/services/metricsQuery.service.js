@@ -27,13 +27,7 @@ const QUERY_STEP_MS = {
     '1d': DAY_MS
 };
 
-const METRICS = [
-    'cpu_usage',
-    'memory_usage',
-    'disk_usage',
-    'network_in',
-    'network_out'
-];
+const { METRIC_NAMES: METRICS } = require('../config/metricRegistry');
 
 const isStepCompatible = (step, source) => {
     return (
