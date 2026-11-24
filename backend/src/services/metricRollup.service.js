@@ -1,4 +1,4 @@
-const pool = require('../config/db');
+﻿const pool = require('../config/db');
 const { METRIC_NAMES } = require('../config/metricRegistry');
 
 // Rollup SQL is generated from the shared metric registry, so a built-in
@@ -138,8 +138,80 @@ async function rollup5Minute(client = pool, requestedRange = null) {
             ${CONFLICT_UPDATES},
             sample_count = EXCLUDED.sample_count
     `, [range?.from ?? null, range?.to ?? null]);
-}
 
+    // Generic five-minute rollups preserve each metric's unit and tag dimensions.
+    await client.query(`
+        INSERT INTO metric_rollups_5m_generic (
+            host_id, metric_name, unit, tags, bucket_start,
+            value_avg, value_min, value_max, sample_count
+        )
+        WITH latest_rollups AS MATERIALIZED (
+            SELECT
+                host_id,
+                metric_name,
+                unit,
+                tags,
+                MAX(bucket_start) AS latest_bucket
+            FROM metric_rollups_5m_generic
+            GROUP BY host_id, metric_name, unit, tags
+        )
+        SELECT
+            m.host_id,
+            m.metric_name,
+            m.unit,
+            m.tags,
+            to_timestamp(
+                floor(extract(epoch FROM m.collected_at) / 300) * 300
+            ) AS bucket_start,
+            AVG(m.value),
+            MIN(m.value),
+            MAX(m.value),
+            COUNT(*)::integer
+        FROM metric_observations m
+        LEFT JOIN latest_rollups lr
+            ON lr.host_id = m.host_id
+            AND lr.metric_name = m.metric_name
+            AND lr.unit IS NOT DISTINCT FROM m.unit
+            AND lr.tags = m.tags
+        WHERE (
+            $1::timestamptz IS NOT NULL
+            AND m.collected_at >= $1::timestamptz
+            AND m.collected_at < $2::timestamptz
+        ) OR (
+            $1::timestamptz IS NULL
+            AND m.collected_at >= GREATEST(
+                to_timestamp(
+                    ceil(
+                        extract(epoch FROM NOW() - INTERVAL '${RAW_RETENTION_DAYS} days') / 300
+                    ) * 300
+                ),
+                to_timestamp(
+                    floor(
+                        extract(epoch FROM LEAST(
+                            NOW() - INTERVAL '2 hours',
+                            COALESCE(
+                                lr.latest_bucket - INTERVAL '5 minutes',
+                                NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'
+                            )
+                        )) / 300
+                    ) * 300
+                )
+            )
+        )
+        GROUP BY
+            m.host_id,
+            m.metric_name,
+            m.unit,
+            m.tags,
+            bucket_start
+        ON CONFLICT (host_id, metric_name, unit, tags, bucket_start)
+        DO UPDATE SET
+            value_avg = EXCLUDED.value_avg,
+            value_min = EXCLUDED.value_min,
+            value_max = EXCLUDED.value_max,
+            sample_count = EXCLUDED.sample_count
+    `, [range?.from ?? null, range?.to ?? null]);
+}
 // Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
 // buckets. The window starts on a whole hour, so the oldest hour is always
 // aggregated from all twelve of its 5-minute buckets. Starting mid-hour would
@@ -177,6 +249,46 @@ async function rollup1Hour(client = pool, requestedRange = null) {
             ${CONFLICT_UPDATES},
             sample_count = EXCLUDED.sample_count
     `, [range?.from ?? null, range?.to ?? null]);
+
+    // Generic hourly rollups retain metric and tag dimensions.
+    await client.query(`
+        INSERT INTO metric_rollups_1h_generic (
+            host_id, metric_name, unit, tags, bucket_start,
+            value_avg, value_min, value_max, sample_count
+        )
+        SELECT
+            host_id,
+            metric_name,
+            unit,
+            tags,
+            date_trunc('hour', bucket_start, 'UTC') AS bucket_start,
+            SUM(value_avg * sample_count) / NULLIF(SUM(sample_count), 0),
+            MIN(value_min),
+            MAX(value_max),
+            SUM(sample_count)::integer
+        FROM metric_rollups_5m_generic
+        WHERE (
+            $1::timestamptz IS NOT NULL
+            AND bucket_start >= $1::timestamptz
+            AND bucket_start < $2::timestamptz
+        ) OR (
+            $1::timestamptz IS NULL
+            AND bucket_start >= date_trunc('hour', NOW() - INTERVAL '7 days', 'UTC')
+            AND bucket_start < date_trunc('hour', NOW(), 'UTC')
+        )
+        GROUP BY
+            host_id,
+            metric_name,
+            unit,
+            tags,
+            date_trunc('hour', bucket_start, 'UTC')
+        ON CONFLICT (host_id, metric_name, unit, tags, bucket_start)
+        DO UPDATE SET
+            value_avg = EXCLUDED.value_avg,
+            value_min = EXCLUDED.value_min,
+            value_max = EXCLUDED.value_max,
+            sample_count = EXCLUDED.sample_count
+    `, [range?.from ?? null, range?.to ?? null]);
 }
 
 // Deletes raw high-resolution metric rows older than the retention window.
@@ -199,6 +311,16 @@ async function cleanupHistoricalData() {
         {
             name: 'hourly rollups',
             sql: `DELETE FROM metric_rollups_1h
+                  WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_1H_RETENTION_DAYS} days'`
+        },
+        {
+            name: 'generic 5-minute rollups',
+            sql: `DELETE FROM metric_rollups_5m_generic
+                  WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_5M_RETENTION_DAYS} days'`
+        },
+        {
+            name: 'generic hourly rollups',
+            sql: `DELETE FROM metric_rollups_1h_generic
                   WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_1H_RETENTION_DAYS} days'`
         },
         {

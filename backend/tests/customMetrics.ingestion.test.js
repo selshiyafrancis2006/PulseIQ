@@ -51,6 +51,15 @@ const countCustomMetrics = async (id = hostId) => {
     return Number(result.rows[0].count);
 };
 
+const countGenericMetrics = async (id = hostId) => {
+    const result = await pool.query(
+        'SELECT COUNT(*) FROM metric_observations WHERE host_id = $1',
+        [id]
+    );
+
+    return Number(result.rows[0].count);
+};
+
 beforeAll(async () => {
     await resetDb();
 
@@ -68,6 +77,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+    await pool.query('TRUNCATE metric_observations RESTART IDENTITY');
     await pool.query('TRUNCATE custom_metrics RESTART IDENTITY');
     await pool.query('UPDATE hosts SET last_seen_at = NULL');
 });
@@ -83,6 +93,8 @@ test('stores custom metrics under the authenticated host', async () => {
     expect(res.body.duplicates).toBe(0);
     expect(await countCustomMetrics(hostId)).toBe(1);
     expect(await countCustomMetrics(otherHostId)).toBe(0);
+    expect(await countGenericMetrics()).toBe(1);
+    expect(await countGenericMetrics(otherHostId)).toBe(0);
 
     const stored = await pool.query(
         `SELECT metric_name, value, unit, tags, collected_at
@@ -137,6 +149,15 @@ test('stores the same metric name with different tag dimensions', async () => {
     expect(res.status).toBe(201);
     expect(res.body.inserted).toBe(2);
     expect(await countCustomMetrics()).toBe(2);
+    expect(await countGenericMetrics()).toBe(2);
+
+    const generic = await pool.query(
+        `SELECT tags FROM metric_observations
+         WHERE host_id = $1
+         ORDER BY tags->>'mount'`,
+        [hostId]
+    );
+    expect(generic.rows.map(row => row.tags.mount)).toEqual(['/','/data']);
 });
 
 test('ignores duplicate observations for the same sample and tags', async () => {
@@ -152,6 +173,7 @@ test('ignores duplicate observations for the same sample and tags', async () => 
     expect(second.body.inserted).toBe(0);
     expect(second.body.duplicates).toBe(1);
     expect(await countCustomMetrics()).toBe(1);
+    expect(await countGenericMetrics()).toBe(1);
 });
 
 test('inserts new observations while ignoring duplicates in a repeated batch', async () => {
@@ -199,6 +221,7 @@ test('inserts new observations while ignoring duplicates in a repeated batch', a
     expect(secondRes.body.inserted).toBe(1);
     expect(secondRes.body.duplicates).toBe(1);
     expect(await countCustomMetrics()).toBe(3);
+    expect(await countGenericMetrics()).toBe(3);
 });
 
 test('rejects an invalid observation without inserting any part of the batch', async () => {

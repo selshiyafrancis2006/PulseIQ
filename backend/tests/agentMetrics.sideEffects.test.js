@@ -1,4 +1,4 @@
-// Alert evaluation and live broadcasting run after the metric is saved.
+﻿// Alert evaluation and live broadcasting run after the metric is saved.
 // A failure must not make the agent retry an already-saved metric.
 
 jest.mock('../src/services/alert.service', () => ({
@@ -54,6 +54,7 @@ beforeEach(async () => {
     jest.clearAllMocks();
     evaluateAlerts.mockResolvedValue();
     broadcastMetrics.mockReturnValue();
+    await pool.query('TRUNCATE metric_observations RESTART IDENTITY');
     await pool.query('TRUNCATE metrics RESTART IDENTITY');
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -74,6 +75,13 @@ test('runs both post-ingestion steps with the saved row', async () => {
     const res = await send();
 
     expect(res.status).toBe(201);
+
+    const observations = await pool.query(
+        'SELECT COUNT(*) FROM metric_observations WHERE host_id = $1',
+        [hostId]
+    );
+    expect(Number(observations.rows[0].count)).toBe(5);
+
     for (const step of [evaluateAlerts, broadcastMetrics]) {
         expect(step).toHaveBeenCalledTimes(1);
         expect(step).toHaveBeenCalledWith(expect.objectContaining({
@@ -97,6 +105,12 @@ test('a duplicate retry does not repeat post-ingestion side effects', async () =
     expect(first.status).toBe(201);
     expect(retry.status).toBe(200);
     expect(retry.body.id).toBe(first.body.id);
+
+    const observations = await pool.query(
+        'SELECT COUNT(*) FROM metric_observations WHERE host_id = $1',
+        [hostId]
+    );
+    expect(Number(observations.rows[0].count)).toBe(5);
     expect(await storedCount()).toBe(1);
 
     for (const step of [evaluateAlerts, broadcastMetrics]) {

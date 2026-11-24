@@ -1,5 +1,10 @@
 ﻿const express = require('express');
-const { METRIC_NAMES, isPercentageMetric } = require('../config/metricRegistry');
+const { randomUUID } = require('crypto');
+const {
+    BUILT_IN_METRICS,
+    METRIC_NAMES,
+    isPercentageMetric
+} = require('../config/metricRegistry');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateAgent = require('../middleware/agentAuth.middleware');
@@ -313,56 +318,115 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             collectedAt = parsedDate.toISOString();
         }
 
-        const result = await pool.query(
-            `INSERT INTO metrics (
-                cpu_usage,
-                memory_usage,
-                disk_usage,
-                network_in,
-                network_out,
-                host_id,
-                sample_id,
-                collected_at
-            )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (host_id, sample_id) DO NOTHING
-            RETURNING *`,
-            [
-                cpu_usage,
-                memory_usage,
-                disk_usage,
-                network_in,
-                network_out,
-                req.agentHost.id,
-                sample_id || null,
-                collectedAt
-            ]
-        );
+        const client = await pool.connect();
+        let savedMetric;
 
-        let savedMetric = result.rows[0];
-        const isDuplicate = !savedMetric;
+        try {
+            await client.query('BEGIN');
 
-        if (isDuplicate) {
-            const existing = await pool.query(
-                `SELECT *
-                 FROM metrics
-                 WHERE host_id = $1 AND sample_id = $2`,
-                [req.agentHost.id, sample_id]
+            const effectiveSampleId = sample_id || randomUUID();
+            const effectiveCollectedAt = collectedAt || new Date().toISOString();
+
+            const result = await client.query(
+                `INSERT INTO metrics (
+                    cpu_usage,
+                    memory_usage,
+                    disk_usage,
+                    network_in,
+                    network_out,
+                    host_id,
+                    sample_id,
+                    collected_at
+                )
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                ON CONFLICT (host_id, sample_id) DO NOTHING
+                RETURNING *`,
+                [
+                    cpu_usage,
+                    memory_usage,
+                    disk_usage,
+                    network_in,
+                    network_out,
+                    req.agentHost.id,
+                    effectiveSampleId,
+                    effectiveCollectedAt
+                ]
             );
 
-            if (!existing.rows[0]) {
-                throw new Error('Conflicting metric sample could not be retrieved');
+            savedMetric = result.rows[0];
+
+            if (!savedMetric) {
+                const existing = await client.query(
+                    `SELECT *
+                     FROM metrics
+                     WHERE host_id = $1 AND sample_id = $2`,
+                    [req.agentHost.id, effectiveSampleId]
+                );
+
+                if (!existing.rows[0]) {
+                    throw new Error(
+                        'Conflicting metric sample could not be retrieved'
+                    );
+                }
+
+                savedMetric = existing.rows[0];
+                await client.query('COMMIT');
+                return res.status(200).json(savedMetric);
             }
 
-            savedMetric = existing.rows[0];
-            return res.status(200).json(savedMetric);
+            const observations = BUILT_IN_METRICS.map(({ name, unit }) => ({
+                metric_name: name,
+                value: metricValues[name],
+                unit,
+                tags: {}
+            }));
+
+            await client.query(
+                `INSERT INTO metric_observations (
+                    host_id,
+                    sample_id,
+                    metric_name,
+                    value,
+                    unit,
+                    tags,
+                    collected_at
+                )
+                SELECT
+                    $1,
+                    $2,
+                    observation.metric_name,
+                    observation.value,
+                    observation.unit,
+                    COALESCE(observation.tags, '{}'::jsonb),
+                    $4
+                FROM jsonb_to_recordset($3::jsonb) AS observation(
+                    metric_name TEXT,
+                    value DOUBLE PRECISION,
+                    unit TEXT,
+                    tags JSONB
+                )
+                ON CONFLICT (host_id, sample_id, metric_name, tags)
+                DO NOTHING`,
+                [
+                    req.agentHost.id,
+                    effectiveSampleId,
+                    JSON.stringify(observations),
+                    effectiveCollectedAt
+                ]
+            );
+
+            await client.query(
+                'UPDATE hosts SET last_seen_at = NOW() WHERE id = $1',
+                [req.agentHost.id]
+            );
+
+            await client.query('COMMIT');
+        } catch (dbErr) {
+            await client.query('ROLLBACK');
+            throw dbErr;
+        } finally {
+            client.release();
         }
-
-        await pool.query(
-            'UPDATE hosts SET last_seen_at = NOW() WHERE id = $1',
-            [req.agentHost.id]
-        );
-
         // Host metadata is optional and must never break metric ingestion.
         const metadata = sanitizeMetadata(req.body.metadata);
         if (metadata) {
