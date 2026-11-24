@@ -1,4 +1,4 @@
-﻿const cron = require('node-cron');
+const cron = require('node-cron');
 const {
     recordRollupSuccess,
     recordRollupFailure,
@@ -76,12 +76,12 @@ async function runTrackedMetricRollup(jobName, rollup, label) {
     await persistJobState(jobName);
 }
 
-// 5-minute rollup â€” runs every 5 minutes
+// 5-minute rollup — runs every 5 minutes
 cron.schedule('*/5 * * * *', async () => {
     await runTrackedMetricRollup('5m', rollup5Minute, '5-minute');
 }, { noOverlap: true });
 
-// 1-hour rollup â€” runs at minute 2 of every hour
+// 1-hour rollup — runs at minute 2 of every hour
 const runHourlyRollupAndAnomalies = async (client) => {
     await rollup1Hour(client);
     await detectHourlyAnomalies(client);
@@ -90,7 +90,7 @@ const runHourlyRollupAndAnomalies = async (client) => {
 cron.schedule('2 * * * *', async () => {
     await runTrackedMetricRollup('1h', runHourlyRollupAndAnomalies, '1-hour');
 }, { noOverlap: true });
-// Hourly monitor results rollup â€” runs at minute 5 of every hour
+// Hourly monitor results rollup — runs at minute 5 of every hour
 cron.schedule('5 * * * *', async () => {
     try {
         const buckets = await rollupRecentMonitorResults(3);
@@ -100,7 +100,7 @@ cron.schedule('5 * * * *', async () => {
     }
 });
 
-// Daily retention cleanup â€” runs at 3 AM
+// Daily retention cleanup — runs at 3 AM
 cron.schedule('0 3 * * *', async () => {
     // The three cleanup steps are tracked as one job: it counts as successful
     // only when every step finished, and the first error is what is reported.

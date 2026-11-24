@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 
 const RENOTIFY_OPTIONS = [
   { value: 0, label: 'Never (only the first alert)' },
@@ -291,7 +291,7 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
           ) ||
           new Set(statusCodes).size !== statusCodes.length
         ) {
-          setError('Expected status codes must be 1â€“20 unique codes between 100 and 599.');
+          setError('Expected status codes must be 1–20 unique codes between 100 and 599.');
           return;
         }
       }
@@ -528,7 +528,7 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
                 className={inputClass}
               />
               <p className="mt-1 text-xs text-gray-500">
-                Allowed range: 1â€“30000 milliseconds.
+                Allowed range: 1–30000 milliseconds.
               </p>
             </div>
 
@@ -545,7 +545,7 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
                 placeholder="200, 201, 204"
               />
               <p className="mt-1 text-xs text-gray-500">
-                Comma-separated. Leave empty to accept the default 200â€“399 range.
+                Comma-separated. Leave empty to accept the default 200–399 range.
               </p>
             </div>
 
@@ -716,12 +716,12 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
             <div>
               <label className={labelClass} htmlFor="monitor-slo-target">SLO target (%)</label>
               <input id="monitor-slo-target" name="slo_target_percent" type="number" min={90} max={100} step={0.01} value={form.slo_target_percent} onChange={handleChange} required className={inputClass} />
-              <p className="mt-1 text-xs text-gray-500">Allowed range: 90â€“100%, up to 2 decimal places.</p>
+              <p className="mt-1 text-xs text-gray-500">Allowed range: 90–100%, up to 2 decimal places.</p>
             </div>
             <div>
               <label className={labelClass} htmlFor="monitor-slo-window">SLO window (days)</label>
               <input id="monitor-slo-window" name="slo_window_days" type="number" min={1} max={365} step={1} value={form.slo_window_days} onChange={handleChange} required className={inputClass} />
-              <p className="mt-1 text-xs text-gray-500">Rolling measurement window: 1â€“365 days.</p>
+              <p className="mt-1 text-xs text-gray-500">Rolling measurement window: 1–365 days.</p>
             </div>
           </div>
         </div>
@@ -780,7 +780,7 @@ function MonitorForm({ monitor, saving, onSubmit, onCancel }) {
             className={inputClass}
           />
           <p className="mt-1 text-xs text-gray-500">
-            The monitor is marked DOWN only after this many consecutive failed checks (1â€“10).
+            The monitor is marked DOWN only after this many consecutive failed checks (1–10).
           </p>
         </div>
 

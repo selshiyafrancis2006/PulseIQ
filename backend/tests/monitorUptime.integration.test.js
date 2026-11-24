@@ -389,7 +389,7 @@ test('uptime rejects an invalid monitor ID', async () => {
     expect(response.status).toBe(400);
 });
 
-test('uptime does not expose another userâ€™s monitor', async () => {
+test('uptime does not expose another user’s monitor', async () => {
     const owner = await createUser();
     const otherUser = await createUser();
     const monitor = await createMonitor(owner.token, 'private-uptime');

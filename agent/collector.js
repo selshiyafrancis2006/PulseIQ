@@ -1,4 +1,4 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 
 const si = require('systeminformation');
 const axios = require('axios');
@@ -161,7 +161,7 @@ const metricQueue = new MetricDeliveryQueue({
         } catch (error) {
             if (error.response?.status === 401) {
                 console.error(
-                    '[PulseIQ Agent] API key rejected (401) â€” check that API_KEY matches the key shown when this host was registered'
+                    '[PulseIQ Agent] API key rejected (401) — check that API_KEY matches the key shown when this host was registered'
                 );
             }
 
@@ -173,7 +173,7 @@ const metricQueue = new MetricDeliveryQueue({
         }
 
         console.log(
-            `[${new Date().toISOString()}] Delivered metrics â€” host_id: ${response.data?.host_id ?? 'unknown'}${payload.metadata ? ' (+ metadata)' : ''}`
+            `[${new Date().toISOString()}] Delivered metrics — host_id: ${response.data?.host_id ?? 'unknown'}${payload.metadata ? ' (+ metadata)' : ''}`
         );
     }
 });
@@ -350,7 +350,7 @@ async function shutdown(signal) {
     shuttingDown = true;
 
     console.log(
-        `[PulseIQ Agent] ${signal} received â€” stopping and flushing ${metricQueue.size} queued sample(s)`
+        `[PulseIQ Agent] ${signal} received — stopping and flushing ${metricQueue.size} queued sample(s)`
     );
 
     clearInterval(collectTimer);
@@ -390,12 +390,12 @@ async function shutdown(signal) {
 
 async function start() {
     console.log(
-        `PulseIQ Agent v${AGENT_VERSION} starting â€” sending to ${config.metricsUrl} every ${config.intervalMs}ms (queue holds up to ${config.queueMaxSize} samples${config.queueFile ? `, saved to ${config.queueFile}` : ', memory only'})`
+        `PulseIQ Agent v${AGENT_VERSION} starting — sending to ${config.metricsUrl} every ${config.intervalMs}ms (queue holds up to ${config.queueMaxSize} samples${config.queueFile ? `, saved to ${config.queueFile}` : ', memory only'})`
     );
 
     if (config.insecureRemote) {
         console.warn(
-            'WARNING: BACKEND_URL uses plain http:// to a remote host â€” your API key and metrics are sent unencrypted. Use https:// in production.'
+            'WARNING: BACKEND_URL uses plain http:// to a remote host — your API key and metrics are sent unencrypted. Use https:// in production.'
         );
     }
 

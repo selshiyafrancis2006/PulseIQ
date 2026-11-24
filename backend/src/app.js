@@ -59,12 +59,12 @@ app.use(loggerMiddleware);
 app.use('/metrics', prometheusRoutes);
 
 // Routes
-// Public â€” no auth required
+// Public — no auth required
 app.use('/api/auth', authRoutes);
 app.use('/api/public/status', publicStatusLimiter, publicStatusPageRoutes);
 app.use('/api/heartbeat', heartbeatRoutes);
 
-// Protected â€” requires a valid JWT
+// Protected — requires a valid JWT
 app.use('/api/status-pages', authenticate, statusPageRoutes);
 app.use('/api/api-tests', authenticate, apiTestRoutes);
 app.use('/api/monitors', authenticate, monitorRoutes);
@@ -86,7 +86,7 @@ app.get('/', (req, res) => {
 
 // WebSocket Connection
 // Metrics are pushed to clients via broadcastMetrics() from metric.job.js
-// and agent.routes.js â€” no per-client polling here.
+// and agent.routes.js — no per-client polling here.
 wss.on('connection', async (ws, req) => {
 
     const { searchParams } = new URL(req.url, `http://${req.headers.host}`);
