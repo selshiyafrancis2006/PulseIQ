@@ -276,5 +276,12 @@ async function cleanupCustomMetrics() {
          WHERE collected_at < NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'`
     );
 
+    // The generic observations table mirrors custom metrics, so it is
+    // trimmed to the same window and cannot grow without limit.
+    await pool.query(
+        `DELETE FROM metric_observations
+         WHERE collected_at < NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'`
+    );
+
     return result.rowCount;
 }

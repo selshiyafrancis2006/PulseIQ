@@ -4,6 +4,11 @@ const { generateApiKey, hashApiKey } = require('../utils/apiKey');
 const router = express.Router();
 const pool = require('../config/db');
 const { OFFLINE_THRESHOLD_SECONDS, statusSql } = require('../utils/hostStatus');
+const { METRIC_NAMES } = require('../config/metricRegistry');
+
+// Latest-sample columns for the host detail endpoint, from the metric registry.
+const LATEST_METRIC_SELECT = METRIC_NAMES.map(name => `m.${name}`).join(',\n                ');
+const LATEST_METRIC_COLUMNS = METRIC_NAMES.join(', ');
 
 const MAX_HOST_NAME_LENGTH = 255;
 const MAX_TAGS_PER_HOST = 20;
@@ -164,14 +169,10 @@ router.get('/:id', async (req, res) => {
                 h.ip_address,
                 h.agent_version,
                 h.boot_time,
-                m.cpu_usage,
-                m.memory_usage,
-                m.disk_usage,
-                m.network_in,
-                m.network_out
+                ${LATEST_METRIC_SELECT}
              FROM hosts h
              LEFT JOIN LATERAL (
-                SELECT cpu_usage, memory_usage, disk_usage, network_in, network_out
+                SELECT ${LATEST_METRIC_COLUMNS}
                 FROM metrics
                 WHERE host_id = h.id
                 ORDER BY timestamp DESC
