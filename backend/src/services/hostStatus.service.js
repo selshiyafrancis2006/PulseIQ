@@ -1,9 +1,18 @@
 const db = require('../config/db');
+const { notifyUser } = require('./notification.service');
 
 const {
     OFFLINE_THRESHOLD_SECONDS,
     statusSql
 } = require('../utils/hostStatus');
+
+async function sendHostLifecycleNotification(userId, event) {
+    try {
+        await notifyUser(userId, event);
+    } catch (error) {
+        console.error('Host lifecycle notification failed:', error.message);
+    }
+}
 
 async function checkHostStatus() {
     // Offline is decided in SQL with the same rule the hosts API uses,
@@ -11,6 +20,7 @@ async function checkHostStatus() {
     const result = await db.query(`
         SELECT
             id,
+            user_id,
             name,
             last_seen_at,
             (${statusSql('hosts', 1)}) = 'offline' AS is_offline
@@ -84,6 +94,16 @@ async function checkHostStatus() {
                 console.log(
                     `Host offline alert created (host_id: ${host.id})`
                 );
+
+                await sendHostLifecycleNotification(host.user_id, {
+                    type: 'HOST_OFFLINE',
+                    host: {
+                        id: host.id,
+                        name: host.name
+                    },
+                    message: `Host ${host.name} has stopped reporting.`,
+                    occurredAt: new Date().toISOString()
+                });
             }
 
             continue;
@@ -140,6 +160,16 @@ async function checkHostStatus() {
                 console.log(
                     `Host recovered (host_id: ${host.id}, name: ${host.name})`
                 );
+
+                await sendHostLifecycleNotification(host.user_id, {
+                    type: 'HOST_RECOVERED',
+                    host: {
+                        id: host.id,
+                        name: host.name
+                    },
+                    message: `Host ${host.name} is reporting again.`,
+                    occurredAt: new Date().toISOString()
+                });
             }
         }
     }

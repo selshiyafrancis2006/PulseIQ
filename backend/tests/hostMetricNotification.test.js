@@ -160,6 +160,76 @@ describe('host metric notification payloads', () => {
     });
 });
 
+describe('host lifecycle notification payloads', () => {
+    const host = { id: 7, name: 'web <01> & co' };
+
+    const offlineEvent = {
+        type: 'HOST_OFFLINE',
+        host,
+        message: 'Host web <01> & co has stopped reporting.',
+        occurredAt: '2026-11-24T06:00:00.000Z'
+    };
+
+    const recoveredEvent = {
+        type: 'HOST_RECOVERED',
+        host,
+        message: 'Host web <01> & co is reporting again.',
+        occurredAt: '2026-11-24T06:05:00.000Z'
+    };
+
+    test('Slack formats offline and recovery events with the correct status', () => {
+        const offline = buildSlackPayload(offlineEvent).text;
+        const recovered = buildSlackPayload(recoveredEvent).text;
+
+        expect(offline).toContain(':red_circle:');
+        expect(offline).toContain('web &lt;01&gt; &amp; co');
+        expect(offline).toContain('OFFLINE');
+
+        expect(recovered).toContain(':large_green_circle:');
+        expect(recovered).toContain('web &lt;01&gt; &amp; co');
+        expect(recovered).toContain('recovered');
+    });
+
+    test('webhook includes host details for lifecycle events', () => {
+        expect(buildWebhookPayload(offlineEvent)).toMatchObject({
+            source: 'pulseiq',
+            event: 'HOST_OFFLINE',
+            host,
+            message: offlineEvent.message
+        });
+
+        expect(buildWebhookPayload(recoveredEvent)).toMatchObject({
+            source: 'pulseiq',
+            event: 'HOST_RECOVERED',
+            host,
+            message: recoveredEvent.message
+        });
+    });
+
+    test('email uses host-specific subjects and wording', () => {
+        const offline = buildEmailMessage(offlineEvent);
+        const recovered = buildEmailMessage(recoveredEvent);
+
+        expect(offline.subject).toBe('[PulseIQ] Host OFFLINE: web <01> & co');
+        expect(offline.text).toContain('Host: web <01> & co');
+        expect(offline.text).not.toContain('Monitor:');
+
+        expect(recovered.subject).toBe('[PulseIQ] Host recovered: web <01> & co');
+        expect(recovered.text).toContain('Host: web <01> & co');
+        expect(recovered.text).not.toContain('Monitor:');
+    });
+
+    test('ordinary monitor webhook payloads do not gain a host field', () => {
+        const payload = buildWebhookPayload({
+            type: 'DOWN',
+            monitor: { name: 'api', url: 'https://example.com' }
+        });
+
+        expect(payload).toHaveProperty('monitor.name', 'api');
+        expect(payload).not.toHaveProperty('host');
+    });
+});
+
 describe('host metric notifications from the alert engine', () => {
     test('sends one notification to the owner when an alert fires', async () => {
         const { hostId, userId, hostName } = await createHostWithCpuRule(1);

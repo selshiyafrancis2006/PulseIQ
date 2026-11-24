@@ -39,9 +39,16 @@ function buildSlackPayload(event) {
 
     const name = escapeSlack(event.monitor?.name);
     const url = escapeSlack(event.monitor?.url);
+    const hostName = escapeSlack(event.host?.name || 'Unknown host');
     const lines = [];
 
     switch (event.type) {
+        case 'HOST_OFFLINE':
+            lines.push(`:red_circle: *${hostName}* is OFFLINE`);
+            break;
+        case 'HOST_RECOVERED':
+            lines.push(`:large_green_circle: *${hostName}* recovered`);
+            break;
         case 'DOWN':
             lines.push(`:red_circle: *${name}* is DOWN`);
             break;
@@ -145,6 +152,10 @@ function buildWebhookPayload(event) {
         occurred_at: event.occurredAt ?? new Date().toISOString()
     };
 
+    if (event.host) {
+        payload.host = event.host;
+    }
+
     if (event.downForSeconds != null) {
         payload.down_for_seconds = event.downForSeconds;
     }
@@ -182,11 +193,21 @@ function buildEmailMessage(event) {
 
     const monitorName = event.monitor?.name || 'PulseIQ monitor';
     const monitorUrl = event.monitor?.url || '';
+    const hostName = event.host?.name || 'Unknown host';
+    const isHostLifecycleEvent =
+        event.type === 'HOST_OFFLINE' ||
+        event.type === 'HOST_RECOVERED';
     const subjectPrefix = '[PulseIQ]';
 
     let subject;
 
     switch (event.type) {
+        case 'HOST_OFFLINE':
+            subject = `${subjectPrefix} Host OFFLINE: ${hostName}`;
+            break;
+        case 'HOST_RECOVERED':
+            subject = `${subjectPrefix} Host recovered: ${hostName}`;
+            break;
         case 'DOWN':
             subject = `${subjectPrefix} Monitor DOWN: ${monitorName}`;
             break;
@@ -238,6 +259,8 @@ function buildEmailMessage(event) {
         if (event.staleAfterSeconds != null) {
             lines.push(`Stale threshold: ${event.staleAfterSeconds} seconds`);
         }
+    } else if (isHostLifecycleEvent) {
+        lines.push(`Host: ${hostName}`);
     } else {
         lines.push(`Monitor: ${monitorName}`);
     }
