@@ -1,5 +1,5 @@
-
 const pool = require('../config/db');
+const { notifyMetricChanges } = require('./metricAlertNotification.service');
 
 function getAlertSeverity(metricName, value) {
     const percentageMetrics = new Set([
@@ -18,6 +18,11 @@ function getAlertSeverity(metricName, value) {
 
 async function evaluateAlerts(metric) {
     let client;
+    let committed = false;
+
+    // Alerts that opened or recovered during this sample. They are sent after
+    // the transaction ends, so a slow channel never holds the database lock.
+    const changes = [];
 
     try {
         client = await pool.connect();
@@ -29,6 +34,7 @@ async function evaluateAlerts(metric) {
             JOIN hosts h ON h.user_id = ar.user_id
             WHERE h.id = $1
               AND ar.is_active = true
+              AND (ar.host_id IS NULL OR ar.host_id = $1)
             ORDER BY ar.id
             FOR UPDATE OF ar
         `, [metric.host_id]);
@@ -116,6 +122,17 @@ async function evaluateAlerts(metric) {
                         WHERE host_id = $1 AND rule_id = $2
                     `, [metric.host_id, rule.id]);
 
+                    changes.push({
+                        kind: 'triggered',
+                        userId: rule.user_id,
+                        hostId: metric.host_id,
+                        metricName: rule.metric_name,
+                        value: Number(value),
+                        threshold: rule.threshold,
+                        operator: rule.operator,
+                        severity
+                    });
+
                     console.log(
                         `Alert triggered: ${rule.metric_name} (host_id: ${metric.host_id})`
                     );
@@ -128,6 +145,20 @@ async function evaluateAlerts(metric) {
                     `, [metric.host_id, rule.id, count]);
                 }
             } else {
+                // The rule was breaching and is now back to normal.
+                if (state.is_breaching) {
+                    changes.push({
+                        kind: 'recovered',
+                        userId: rule.user_id,
+                        hostId: metric.host_id,
+                        metricName: rule.metric_name,
+                        value: Number(value),
+                        threshold: rule.threshold,
+                        operator: rule.operator,
+                        severity: null
+                    });
+                }
+
                 await client.query(`
                     UPDATE alert_rule_states
                     SET consecutive_breaches = 0,
@@ -139,6 +170,7 @@ async function evaluateAlerts(metric) {
         }
 
         await client.query('COMMIT');
+        committed = true;
 
     } catch (err) {
         if (client) {
@@ -153,6 +185,22 @@ async function evaluateAlerts(metric) {
     } finally {
         if (client) {
             client.release();
+        }
+    }
+
+    // Keep production metric ingestion non-blocking. In tests, await delivery
+    // so the database pool cannot close while notification queries are active.
+    if (committed && changes.length > 0) {
+        const notificationTask = notifyMetricChanges(changes);
+
+        if (process.env.NODE_ENV === 'test') {
+            await notificationTask.catch((err) => {
+                console.error('Metric alert notification failed:', err.message);
+            });
+        } else {
+            notificationTask.catch((err) => {
+                console.error('Metric alert notification failed:', err.message);
+            });
         }
     }
 }
@@ -208,14 +256,100 @@ async function fetchRules(userId) {
     return result.rows;
 }
 
-async function updateRule(id, userId, threshold, is_active) {
-    const result = await pool.query(
-        `UPDATE alert_rules
-         SET threshold = $1, is_active = $2
-         WHERE id = $3 AND user_id = $4
-         RETURNING *`,
-        [threshold, is_active, id, userId]
+async function createRule(userId, rule) {
+    if (rule.host_id !== null) {
+        const hostResult = await pool.query(
+            `SELECT id FROM hosts WHERE id = $1 AND user_id = $2`,
+            [rule.host_id, userId]
+        );
+
+        if (hostResult.rows.length === 0) {
+            return null;
+        }
+    }
+
+    const result = await pool.query(`
+        INSERT INTO alert_rules (
+            user_id,
+            host_id,
+            metric_name,
+            operator,
+            threshold,
+            duration,
+            is_active
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+    `, [
+        userId,
+        rule.host_id,
+        rule.metric_name,
+        rule.operator,
+        rule.threshold,
+        rule.duration,
+        rule.is_active
+    ]);
+
+    return result.rows[0] || null;
+}
+
+async function updateRule(id, userId, updates) {
+    const allowedFields = [
+        'metric_name',
+        'operator',
+        'threshold',
+        'duration',
+        'is_active',
+        'host_id'
+    ];
+
+    const fields = allowedFields.filter(
+        field => Object.prototype.hasOwnProperty.call(updates, field)
     );
+
+    if (fields.length === 0) {
+        return null;
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(updates, 'host_id') &&
+        updates.host_id !== null
+    ) {
+        const hostResult = await pool.query(
+            `SELECT id FROM hosts WHERE id = $1 AND user_id = $2`,
+            [updates.host_id, userId]
+        );
+
+        if (hostResult.rows.length === 0) {
+            return null;
+        }
+    }
+
+    const values = fields.map(field => updates[field]);
+    const assignments = fields.map(
+        (field, index) => `${field} = $${index + 1}`
+    );
+
+    values.push(id, userId);
+
+    const result = await pool.query(`
+        UPDATE alert_rules
+        SET ${assignments.join(', ')}
+        WHERE id = $${values.length - 1}
+          AND user_id = $${values.length}
+        RETURNING *
+    `, values);
+
+    return result.rows[0] || null;
+}
+
+async function deleteRule(id, userId) {
+    const result = await pool.query(`
+        DELETE FROM alert_rules
+        WHERE id = $1 AND user_id = $2
+        RETURNING id
+    `, [id, userId]);
+
     return result.rows[0] || null;
 }
 
@@ -224,5 +358,7 @@ module.exports = {
     fetchAlerts,
     acknowledgeAlert,
     fetchRules,
-    updateRule
+    createRule,
+    updateRule,
+    deleteRule
 };

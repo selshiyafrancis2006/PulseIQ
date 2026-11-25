@@ -1,4 +1,4 @@
-﻿// null (not 0 or NaN) for a missing value
+// null (not 0 or NaN) for a missing value
 const toNumber = (value) => {
 
   if (value === null || value === undefined) return null
@@ -13,7 +13,8 @@ import { formatMetricValue } from '../../utils/metricFormatting'
 
 export default function StatsCards({
   metrics,
-  selectedMetric
+  selectedMetric,
+  title
 }) {
 
   if (!metrics.length) return null
@@ -85,7 +86,15 @@ export default function StatsCards({
 
   return (
 
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+    <section className="mb-8" aria-label={title || undefined}>
+
+      {title && (
+        <h3 className="text-sm font-semibold text-gray-300 mb-3">
+          {title}
+        </h3>
+      )}
+
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
 
       {stats.map((stat) => (
 
@@ -112,7 +121,9 @@ export default function StatsCards({
 
       ))}
 
-    </div>
+      </div>
+
+    </section>
 
   )
 

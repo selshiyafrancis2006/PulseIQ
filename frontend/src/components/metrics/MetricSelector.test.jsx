@@ -155,4 +155,69 @@ describe('MetricSelector accessibility', () => {
       'aria-invalid',
       'true'
     )
-  })})
+  })
+})
+
+
+describe('MetricSelector interactions', () => {
+  const renderSelector = (overrides = {}) => {
+    const props = {
+      selectedMetrics: ['cpu_usage'],
+      setSelectedMetrics: vi.fn(),
+      timeRange: '1m',
+      setTimeRange: vi.fn(),
+      step: '1m',
+      setStep: vi.fn(),
+      aggregation: 'avg',
+      setAggregation: vi.fn(),
+      ...overrides
+    }
+
+    render(<MetricSelector {...props} />)
+    return props
+  }
+
+  test('adds a metric when an unchecked metric is selected', () => {
+    const props = renderSelector()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Memory Usage' }))
+
+    expect(props.setSelectedMetrics).toHaveBeenCalledWith([
+      'cpu_usage',
+      'memory_usage'
+    ])
+  })
+
+  test('removes a selected metric when another metric remains selected', () => {
+    const props = renderSelector({
+      selectedMetrics: ['cpu_usage', 'memory_usage']
+    })
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Memory Usage' }))
+
+    expect(props.setSelectedMetrics).toHaveBeenCalledWith(['cpu_usage'])
+  })
+
+  test('prevents removing the final selected metric', () => {
+    const props = renderSelector()
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'CPU Usage' }))
+
+    expect(props.setSelectedMetrics).not.toHaveBeenCalled()
+  })
+
+  test('updates the step and aggregation selections', () => {
+    const props = renderSelector()
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Step' }), {
+      target: { value: '5m' }
+    })
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Aggregation' }), {
+      target: { value: 'max' }
+    })
+
+    expect(props.setStep).toHaveBeenCalledWith('5m')
+    expect(props.setAggregation).toHaveBeenCalledWith('max')
+  })
+})

@@ -1,4 +1,4 @@
-const {
+﻿const {
     app,
     pool,
     request,
@@ -57,6 +57,7 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+    await pool.query('TRUNCATE metric_observations RESTART IDENTITY');
     await pool.query('TRUNCATE metrics RESTART IDENTITY');
     await pool.query('UPDATE hosts SET last_seen_at = NULL');
 });
@@ -78,6 +79,23 @@ describe('POST /api/agent/metrics - storing', () => {
         const stored = await pool.query('SELECT * FROM metrics WHERE host_id = $1', [hostId]);
         expect(stored.rows).toHaveLength(1);
         expect(stored.rows[0].cpu_usage).toBe(12.5);
+
+        const observations = await pool.query(
+            `SELECT metric_name, value, unit, tags
+             FROM metric_observations
+             WHERE host_id = $1
+             ORDER BY metric_name`,
+            [hostId]
+        );
+
+        expect(observations.rows).toHaveLength(5);
+        expect(observations.rows).toEqual(expect.arrayContaining([
+            { metric_name: 'cpu_usage', value: 12.5, unit: '%', tags: {} },
+            { metric_name: 'memory_usage', value: 48, unit: '%', tags: {} },
+            { metric_name: 'disk_usage', value: 71.2, unit: '%', tags: {} },
+            { metric_name: 'network_in', value: 1500, unit: 'KB/s', tags: {} },
+            { metric_name: 'network_out', value: 900, unit: 'KB/s', tags: {} }
+        ]));
         expect(await countMetrics(otherHostId)).toBe(0);
     });
 
@@ -124,6 +142,12 @@ describe('POST /api/agent/metrics - storing', () => {
         expect(duplicate.status).toBe(200);
         expect(duplicate.body.id).toBe(first.body.id);
         expect(duplicate.body.cpu_usage).toBe(first.body.cpu_usage);
+
+        const observations = await pool.query(
+            'SELECT COUNT(*) FROM metric_observations WHERE host_id = $1',
+            [hostId]
+        );
+        expect(Number(observations.rows[0].count)).toBe(5);
         expect(await countMetrics(hostId)).toBe(1);
     });
     test('uses the server clock, not a timestamp sent by the agent', async () => {

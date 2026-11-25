@@ -1,8 +1,16 @@
 import { defineConfig } from 'vitest/config'
+import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url))
+
 export default defineConfig({
+  server: {
+    fs: {
+      allow: [repositoryRoot],
+    },
+  },
   plugins: [
     react(),
     tailwindcss(),

@@ -22,13 +22,7 @@ const LONG_RANGES = {
     '90d': { ms: 90 * 24 * 60 * 60 * 1000, step: '1h' }
 };
 
-const LONG_RANGE_METRICS = [
-    'cpu_usage',
-    'memory_usage',
-    'disk_usage',
-    'network_in',
-    'network_out'
-];
+const { METRIC_NAMES: LONG_RANGE_METRICS } = require('../config/metricRegistry');
 
 const isSupportedRange = (range) => {
     return (

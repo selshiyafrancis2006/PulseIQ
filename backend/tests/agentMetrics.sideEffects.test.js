@@ -1,13 +1,8 @@
-// Alerting, anomaly detection and the live broadcast run after the metric is
-// saved. A failure in any of them must not make the agent think ingestion
-// failed (it would retry and create duplicates), nor skip the other steps.
+﻿// Alert evaluation and live broadcasting run after the metric is saved.
+// A failure must not make the agent retry an already-saved metric.
 
 jest.mock('../src/services/alert.service', () => ({
     evaluateAlerts: jest.fn()
-}));
-jest.mock('../src/services/baseline.service', () => ({
-    detectAnomalies: jest.fn(),
-    recomputeBaselines: jest.fn()
 }));
 jest.mock('../src/services/websocket.service', () => ({
     setWSS: jest.fn(),
@@ -24,7 +19,6 @@ const {
 } = require('./helpers');
 
 const { evaluateAlerts } = require('../src/services/alert.service');
-const { detectAnomalies } = require('../src/services/baseline.service');
 const { broadcastMetrics } = require('../src/services/websocket.service');
 
 const validMetrics = {
@@ -59,8 +53,8 @@ afterAll(async () => {
 beforeEach(async () => {
     jest.clearAllMocks();
     evaluateAlerts.mockResolvedValue();
-    detectAnomalies.mockResolvedValue();
     broadcastMetrics.mockReturnValue();
+    await pool.query('TRUNCATE metric_observations RESTART IDENTITY');
     await pool.query('TRUNCATE metrics RESTART IDENTITY');
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
 });
@@ -77,11 +71,18 @@ const storedCount = async () =>
         'SELECT COUNT(*) FROM metrics WHERE host_id = $1', [hostId]
     )).rows[0].count);
 
-test('runs all three post-ingestion steps with the saved row', async () => {
+test('runs both post-ingestion steps with the saved row', async () => {
     const res = await send();
 
     expect(res.status).toBe(201);
-    for (const step of [evaluateAlerts, detectAnomalies, broadcastMetrics]) {
+
+    const observations = await pool.query(
+        'SELECT COUNT(*) FROM metric_observations WHERE host_id = $1',
+        [hostId]
+    );
+    expect(Number(observations.rows[0].count)).toBe(5);
+
+    for (const step of [evaluateAlerts, broadcastMetrics]) {
         expect(step).toHaveBeenCalledTimes(1);
         expect(step).toHaveBeenCalledWith(expect.objectContaining({
             id: res.body.id,
@@ -104,9 +105,15 @@ test('a duplicate retry does not repeat post-ingestion side effects', async () =
     expect(first.status).toBe(201);
     expect(retry.status).toBe(200);
     expect(retry.body.id).toBe(first.body.id);
+
+    const observations = await pool.query(
+        'SELECT COUNT(*) FROM metric_observations WHERE host_id = $1',
+        [hostId]
+    );
+    expect(Number(observations.rows[0].count)).toBe(5);
     expect(await storedCount()).toBe(1);
 
-    for (const step of [evaluateAlerts, detectAnomalies, broadcastMetrics]) {
+    for (const step of [evaluateAlerts, broadcastMetrics]) {
         expect(step).toHaveBeenCalledTimes(1);
     }
 });
@@ -117,7 +124,6 @@ test('a failing alert evaluation does not fail ingestion or skip the other steps
 
     expect(res.status).toBe(201);
     expect(await storedCount()).toBe(1);
-    expect(detectAnomalies).toHaveBeenCalledTimes(1);
     expect(broadcastMetrics).toHaveBeenCalledTimes(1);
     expect(errorSpy).toHaveBeenCalledWith(
         expect.stringContaining('evaluateAlerts'),
@@ -125,15 +131,6 @@ test('a failing alert evaluation does not fail ingestion or skip the other steps
     );
 });
 
-test('a failing anomaly detection does not fail ingestion or skip the broadcast', async () => {
-    detectAnomalies.mockRejectedValue(new Error('baseline table missing'));
-
-    const res = await send();
-
-    expect(res.status).toBe(201);
-    expect(evaluateAlerts).toHaveBeenCalledTimes(1);
-    expect(broadcastMetrics).toHaveBeenCalledTimes(1);
-});
 
 test('a failing broadcast does not fail ingestion', async () => {
     broadcastMetrics.mockImplementation(() => {
@@ -154,6 +151,5 @@ test('invalid readings trigger none of the post-ingestion steps', async () => {
 
     expect(res.status).toBe(400);
     expect(evaluateAlerts).not.toHaveBeenCalled();
-    expect(detectAnomalies).not.toHaveBeenCalled();
     expect(broadcastMetrics).not.toHaveBeenCalled();
 });

@@ -1,0 +1,101 @@
+{
+  "cpu_usage": {
+    "name": "CPU Usage",
+    "notificationLabel": "CPU usage",
+    "description": "Triggers when CPU usage exceeds the configured threshold.",
+    "unit": "%",
+    "thresholds": {
+      "warning": 75,
+      "critical": 90
+    },
+    "minValue": 0,
+    "maxValue": 100,
+    "color": "#10b981",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  },
+  "memory_usage": {
+    "name": "Memory Usage",
+    "notificationLabel": "Memory usage",
+    "description": "Triggers when memory usage exceeds the configured threshold.",
+    "unit": "%",
+    "thresholds": {
+      "warning": 75,
+      "critical": 90
+    },
+    "minValue": 0,
+    "maxValue": 100,
+    "color": "#38bdf8",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  },
+  "disk_usage": {
+    "name": "Disk Usage",
+    "notificationLabel": "Disk usage",
+    "description": "Triggers when disk usage exceeds the configured threshold.",
+    "unit": "%",
+    "thresholds": {
+      "warning": 75,
+      "critical": 90
+    },
+    "minValue": 0,
+    "maxValue": 100,
+    "color": "#f59e0b",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  },
+  "network_in": {
+    "name": "Incoming Network",
+    "notificationLabel": "Incoming network",
+    "description": "Triggers when incoming network traffic exceeds the configured threshold.",
+    "unit": "KB/s",
+    "thresholds": null,
+    "minValue": 0,
+    "maxValue": null,
+    "color": "#a78bfa",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  },
+  "network_out": {
+    "name": "Outgoing Network",
+    "notificationLabel": "Outgoing network",
+    "description": "Triggers when outgoing network traffic exceeds the configured threshold.",
+    "unit": "KB/s",
+    "thresholds": null,
+    "minValue": 0,
+    "maxValue": null,
+    "color": "#fb7185",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  }
+}

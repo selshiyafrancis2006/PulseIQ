@@ -1,4 +1,19 @@
-const pool = require('../config/db');
+﻿const pool = require('../config/db');
+const { METRIC_NAMES } = require('../config/metricRegistry');
+
+// Rollup SQL is generated from the shared metric registry, so a built-in
+// metric is added in one place (shared/metrics.json) plus its table columns.
+const ROLLUP_COLUMNS = METRIC_NAMES.flatMap(name => [`${name}_avg`, `${name}_min`, `${name}_max`]);
+const ROLLUP_COLUMN_LIST = ROLLUP_COLUMNS.join(',\n            ');
+const RAW_AGGREGATES = METRIC_NAMES
+    .map(name => `AVG(m.${name}), MIN(m.${name}), MAX(m.${name})`)
+    .join(',\n            ');
+const HOURLY_AGGREGATES = METRIC_NAMES
+    .map(name => `SUM(${name}_avg * sample_count) / NULLIF(SUM(sample_count), 0),\n            MIN(${name}_min), MAX(${name}_max)`)
+    .join(',\n            ');
+const CONFLICT_UPDATES = ROLLUP_COLUMNS
+    .map(column => `${column} = EXCLUDED.${column}`)
+    .join(',\n            ');
 
 function intFromEnv(name, fallback, min) {
     const value = Number.parseInt(process.env[name], 10);
@@ -16,6 +31,7 @@ const RAW_RETENTION_DAYS = intFromEnv('METRICS_RAW_RETENTION_DAYS', 3, 1);
 const ROLLUP_5M_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_5M_RETENTION_DAYS', 8, 8);
 const ROLLUP_1H_RETENTION_DAYS = intFromEnv('METRICS_ROLLUP_1H_RETENTION_DAYS', 90, 90);
 const ANOMALY_RETENTION_DAYS = intFromEnv('ANOMALY_RETENTION_DAYS', 30, 1);
+const ANOMALY_BUCKET_RETENTION_DAYS = intFromEnv('ANOMALY_BUCKET_RETENTION_DAYS', 8, 8);
 const TRACE_RETENTION_DAYS = intFromEnv('TRACE_RETENTION_DAYS', 7, 1);
 
 function validateRollupRange(range, bucketSeconds, retentionDays, label) {
@@ -79,11 +95,7 @@ async function rollup5Minute(client = pool, requestedRange = null) {
     await client.query(`
         INSERT INTO metric_rollups_5m (
             host_id, bucket_start,
-            cpu_usage_avg, cpu_usage_min, cpu_usage_max,
-            memory_usage_avg, memory_usage_min, memory_usage_max,
-            disk_usage_avg, disk_usage_min, disk_usage_max,
-            network_in_avg, network_in_min, network_in_max,
-            network_out_avg, network_out_min, network_out_max,
+            ${ROLLUP_COLUMN_LIST},
             sample_count
         )
         WITH latest_rollups AS MATERIALIZED (
@@ -94,11 +106,7 @@ async function rollup5Minute(client = pool, requestedRange = null) {
         SELECT
             m.host_id,
             to_timestamp(floor(extract(epoch FROM COALESCE(m.collected_at, m.timestamp)) / 300) * 300) AS bucket_start,
-            AVG(m.cpu_usage), MIN(m.cpu_usage), MAX(m.cpu_usage),
-            AVG(m.memory_usage), MIN(m.memory_usage), MAX(m.memory_usage),
-            AVG(m.disk_usage), MIN(m.disk_usage), MAX(m.disk_usage),
-            AVG(m.network_in), MIN(m.network_in), MAX(m.network_in),
-            AVG(m.network_out), MIN(m.network_out), MAX(m.network_out),
+            ${RAW_AGGREGATES},
             COUNT(*)
         FROM metrics m
         LEFT JOIN latest_rollups lr ON lr.host_id = m.host_id
@@ -127,25 +135,83 @@ async function rollup5Minute(client = pool, requestedRange = null) {
         )
         GROUP BY m.host_id, bucket_start
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
-            cpu_usage_avg = EXCLUDED.cpu_usage_avg,
-            cpu_usage_min = EXCLUDED.cpu_usage_min,
-            cpu_usage_max = EXCLUDED.cpu_usage_max,
-            memory_usage_avg = EXCLUDED.memory_usage_avg,
-            memory_usage_min = EXCLUDED.memory_usage_min,
-            memory_usage_max = EXCLUDED.memory_usage_max,
-            disk_usage_avg = EXCLUDED.disk_usage_avg,
-            disk_usage_min = EXCLUDED.disk_usage_min,
-            disk_usage_max = EXCLUDED.disk_usage_max,
-            network_in_avg = EXCLUDED.network_in_avg,
-            network_in_min = EXCLUDED.network_in_min,
-            network_in_max = EXCLUDED.network_in_max,
-            network_out_avg = EXCLUDED.network_out_avg,
-            network_out_min = EXCLUDED.network_out_min,
-            network_out_max = EXCLUDED.network_out_max,
+            ${CONFLICT_UPDATES},
+            sample_count = EXCLUDED.sample_count
+    `, [range?.from ?? null, range?.to ?? null]);
+
+    // Generic five-minute rollups preserve each metric's unit and tag dimensions.
+    await client.query(`
+        INSERT INTO metric_rollups_5m_generic (
+            host_id, metric_name, unit, tags, bucket_start,
+            value_avg, value_min, value_max, sample_count
+        )
+        WITH latest_rollups AS MATERIALIZED (
+            SELECT
+                host_id,
+                metric_name,
+                unit,
+                tags,
+                MAX(bucket_start) AS latest_bucket
+            FROM metric_rollups_5m_generic
+            GROUP BY host_id, metric_name, unit, tags
+        )
+        SELECT
+            m.host_id,
+            m.metric_name,
+            m.unit,
+            m.tags,
+            to_timestamp(
+                floor(extract(epoch FROM m.collected_at) / 300) * 300
+            ) AS bucket_start,
+            AVG(m.value),
+            MIN(m.value),
+            MAX(m.value),
+            COUNT(*)::integer
+        FROM metric_observations m
+        LEFT JOIN latest_rollups lr
+            ON lr.host_id = m.host_id
+            AND lr.metric_name = m.metric_name
+            AND lr.unit IS NOT DISTINCT FROM m.unit
+            AND lr.tags = m.tags
+        WHERE (
+            $1::timestamptz IS NOT NULL
+            AND m.collected_at >= $1::timestamptz
+            AND m.collected_at < $2::timestamptz
+        ) OR (
+            $1::timestamptz IS NULL
+            AND m.collected_at >= GREATEST(
+                to_timestamp(
+                    ceil(
+                        extract(epoch FROM NOW() - INTERVAL '${RAW_RETENTION_DAYS} days') / 300
+                    ) * 300
+                ),
+                to_timestamp(
+                    floor(
+                        extract(epoch FROM LEAST(
+                            NOW() - INTERVAL '2 hours',
+                            COALESCE(
+                                lr.latest_bucket - INTERVAL '5 minutes',
+                                NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'
+                            )
+                        )) / 300
+                    ) * 300
+                )
+            )
+        )
+        GROUP BY
+            m.host_id,
+            m.metric_name,
+            m.unit,
+            m.tags,
+            bucket_start
+        ON CONFLICT (host_id, metric_name, unit, tags, bucket_start)
+        DO UPDATE SET
+            value_avg = EXCLUDED.value_avg,
+            value_min = EXCLUDED.value_min,
+            value_max = EXCLUDED.value_max,
             sample_count = EXCLUDED.sample_count
     `, [range?.from ?? null, range?.to ?? null]);
 }
-
 // Aggregates `metric_rollups_5m` rows from the last 7 days into 1-hour
 // buckets. The window starts on a whole hour, so the oldest hour is always
 // aggregated from all twelve of its 5-minute buckets. Starting mid-hour would
@@ -160,26 +226,13 @@ async function rollup1Hour(client = pool, requestedRange = null) {
     await client.query(`
         INSERT INTO metric_rollups_1h (
             host_id, bucket_start,
-            cpu_usage_avg, cpu_usage_min, cpu_usage_max,
-            memory_usage_avg, memory_usage_min, memory_usage_max,
-            disk_usage_avg, disk_usage_min, disk_usage_max,
-            network_in_avg, network_in_min, network_in_max,
-            network_out_avg, network_out_min, network_out_max,
+            ${ROLLUP_COLUMN_LIST},
             sample_count
         )
         SELECT
             host_id,
             date_trunc('hour', bucket_start, 'UTC') AS bucket_start,
-            SUM(cpu_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(cpu_usage_min), MAX(cpu_usage_max),
-            SUM(memory_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(memory_usage_min), MAX(memory_usage_max),
-            SUM(disk_usage_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(disk_usage_min), MAX(disk_usage_max),
-            SUM(network_in_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(network_in_min), MAX(network_in_max),
-            SUM(network_out_avg * sample_count) / NULLIF(SUM(sample_count), 0),
-            MIN(network_out_min), MAX(network_out_max),
+            ${HOURLY_AGGREGATES},
             SUM(sample_count)
         FROM metric_rollups_5m
         WHERE (
@@ -193,21 +246,47 @@ async function rollup1Hour(client = pool, requestedRange = null) {
         )
         GROUP BY host_id, date_trunc('hour', bucket_start, 'UTC')
         ON CONFLICT (host_id, bucket_start) DO UPDATE SET
-            cpu_usage_avg = EXCLUDED.cpu_usage_avg,
-            cpu_usage_min = EXCLUDED.cpu_usage_min,
-            cpu_usage_max = EXCLUDED.cpu_usage_max,
-            memory_usage_avg = EXCLUDED.memory_usage_avg,
-            memory_usage_min = EXCLUDED.memory_usage_min,
-            memory_usage_max = EXCLUDED.memory_usage_max,
-            disk_usage_avg = EXCLUDED.disk_usage_avg,
-            disk_usage_min = EXCLUDED.disk_usage_min,
-            disk_usage_max = EXCLUDED.disk_usage_max,
-            network_in_avg = EXCLUDED.network_in_avg,
-            network_in_min = EXCLUDED.network_in_min,
-            network_in_max = EXCLUDED.network_in_max,
-            network_out_avg = EXCLUDED.network_out_avg,
-            network_out_min = EXCLUDED.network_out_min,
-            network_out_max = EXCLUDED.network_out_max,
+            ${CONFLICT_UPDATES},
+            sample_count = EXCLUDED.sample_count
+    `, [range?.from ?? null, range?.to ?? null]);
+
+    // Generic hourly rollups retain metric and tag dimensions.
+    await client.query(`
+        INSERT INTO metric_rollups_1h_generic (
+            host_id, metric_name, unit, tags, bucket_start,
+            value_avg, value_min, value_max, sample_count
+        )
+        SELECT
+            host_id,
+            metric_name,
+            unit,
+            tags,
+            date_trunc('hour', bucket_start, 'UTC') AS bucket_start,
+            SUM(value_avg * sample_count) / NULLIF(SUM(sample_count), 0),
+            MIN(value_min),
+            MAX(value_max),
+            SUM(sample_count)::integer
+        FROM metric_rollups_5m_generic
+        WHERE (
+            $1::timestamptz IS NOT NULL
+            AND bucket_start >= $1::timestamptz
+            AND bucket_start < $2::timestamptz
+        ) OR (
+            $1::timestamptz IS NULL
+            AND bucket_start >= date_trunc('hour', NOW() - INTERVAL '7 days', 'UTC')
+            AND bucket_start < date_trunc('hour', NOW(), 'UTC')
+        )
+        GROUP BY
+            host_id,
+            metric_name,
+            unit,
+            tags,
+            date_trunc('hour', bucket_start, 'UTC')
+        ON CONFLICT (host_id, metric_name, unit, tags, bucket_start)
+        DO UPDATE SET
+            value_avg = EXCLUDED.value_avg,
+            value_min = EXCLUDED.value_min,
+            value_max = EXCLUDED.value_max,
             sample_count = EXCLUDED.sample_count
     `, [range?.from ?? null, range?.to ?? null]);
 }
@@ -235,9 +314,24 @@ async function cleanupHistoricalData() {
                   WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_1H_RETENTION_DAYS} days'`
         },
         {
+            name: 'generic 5-minute rollups',
+            sql: `DELETE FROM metric_rollups_5m_generic
+                  WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_5M_RETENTION_DAYS} days'`
+        },
+        {
+            name: 'generic hourly rollups',
+            sql: `DELETE FROM metric_rollups_1h_generic
+                  WHERE bucket_start < NOW() - INTERVAL '${ROLLUP_1H_RETENTION_DAYS} days'`
+        },
+        {
             name: 'anomalies',
             sql: `DELETE FROM anomalies
                   WHERE timestamp < NOW() - INTERVAL '${ANOMALY_RETENTION_DAYS} days'`
+        },
+        {
+            name: 'anomaly detection buckets',
+            sql: `DELETE FROM anomaly_detection_buckets
+                  WHERE processed_at < NOW() - INTERVAL '${ANOMALY_BUCKET_RETENTION_DAYS} days'`
         },
         {
             name: 'traces',
@@ -288,10 +382,28 @@ module.exports = {
     rollup5Minute,
     rollup1Hour,
     cleanupRawMetrics,
+    cleanupCustomMetrics,
     cleanupHistoricalData,
     RAW_RETENTION_DAYS,
     ROLLUP_5M_RETENTION_DAYS,
     ROLLUP_1H_RETENTION_DAYS,
     ANOMALY_RETENTION_DAYS,
+    ANOMALY_BUCKET_RETENTION_DAYS,
     TRACE_RETENTION_DAYS
 };
+
+async function cleanupCustomMetrics() {
+    const result = await pool.query(
+        `DELETE FROM custom_metrics
+         WHERE collected_at < NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'`
+    );
+
+    // The generic observations table mirrors custom metrics, so it is
+    // trimmed to the same window and cannot grow without limit.
+    await pool.query(
+        `DELETE FROM metric_observations
+         WHERE collected_at < NOW() - INTERVAL '${RAW_RETENTION_DAYS} days'`
+    );
+
+    return result.rowCount;
+}

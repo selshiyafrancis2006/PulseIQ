@@ -1,10 +1,45 @@
-
+﻿
 jest.mock('../../src/config/db', () => ({
     query: jest.fn()
 }));
 
 const pool = require('../../src/config/db');
-const { cleanupHistoricalData, rollup5Minute, rollup1Hour } = require('../../src/services/metricRollup.service');
+const { cleanupRawMetrics, cleanupHistoricalData, rollup5Minute, rollup1Hour, RAW_RETENTION_DAYS, ANOMALY_BUCKET_RETENTION_DAYS } = require('../../src/services/metricRollup.service');
+
+describe('cleanupRawMetrics', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+        pool.query.mockResolvedValue({ rowCount: 0 });
+    });
+
+    test('deletes raw metrics older than the configured retention window', async () => {
+        const result = await cleanupRawMetrics();
+
+        expect(pool.query).toHaveBeenCalledTimes(1);
+
+        const [sql] = pool.query.mock.calls[0];
+
+        expect(sql).toContain('DELETE FROM metrics');
+        expect(sql).toContain('COALESCE(collected_at, timestamp)');
+        expect(sql).toContain(`INTERVAL '${RAW_RETENTION_DAYS} days'`);
+
+        expect(result).toBe(0);
+    });
+
+    test('returns the number of deleted raw metric rows', async () => {
+        pool.query.mockResolvedValueOnce({ rowCount: 12 });
+
+        const result = await cleanupRawMetrics();
+
+        expect(result).toBe(12);
+    });
+
+    test('propagates database errors', async () => {
+        pool.query.mockRejectedValueOnce(new Error('Database unavailable'));
+
+        await expect(cleanupRawMetrics()).rejects.toThrow('Database unavailable');
+    });
+});
 
 describe('cleanupHistoricalData', () => {
     beforeEach(() => {
@@ -15,7 +50,7 @@ describe('cleanupHistoricalData', () => {
     test('deletes expired rollups, anomalies, and traces using the intended retention windows', async () => {
         const result = await cleanupHistoricalData();
 
-        expect(pool.query).toHaveBeenCalledTimes(4);
+        expect(pool.query).toHaveBeenCalledTimes(7);
 
         const queries = pool.query.mock.calls.map(([sql]) => sql);
 
@@ -25,16 +60,28 @@ describe('cleanupHistoricalData', () => {
         expect(queries[1]).toContain('DELETE FROM metric_rollups_1h');
         expect(queries[1]).toContain("INTERVAL '90 days'");
 
-        expect(queries[2]).toContain('DELETE FROM anomalies');
-        expect(queries[2]).toContain("INTERVAL '30 days'");
+        expect(queries[2]).toContain('DELETE FROM metric_rollups_5m_generic');
+        expect(queries[2]).toContain("INTERVAL '8 days'");
 
-        expect(queries[3]).toContain('DELETE FROM traces');
-        expect(queries[3]).toContain("INTERVAL '7 days'");
+        expect(queries[3]).toContain('DELETE FROM metric_rollups_1h_generic');
+        expect(queries[3]).toContain("INTERVAL '90 days'");
+
+        expect(queries[4]).toContain('DELETE FROM anomalies');
+        expect(queries[4]).toContain("INTERVAL '30 days'");
+
+        expect(queries[5]).toContain('DELETE FROM anomaly_detection_buckets');
+        expect(queries[5]).toContain(`INTERVAL '${ANOMALY_BUCKET_RETENTION_DAYS} days'`);
+
+        expect(queries[6]).toContain('DELETE FROM traces');
+        expect(queries[6]).toContain("INTERVAL '7 days'");
 
         expect(result).toEqual({
             '5-minute rollups': 0,
             'hourly rollups': 0,
+            'generic 5-minute rollups': 0,
+            'generic hourly rollups': 0,
             anomalies: 0,
+            'anomaly detection buckets': 0,
             traces: 0
         });
     });
@@ -43,7 +90,10 @@ describe('cleanupHistoricalData', () => {
         pool.query
             .mockResolvedValueOnce({ rowCount: 5 })
             .mockResolvedValueOnce({ rowCount: 2 })
+            .mockResolvedValueOnce({ rowCount: 6 })
+            .mockResolvedValueOnce({ rowCount: 8 })
             .mockResolvedValueOnce({ rowCount: 3 })
+            .mockResolvedValueOnce({ rowCount: 4 })
             .mockResolvedValueOnce({ rowCount: 7 });
 
         const result = await cleanupHistoricalData();
@@ -51,7 +101,10 @@ describe('cleanupHistoricalData', () => {
         expect(result).toEqual({
             '5-minute rollups': 5,
             'hourly rollups': 2,
+            'generic 5-minute rollups': 6,
+            'generic hourly rollups': 8,
             anomalies: 3,
+            'anomaly detection buckets': 4,
             traces: 7
         });
     });
@@ -81,13 +134,19 @@ describe('metric rollup backfill ranges', () => {
 
         await rollup5Minute(pool, range);
 
-        expect(pool.query).toHaveBeenCalledTimes(1);
+        expect(pool.query).toHaveBeenCalledTimes(2);
 
         const [sql, params] = pool.query.mock.calls[0];
+        const [genericSql, genericParams] = pool.query.mock.calls[1];
 
         expect(sql).toContain('$1::timestamptz');
         expect(sql).toContain('$2::timestamptz');
         expect(params).toEqual([range.from, range.to]);
+
+        expect(genericSql).toContain('INSERT INTO metric_rollups_5m_generic');
+        expect(genericSql).toContain('$1::timestamptz');
+        expect(genericSql).toContain('$2::timestamptz');
+        expect(genericParams).toEqual([range.from, range.to]);
     });
 
     test('hourly backfill uses the requested parameterized range', async () => {
@@ -102,13 +161,19 @@ describe('metric rollup backfill ranges', () => {
 
         await rollup1Hour(pool, range);
 
-        expect(pool.query).toHaveBeenCalledTimes(1);
+        expect(pool.query).toHaveBeenCalledTimes(2);
 
         const [sql, params] = pool.query.mock.calls[0];
+        const [genericSql, genericParams] = pool.query.mock.calls[1];
 
         expect(sql).toContain('$1::timestamptz');
         expect(sql).toContain('$2::timestamptz');
         expect(params).toEqual([range.from, range.to]);
+
+        expect(genericSql).toContain('INSERT INTO metric_rollups_1h_generic');
+        expect(genericSql).toContain('$1::timestamptz');
+        expect(genericSql).toContain('$2::timestamptz');
+        expect(genericParams).toEqual([range.from, range.to]);
     });
 
     test('hourly rollup includes the final :55 bucket but excludes the next hour', async () => {

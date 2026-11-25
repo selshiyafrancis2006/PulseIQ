@@ -1,3 +1,12 @@
+jest.mock('../src/services/notification.service', () => {
+    const actual = jest.requireActual('../src/services/notification.service');
+
+    return {
+        ...actual,
+        notifyUser: jest.fn().mockResolvedValue([])
+    };
+});
+
 const {
     app,
     pool,
@@ -8,6 +17,7 @@ const {
 } = require('./helpers');
 
 const { checkHostStatus } = require('../src/services/hostStatus.service');
+const { notifyUser } = require('../src/services/notification.service');
 
 let token;
 
@@ -44,6 +54,11 @@ async function lifecycleEvents(hostId) {
     return result.rows.map((row) => row.metric_name);
 }
 
+beforeEach(() => {
+    notifyUser.mockClear();
+    notifyUser.mockResolvedValue([]);
+});
+
 beforeAll(async () => {
     await resetDb();
     ({ token } = await createUser());
@@ -73,12 +88,28 @@ test('a recently seen host produces no lifecycle events', async () => {
 test('offline and recovered events are created once per outage', async () => {
     const hostId = await registerHost('lifecycle-host');
 
+    const ownerResult = await pool.query(
+        'SELECT user_id FROM hosts WHERE id = $1',
+        [hostId]
+    );
+    const ownerId = ownerResult.rows[0].user_id;
+
     // Outage 1: host goes stale -> exactly one offline event, even if the
     // job runs several times.
     await setLastSeen(hostId, "NOW() - INTERVAL '120 seconds'");
     await checkHostStatus();
     await checkHostStatus();
     expect(await lifecycleEvents(hostId)).toEqual(['host_offline']);
+    expect(notifyUser).toHaveBeenCalledTimes(1);
+    expect(notifyUser).toHaveBeenNthCalledWith(
+        1,
+        ownerId,
+        expect.objectContaining({
+            type: 'HOST_OFFLINE',
+            host: { id: hostId, name: 'lifecycle-host' },
+            message: 'Host lifecycle-host has stopped reporting.'
+        })
+    );
 
     // Host reports again -> exactly one recovered event.
     await sleep(50);
@@ -89,6 +120,16 @@ test('offline and recovered events are created once per outage', async () => {
         'host_offline',
         'host_recovered'
     ]);
+    expect(notifyUser).toHaveBeenCalledTimes(2);
+    expect(notifyUser).toHaveBeenNthCalledWith(
+        2,
+        ownerId,
+        expect.objectContaining({
+            type: 'HOST_RECOVERED',
+            host: { id: hostId, name: 'lifecycle-host' },
+            message: 'Host lifecycle-host is reporting again.'
+        })
+    );
 
     // Outage 2 after recovery -> a new offline event.
     await sleep(50);
@@ -99,4 +140,5 @@ test('offline and recovered events are created once per outage', async () => {
         'host_recovered',
         'host_offline'
     ]);
+    expect(notifyUser).toHaveBeenCalledTimes(3);
 });

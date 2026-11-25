@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { apiFetch } from '../utils/apiFetch';
 import { API_BASE_URL } from '../config/api';
 import MetricsChart from '../components/metrics/MetricsChart';
+import { BUILT_IN_METRICS } from '../config/metricNames';
 import {
   getHostStatus,
   STATUS_META,
@@ -461,31 +462,18 @@ export default function HostDetails() {
 
       {/* HOST METRICS */}
       <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
-        <KpiCard label="CPU" value={percent(host.cpu_usage)} online={online} />
-
-        <KpiCard
-          label="Memory"
-          value={percent(host.memory_usage)}
-          online={online}
-        />
-
-        <KpiCard
-          label="Disk"
-          value={percent(host.disk_usage)}
-          online={online}
-        />
-
-        <KpiCard
-          label="Network In"
-          value={formatRate(host.network_in)}
-          online={online}
-        />
-
-        <KpiCard
-          label="Network Out"
-          value={formatRate(host.network_out)}
-          online={online}
-        />
+        {BUILT_IN_METRICS.map((metric) => (
+          <KpiCard
+            key={metric.name}
+            label={metric.label}
+            value={
+              metric.unit === '%'
+                ? percent(host[metric.name])
+                : formatRate(host[metric.name])
+            }
+            online={online}
+          />
+        ))}
       </div>
 
       <MetricsChart

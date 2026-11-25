@@ -6,6 +6,11 @@ const {
     getMetricRollupHealth
 } = require('../controllers/metricRollupHealth.controller');
 
+const {
+    getCustomMetricsQuery,
+    getCustomMetricNames
+} = require('../controllers/customMetrics.controller');
+
 const router = express.Router();
 
 const {
@@ -17,6 +22,8 @@ const {
 router.get('/metrics/rollup-health', requireAdmin, getMetricRollupHealth);
 
 router.get('/metrics/query', metricsQueryLimiter, getMetricsQuery);
+router.get('/metrics/custom', metricsQueryLimiter, getCustomMetricsQuery);
+router.get('/metrics/custom/names', metricsQueryLimiter, getCustomMetricNames);
 
 router.get('/metrics', getMetrics);
 
@@ -26,3 +33,5 @@ router.get(
 );
 
 module.exports = router;
+
+

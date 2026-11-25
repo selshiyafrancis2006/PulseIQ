@@ -1,4 +1,4 @@
-// Chooses which disk and which network interface represent the host.
+﻿// Chooses which disk and which network interface represent the host.
 //
 // systeminformation lists every mount and every adapter. Taking the first one
 // can report a small boot partition, a virtual adapter, or loopback instead of
@@ -81,4 +81,23 @@ function pickNetworkStats(statsList, defaultIface = null) {
     });
 }
 
-module.exports = { pickSystemDisk, pickNetworkStats };
+
+// Returns every usable disk for dimension-level collection.
+function listUsableDisks(fsList) {
+    return (Array.isArray(fsList) ? fsList : []).filter(isUsableDisk);
+}
+
+// Returns every usable non-loopback interface for dimension-level collection.
+function listUsableNetworkStats(statsList) {
+    return (Array.isArray(statsList) ? statsList : []).filter(
+        (entry) =>
+            entry !== null &&
+            typeof entry === 'object' &&
+            typeof entry.iface === 'string' &&
+            entry.iface.trim().length > 0 &&
+            !LOOPBACK.test(entry.iface)
+    );
+}
+
+module.exports = { pickSystemDisk, pickNetworkStats, listUsableDisks, listUsableNetworkStats };
+

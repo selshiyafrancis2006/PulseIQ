@@ -296,7 +296,8 @@ test('uptime detects an initial gap even when a historical check exists', async 
 
     await pool.query(
         `UPDATE monitors
-         SET created_at = NOW() - INTERVAL '48 hours'
+         SET created_at = NOW() - INTERVAL '48 hours',
+             interval_seconds = 3600
          WHERE id = $1`,
         [monitor.id]
     );
@@ -313,11 +314,16 @@ test('uptime detects an initial gap even when a historical check exists', async 
         'UP',
         new Date(now - 20 * 60 * 60 * 1000)
     );
-    await insertResultAt(
-        monitor.id,
-        'UP',
-        new Date(now)
-    );
+
+    for (let hoursAgo = 18; hoursAgo >= 2; hoursAgo -= 2) {
+        await insertResultAt(
+            monitor.id,
+            'UP',
+            new Date(now - hoursAgo * 60 * 60 * 1000)
+        );
+    }
+
+    await insertResultAt(monitor.id, 'UP', new Date(now));
 
     const response = await request(app)
         .get(`/api/monitors/${monitor.id}/uptime`)
@@ -327,7 +333,6 @@ test('uptime detects an initial gap even when a historical check exists', async 
     expect(response.status).toBe(200);
     expect(response.body.coverage).toBe('insufficient_data');
 });
-
 test('SLO reports insufficient data when monitoring has a long gap', async () => {
     const user = await createUser();
     const monitor = await createMonitor(user.token, 'slo-monitoring-gap');
@@ -384,7 +389,7 @@ test('uptime rejects an invalid monitor ID', async () => {
     expect(response.status).toBe(400);
 });
 
-test('uptime does not expose another userâ€™s monitor', async () => {
+test('uptime does not expose another user’s monitor', async () => {
     const owner = await createUser();
     const otherUser = await createUser();
     const monitor = await createMonitor(owner.token, 'private-uptime');

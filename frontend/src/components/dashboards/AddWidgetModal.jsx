@@ -1,14 +1,11 @@
 import { useEffect, useState } from 'react'
 import { apiFetch } from '../../utils/apiFetch'
 import { API_BASE_URL } from '../../config/api'
+import { METRIC_NAMES, METRICS } from '../../config/metricNames'
 
-const metricOptions = [
-  { label: 'CPU Usage', value: 'cpu_usage' },
-  { label: 'Memory Usage', value: 'memory_usage' },
-  { label: 'Disk Usage', value: 'disk_usage' },
-  { label: 'Network In', value: 'network_in' },
-  { label: 'Network Out', value: 'network_out' }
-]
+const metricOptions = METRIC_NAMES
+  .filter((name) => METRICS[name].capabilities.dashboardWidgets)
+  .map((name) => ({ label: METRICS[name].name, value: name }))
 
 export default function AddWidgetModal({ hosts, onClose, onAdd }) {
 

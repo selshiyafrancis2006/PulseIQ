@@ -1,4 +1,4 @@
-﻿import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import MonitorForm from './MonitorForm';
 
@@ -127,7 +127,7 @@ describe('MonitorForm - G5.1', () => {
     submitForm('Create Monitor');
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      'Expected status codes must be 1â€“20 unique codes between 100 and 599.'
+      'Expected status codes must be 1–20 unique codes between 100 and 599.'
     );
     expect(onSubmit).not.toHaveBeenCalled();
   });

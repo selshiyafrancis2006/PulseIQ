@@ -235,3 +235,241 @@ test('acknowledgement returns 404 for an alert that does not exist', async () =>
     expect(response.status).toBe(404);
     expect(response.body.error).toBe('Alert not found');
 });
+
+
+describe('alert rule CRUD API', () => {
+    async function createRule(token, overrides = {}) {
+        return request(app)
+            .post('/api/alert-rules')
+            .set(authHeader(token))
+            .send({
+                metric_name: 'cpu_usage',
+                operator: '>',
+                threshold: 80,
+                ...overrides
+            });
+    }
+
+    test('creates both global and host-specific rules', async () => {
+        const user = await createUser();
+        const host = await registerHost(user.token, 'crud-scoped-host');
+
+        const globalResponse = await createRule(user.token);
+
+        const scopedResponse = await createRule(user.token, {
+            metric_name: 'memory_usage',
+            operator: '>=',
+            threshold: 85,
+            duration: 3,
+            is_active: false,
+            host_id: host.id
+        });
+
+        expect(globalResponse.status).toBe(201);
+        expect(globalResponse.body.metric_name).toBe('cpu_usage');
+        expect(globalResponse.body.host_id).toBeNull();
+
+        expect(scopedResponse.status).toBe(201);
+        expect(scopedResponse.body.metric_name).toBe('memory_usage');
+        expect(scopedResponse.body.operator).toBe('>=');
+        expect(Number(scopedResponse.body.threshold)).toBe(85);
+        expect(scopedResponse.body.duration).toBe(3);
+        expect(scopedResponse.body.is_active).toBe(false);
+        expect(scopedResponse.body.host_id).toBe(host.id);
+    });
+
+    test('updates rule fields and supports switching between global and host scope', async () => {
+        const user = await createUser();
+        const host = await registerHost(user.token, 'crud-update-host');
+
+        const created = await createRule(user.token);
+        expect(created.status).toBe(201);
+
+        const scopedUpdate = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(user.token))
+            .send({
+                metric_name: 'memory_usage',
+                operator: '<=',
+                threshold: 70,
+                duration: 5,
+                is_active: false,
+                host_id: host.id
+            });
+
+        expect(scopedUpdate.status).toBe(200);
+        expect(scopedUpdate.body.metric_name).toBe('memory_usage');
+        expect(scopedUpdate.body.operator).toBe('<=');
+        expect(Number(scopedUpdate.body.threshold)).toBe(70);
+        expect(scopedUpdate.body.duration).toBe(5);
+        expect(scopedUpdate.body.is_active).toBe(false);
+        expect(scopedUpdate.body.host_id).toBe(host.id);
+
+        const globalUpdate = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(user.token))
+            .send({ host_id: null });
+
+        expect(globalUpdate.status).toBe(200);
+        expect(globalUpdate.body.host_id).toBeNull();
+    });
+
+    test('rejects a partial percentage threshold update above 100', async () => {
+        const user = await createUser();
+        const created = await createRule(user.token);
+
+        const update = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(user.token))
+            .send({ threshold: 101 });
+
+        expect(update.status).toBe(400);
+
+        const rules = await request(app)
+            .get('/api/alert-rules')
+            .set(authHeader(user.token));
+
+        const storedRule = rules.body.find(
+            rule => rule.id === created.body.id
+        );
+
+        expect(Number(storedRule.threshold)).toBe(80);
+    });
+
+    test('rejects changing a network rule to a percentage metric with an excessive existing threshold', async () => {
+        const user = await createUser();
+        const created = await createRule(user.token, {
+            metric_name: 'network_in',
+            threshold: 150
+        });
+
+        expect(created.status).toBe(201);
+
+        const update = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(user.token))
+            .send({ metric_name: 'cpu_usage' });
+
+        expect(update.status).toBe(400);
+
+        const rules = await request(app)
+            .get('/api/alert-rules')
+            .set(authHeader(user.token));
+
+        const storedRule = rules.body.find(
+            rule => rule.id === created.body.id
+        );
+
+        expect(storedRule.metric_name).toBe('network_in');
+        expect(Number(storedRule.threshold)).toBe(150);
+    });
+    test('deletes an owned alert rule', async () => {
+        const user = await createUser();
+        const created = await createRule(user.token);
+
+        expect(created.status).toBe(201);
+
+        const deleted = await request(app)
+            .delete(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(user.token));
+
+        expect(deleted.status).toBe(200);
+        expect(deleted.body.message).toBe('Alert rule deleted');
+        expect(deleted.body.id).toBe(created.body.id);
+
+        const rules = await request(app)
+            .get('/api/alert-rules')
+            .set(authHeader(user.token));
+
+        expect(rules.status).toBe(200);
+        expect(rules.body.some(rule => rule.id === created.body.id)).toBe(false);
+    });
+
+    test.each([
+        ['unsupported metric', { metric_name: 'temperature' }],
+        ['unsupported operator', { operator: '==' }],
+        ['non-numeric threshold', { threshold: 'high' }],
+        ['negative threshold', { threshold: -1 }],
+        ['percentage threshold above 100', { metric_name: 'cpu_usage', threshold: 101 }],
+        ['invalid duration', { duration: 0 }],
+        ['invalid host ID', { host_id: -1 }],
+        ['unsupported field', { user_id: 999 }]
+    ])('rejects creation with %s', async (_description, overrides) => {
+        const user = await createUser();
+
+        const response = await createRule(user.token, overrides);
+
+        expect(response.status).toBe(400);
+    });
+
+    test('rejects empty updates and invalid rule IDs', async () => {
+        const user = await createUser();
+        const created = await createRule(user.token);
+
+        const emptyUpdate = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(user.token))
+            .send({});
+
+        const invalidUpdate = await request(app)
+            .put('/api/alert-rules/not-a-number')
+            .set(authHeader(user.token))
+            .send({ threshold: 90 });
+
+        const invalidDelete = await request(app)
+            .delete('/api/alert-rules/0')
+            .set(authHeader(user.token));
+
+        expect(emptyUpdate.status).toBe(400);
+        expect(invalidUpdate.status).toBe(400);
+        expect(invalidDelete.status).toBe(400);
+    });
+
+    test('prevents users from modifying or deleting another user rules', async () => {
+        const owner = await createUser();
+        const otherUser = await createUser();
+
+        const created = await createRule(owner.token);
+
+        const update = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(otherUser.token))
+            .send({ threshold: 95 });
+
+        const deletion = await request(app)
+            .delete(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(otherUser.token));
+
+        expect(update.status).toBe(404);
+        expect(deletion.status).toBe(404);
+
+        const ownerRules = await request(app)
+            .get('/api/alert-rules')
+            .set(authHeader(owner.token));
+
+        expect(ownerRules.body.some(rule => rule.id === created.body.id)).toBe(true);
+    });
+
+    test('prevents assigning a host owned by another user', async () => {
+        const owner = await createUser();
+        const otherUser = await createUser();
+
+        const foreignHost = await registerHost(otherUser.token, 'crud-foreign-host');
+
+        const createResponse = await createRule(owner.token, {
+            host_id: foreignHost.id
+        });
+
+        expect(createResponse.status).toBe(404);
+
+        const created = await createRule(owner.token);
+        expect(created.status).toBe(201);
+
+        const updateResponse = await request(app)
+            .put(`/api/alert-rules/${created.body.id}`)
+            .set(authHeader(owner.token))
+            .send({ host_id: foreignHost.id });
+
+        expect(updateResponse.status).toBe(404);
+    });
+});

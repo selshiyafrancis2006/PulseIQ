@@ -1,16 +1,12 @@
+﻿import { METRICS, METRIC_NAMES } from '../config/metricNames'
+
 const STEP_MS = {
   '1m': 60 * 1000,
   '5m': 5 * 60 * 1000,
   '15m': 15 * 60 * 1000
 }
 
-const METRIC_FIELDS = [
-  'cpu_usage',
-  'memory_usage',
-  'disk_usage',
-  'network_in',
-  'network_out'
-]
+const METRIC_FIELDS = METRIC_NAMES
 
 const DATE_BIN_ORIGIN = Date.UTC(2000, 0, 1)
 
@@ -43,8 +39,7 @@ export const mergeLiveMetricSample = (
       typeof sample[field] === 'number' &&
       Number.isFinite(sample[field]) &&
       sample[field] >= 0 &&
-      (!['cpu_usage', 'memory_usage', 'disk_usage'].includes(field) ||
-        sample[field] <= 100)
+      (METRICS[field].maxValue == null || sample[field] <= METRICS[field].maxValue)
     )
   ) {
     return rows

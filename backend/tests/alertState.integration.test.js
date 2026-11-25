@@ -63,6 +63,96 @@ async function countAlerts(hostId) {
     return result.rows[0].count;
 }
 
+test('host-specific rules trigger only for their assigned host', async () => {
+    const user = await createUser();
+
+    const firstHostResponse = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(user.token))
+        .send({ name: `scoped-first-${Date.now()}` });
+
+    const secondHostResponse = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(user.token))
+        .send({ name: `scoped-second-${Date.now()}` });
+
+    expect(firstHostResponse.status).toBe(201);
+    expect(secondHostResponse.status).toBe(201);
+
+    const firstHostId = firstHostResponse.body.id;
+    const secondHostId = secondHostResponse.body.id;
+
+    await pool.query(
+        `UPDATE alert_rules
+         SET is_active = false
+         WHERE user_id = (
+             SELECT user_id FROM hosts WHERE id = $1
+         )`,
+        [firstHostId]
+    );
+
+    await pool.query(
+        `INSERT INTO alert_rules
+            (metric_name, operator, threshold, duration, is_active, user_id, host_id)
+         VALUES (
+            'cpu_usage', '>', 80, 1, true,
+            (SELECT user_id FROM hosts WHERE id = $1),
+            $1
+         )`,
+        [firstHostId]
+    );
+
+    await evaluateAlerts(cpuMetric(firstHostId, 95));
+    await evaluateAlerts(cpuMetric(secondHostId, 95));
+
+    expect(await countAlerts(firstHostId)).toBe(1);
+    expect(await countAlerts(secondHostId)).toBe(0);
+});
+
+test('global rules continue to trigger for all hosts owned by the user', async () => {
+    const user = await createUser();
+
+    const firstHostResponse = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(user.token))
+        .send({ name: `global-first-${Date.now()}` });
+
+    const secondHostResponse = await request(app)
+        .post('/api/hosts/register')
+        .set(authHeader(user.token))
+        .send({ name: `global-second-${Date.now()}` });
+
+    expect(firstHostResponse.status).toBe(201);
+    expect(secondHostResponse.status).toBe(201);
+
+    const firstHostId = firstHostResponse.body.id;
+    const secondHostId = secondHostResponse.body.id;
+
+    await pool.query(
+        `UPDATE alert_rules
+         SET is_active = false
+         WHERE user_id = (
+             SELECT user_id FROM hosts WHERE id = $1
+         )`,
+        [firstHostId]
+    );
+
+    await pool.query(
+        `INSERT INTO alert_rules
+            (metric_name, operator, threshold, duration, is_active, user_id)
+         VALUES (
+            'cpu_usage', '>', 80, 1, true,
+            (SELECT user_id FROM hosts WHERE id = $1)
+         )`,
+        [firstHostId]
+    );
+
+    await evaluateAlerts(cpuMetric(firstHostId, 95));
+    await evaluateAlerts(cpuMetric(secondHostId, 95));
+
+    expect(await countAlerts(firstHostId)).toBe(1);
+    expect(await countAlerts(secondHostId)).toBe(1);
+});
 afterAll(async () => {
     await pool.end();
 });

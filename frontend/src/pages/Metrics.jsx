@@ -10,6 +10,7 @@ import {
   isP95Available
 } from '../utils/metricsQuery'
 import { formatMetricColumnHeader } from '../utils/metricFormatting'
+import { METRICS } from '../config/metricNames'
 import { mergeLiveMetricSample } from '../utils/metricLiveUpdates'
 import useHosts from '../hooks/useHosts'
 import HostSelector from '../components/shared/hostSelector'
@@ -21,6 +22,7 @@ import MetricsChart from '../components/metrics/MetricsChart'
 import MetricsTable from '../components/metrics/MetricsTable'
 import MetricsSkeleton from '../components/metrics/MetricsSkeleton'
 import MetricsEmptyState from '../components/metrics/MetricsEmptyState'
+import CustomMetricsExplorer from '../components/metrics/CustomMetricsExplorer'
 
 // Stable reference, so "no data yet" doesn't look like a change on every render
 const NO_METRICS = []
@@ -53,6 +55,7 @@ export default function Metrics() {
 
   const { hosts, selectedHostId, setSelectedHostId } = useHosts()
   const [selectedComparisonHostIds, setSelectedComparisonHostIds] = useState([])
+  const [metricMode, setMetricMode] = useState('system')
 
   const queryHostIds = selectedHostId
     ? [
@@ -127,6 +130,7 @@ export default function Metrics() {
   const queryRangeFrom = queryRange?.from ?? null
   const queryRangeTo = queryRange?.to ?? null
   const shouldUseLiveUpdates =
+    metricMode === 'system' &&
     timeRange !== 'custom' &&
     ['1m', '5m', '15m'].includes(timeRange) &&
     ['avg', 'min', 'max'].includes(effectiveAggregation) &&
@@ -218,7 +222,7 @@ export default function Metrics() {
   const pollIntervalMs = liveStatus === 'live' ? 60000 : 5000
 
   useEffect(() => {
-    if (!pageVisible || !hostIdsKey || queryRangeFrom === null || queryRangeTo === null) {
+    if (metricMode !== 'system' || !pageVisible || !hostIdsKey || queryRangeFrom === null || queryRangeTo === null) {
       return
     }
 
@@ -363,6 +367,7 @@ export default function Metrics() {
     effectiveStep,
     effectiveAggregation,
     hostIdsKey,
+    metricMode,
     pageVisible,
     pollIntervalMs
   ])
@@ -466,7 +471,7 @@ export default function Metrics() {
           </h1>
 
           <p className="text-gray-400 mt-1">
-            Explore historical system metrics.
+            {metricMode === 'system' ? 'Explore historical system metrics.' : 'Explore discovered custom metrics.'}
           </p>
           {shouldUseLiveUpdates && LIVE_STATUS_LABELS[liveStatus] && (
   <p
@@ -484,19 +489,41 @@ export default function Metrics() {
 
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
 
+          <div className="flex rounded-lg border border-gray-700 p-1">
+            <button
+              type="button"
+              onClick={() => setMetricMode('system')}
+              aria-pressed={metricMode === 'system'}
+              className={`px-3 py-2 rounded-md text-sm font-medium ${metricMode === 'system' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              System
+            </button>
+            <button
+              type="button"
+              onClick={() => setMetricMode('custom')}
+              aria-pressed={metricMode === 'custom'}
+              className={`px-3 py-2 rounded-md text-sm font-medium ${metricMode === 'custom' ? 'bg-emerald-600 text-white' : 'text-gray-400 hover:text-white'}`}
+            >
+              Custom
+            </button>
+          </div>
+
           <HostSelector
             hosts={hosts}
             selectedHostId={selectedHostId}
             onChange={setSelectedHostId}
           />
 
+          {metricMode === 'system' && (
           <HostComparisonSelector
             hosts={hosts}
             primaryHostId={selectedHostId}
             selectedHostIds={selectedComparisonHostIds}
             onChange={setSelectedComparisonHostIds}
           />
+          )}
 
+          {metricMode === 'system' && (
           <button
             onClick={exportCSV}
             disabled={!metrics.length}
@@ -513,11 +540,19 @@ export default function Metrics() {
           >
             Export CSV
           </button>
+          )}
 
         </div>
 
       </div>
 
+      {metricMode === 'custom' ? (
+        <CustomMetricsExplorer
+          hostId={selectedHostId}
+          hostName={hosts.find(host => String(host.id) === String(selectedHostId))?.name}
+        />
+      ) : (
+        <>
       <MetricSelector
         selectedMetrics={selectedMetrics}
         setSelectedMetrics={setSelectedMetrics}
@@ -563,10 +598,18 @@ export default function Metrics() {
         />
       ) : (
         <>
-          <StatsCards
-            metrics={primaryMetrics}
-            selectedMetric={selectedMetrics[0]}
-          />
+          {selectedMetrics.map(metricName => (
+            <StatsCards
+              key={metricName}
+              metrics={primaryMetrics}
+              selectedMetric={metricName}
+              title={
+                selectedMetrics.length > 1
+                  ? (METRICS[metricName]?.name ?? metricName)
+                  : undefined
+              }
+            />
+          ))}
 
           <MetricsChart
             metrics={metrics}
@@ -585,12 +628,16 @@ export default function Metrics() {
           />
         </>
       )}
+        </>
+      )}
 
     </div>
 
   )
 
 }
+
+
 
 
 

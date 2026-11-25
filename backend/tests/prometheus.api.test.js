@@ -74,6 +74,29 @@ describe('GET /metrics - Prometheus exporter', () => {
         expect(invalid.status).toBe(401);
     });
 
+    test('exports hosts belonging to multiple tenants with the global token', async () => {
+        process.env.PROMETHEUS_METRICS_TOKEN = 'test-prometheus-secret';
+
+        const otherUser = await createUser();
+        const otherHostId = await registerHost(
+            otherUser.token,
+            'prometheus-other-tenant-host'
+        );
+
+        const response = await request(app)
+            .get('/metrics')
+            .set('Authorization', 'Bearer test-prometheus-secret');
+
+        expect(response.status).toBe(200);
+
+        expect(response.text).toContain(
+            `pulseiq_host_up{host_id="${onlineHostId}",host_name="prometheus-online-host"} 1`
+        );
+
+        expect(response.text).toContain(
+            `pulseiq_host_up{host_id="${otherHostId}",host_name="prometheus-other-tenant-host"} 0`
+        );
+    });
     test('exports host status and latest metrics with correct units', async () => {
         process.env.PROMETHEUS_METRICS_TOKEN = 'test-prometheus-secret';
 

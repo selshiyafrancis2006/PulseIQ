@@ -31,6 +31,135 @@ CREATE INDEX IF NOT EXISTS idx_hosts_user ON hosts (user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_hosts_user_name
   ON hosts (user_id, name);
 
+-- Custom host metrics with dimensions and tags.
+CREATE TABLE IF NOT EXISTS custom_metrics (
+  id BIGSERIAL PRIMARY KEY,
+  host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  sample_id UUID NOT NULL,
+  metric_name VARCHAR(100) NOT NULL,
+  value DOUBLE PRECISION NOT NULL,
+  unit VARCHAR(32),
+  tags JSONB NOT NULL DEFAULT '{}'::jsonb,
+  collected_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT custom_metrics_name_check
+    CHECK (metric_name ~ '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'),
+  CONSTRAINT custom_metrics_tags_check
+    CHECK (jsonb_typeof(tags) = 'object'),
+  CONSTRAINT custom_metrics_sample_unique
+    UNIQUE (host_id, sample_id, metric_name, tags)
+);
+
+CREATE INDEX IF NOT EXISTS idx_custom_metrics_host_collected
+  ON custom_metrics (host_id, collected_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_custom_metrics_host_name_collected
+  ON custom_metrics (host_id, metric_name, collected_at DESC);
+
+-- Generic metric storage: observations and rollups for tagged metrics.
+-- Generic raw metric observations: one row per metric per sample.
+CREATE TABLE IF NOT EXISTS metric_observations (
+    id BIGSERIAL PRIMARY KEY,
+    host_id INTEGER NOT NULL
+        REFERENCES hosts(id) ON DELETE CASCADE,
+    sample_id UUID NOT NULL,
+    metric_name VARCHAR(100) NOT NULL,
+    value DOUBLE PRECISION NOT NULL,
+    unit VARCHAR(32),
+    tags JSONB NOT NULL DEFAULT '{}'::jsonb,
+    collected_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT metric_observations_name_check
+        CHECK (metric_name ~ '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'),
+
+    CONSTRAINT metric_observations_value_check
+        CHECK (
+            value > '-Infinity'::DOUBLE PRECISION
+            AND value < 'Infinity'::DOUBLE PRECISION
+        ),
+
+    CONSTRAINT metric_observations_tags_check
+        CHECK (jsonb_typeof(tags) = 'object'),
+
+    CONSTRAINT metric_observations_sample_unique
+        UNIQUE (host_id, sample_id, metric_name, tags)
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_observations_host_collected
+    ON metric_observations (host_id, collected_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_metric_observations_host_name_collected
+    ON metric_observations (host_id, metric_name, collected_at DESC);
+
+
+-- Generic five-minute metric rollups.
+CREATE TABLE IF NOT EXISTS metric_rollups_5m_generic (
+    id BIGSERIAL PRIMARY KEY,
+    host_id INTEGER NOT NULL
+        REFERENCES hosts(id) ON DELETE CASCADE,
+    metric_name VARCHAR(100) NOT NULL,
+    unit VARCHAR(32),
+    tags JSONB NOT NULL DEFAULT '{}'::jsonb,
+    bucket_start TIMESTAMPTZ NOT NULL,
+    value_avg DOUBLE PRECISION,
+    value_min DOUBLE PRECISION,
+    value_max DOUBLE PRECISION,
+    sample_count INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT metric_rollups_5m_generic_name_check
+        CHECK (metric_name ~ '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'),
+
+    CONSTRAINT metric_rollups_5m_generic_tags_check
+        CHECK (jsonb_typeof(tags) = 'object'),
+
+    CONSTRAINT metric_rollups_5m_generic_count_check
+        CHECK (sample_count > 0),
+
+    CONSTRAINT metric_rollups_5m_generic_bucket_unique
+        UNIQUE NULLS NOT DISTINCT
+        (host_id, metric_name, unit, tags, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_rollups_5m_generic_host_metric_bucket
+    ON metric_rollups_5m_generic
+    (host_id, metric_name, bucket_start DESC);
+
+
+-- Generic hourly metric rollups.
+CREATE TABLE IF NOT EXISTS metric_rollups_1h_generic (
+    id BIGSERIAL PRIMARY KEY,
+    host_id INTEGER NOT NULL
+        REFERENCES hosts(id) ON DELETE CASCADE,
+    metric_name VARCHAR(100) NOT NULL,
+    unit VARCHAR(32),
+    tags JSONB NOT NULL DEFAULT '{}'::jsonb,
+    bucket_start TIMESTAMPTZ NOT NULL,
+    value_avg DOUBLE PRECISION,
+    value_min DOUBLE PRECISION,
+    value_max DOUBLE PRECISION,
+    sample_count INTEGER NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT metric_rollups_1h_generic_name_check
+        CHECK (metric_name ~ '^[a-zA-Z][a-zA-Z0-9_.-]{0,99}$'),
+
+    CONSTRAINT metric_rollups_1h_generic_tags_check
+        CHECK (jsonb_typeof(tags) = 'object'),
+
+    CONSTRAINT metric_rollups_1h_generic_count_check
+        CHECK (sample_count > 0),
+
+    CONSTRAINT metric_rollups_1h_generic_bucket_unique
+        UNIQUE NULLS NOT DISTINCT
+        (host_id, metric_name, unit, tags, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_metric_rollups_1h_generic_host_metric_bucket
+    ON metric_rollups_1h_generic
+    (host_id, metric_name, bucket_start DESC);
+
 -- Remove the obsolete duplicate index.
 DROP INDEX IF EXISTS idx_hosts_user_name_unique;
 
@@ -360,6 +489,34 @@ ALTER TABLE alert_rules
 
 CREATE INDEX IF NOT EXISTS idx_alert_rules_user ON alert_rules (user_id);
 
+ALTER TABLE alert_rules
+  ADD COLUMN IF NOT EXISTS host_id INTEGER
+  REFERENCES hosts(id) ON DELETE CASCADE;
+
+CREATE INDEX IF NOT EXISTS idx_alert_rules_host_scope
+  ON alert_rules (user_id, host_id, is_active);
+
+-- Clear a rule's breach state when it is switched on or off, moved to another
+-- host, or pointed at another metric (see migrations/20261124_alert_rule_state_reset.sql).
+CREATE OR REPLACE FUNCTION reset_alert_rule_state() RETURNS trigger AS $$
+BEGIN
+  DELETE FROM alert_rule_states WHERE rule_id = NEW.id;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_alert_rule_state_reset ON alert_rules;
+
+CREATE TRIGGER trg_alert_rule_state_reset
+AFTER UPDATE OF is_active, host_id, metric_name ON alert_rules
+FOR EACH ROW
+WHEN (
+  OLD.is_active IS DISTINCT FROM NEW.is_active
+  OR OLD.host_id IS DISTINCT FROM NEW.host_id
+  OR OLD.metric_name IS DISTINCT FROM NEW.metric_name
+)
+EXECUTE PROCEDURE reset_alert_rule_state();
+
 ALTER TABLE hosts
   ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
 
@@ -398,11 +555,27 @@ CREATE TABLE IF NOT EXISTS anomalies (
   baseline_mean FLOAT NOT NULL,
   baseline_stddev FLOAT NOT NULL,
   deviation_score FLOAT NOT NULL,
+  bucket_start TIMESTAMPTZ,
   timestamp TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_anomalies_host_timestamp
   ON anomalies (host_id, timestamp DESC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_anomalies_host_metric_bucket
+  ON anomalies (host_id, metric_name, bucket_start)
+  WHERE bucket_start IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS anomaly_detection_buckets (
+  host_id INTEGER NOT NULL REFERENCES hosts(id) ON DELETE CASCADE,
+  metric_name VARCHAR(50) NOT NULL,
+  bucket_start TIMESTAMPTZ NOT NULL,
+  processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (host_id, metric_name, bucket_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_anomaly_detection_buckets_processed
+  ON anomaly_detection_buckets (processed_at);
 
 ALTER TABLE monitors
   ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';

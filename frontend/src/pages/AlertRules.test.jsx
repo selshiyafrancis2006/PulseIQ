@@ -1,11 +1,21 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import AlertRules from './AlertRules'
-import { getAlertRules, updateAlertRule } from '../services/alert.service'
+import { getAlertRules, createAlertRule, updateAlertRule, deleteAlertRule } from '../services/alert.service'
 
 vi.mock('../services/alert.service', () => ({
   getAlertRules: vi.fn(),
+  createAlertRule: vi.fn(),
   updateAlertRule: vi.fn(),
+  deleteAlertRule: vi.fn(),
+}))
+
+vi.mock('../hooks/useHosts', () => ({
+  default: vi.fn(() => ({
+    hosts: [],
+    loading: false,
+    error: null,
+  })),
 }))
 
 const rules = [
@@ -350,15 +360,12 @@ describe('AlertRules page', () => {
 
     await waitFor(() => {
       expect(updateAlertRule).toHaveBeenCalledWith(1, {
-        threshold: 80,
         is_active: false,
       })
     })
 
-    await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: 'Enable' }))
-        .toHaveLength(3)
-    })
+    expect(screen.getAllByRole('button', { name: 'Enable' }))
+      .toHaveLength(3)
   })
 
   it('enables a disabled rule through the API', async () => {
@@ -375,13 +382,12 @@ describe('AlertRules page', () => {
 
     await waitFor(() => {
       expect(updateAlertRule).toHaveBeenCalledWith(2, {
-        threshold: 70,
         is_active: true,
       })
     })
   })
 
-  it('updates a threshold when its input loses focus', async () => {
+  it('updates a threshold through the edit form', async () => {
     updateAlertRule.mockImplementation(async (id, data) => ({
       ...rules.find(rule => rule.id === id),
       ...data,
@@ -391,38 +397,111 @@ describe('AlertRules page', () => {
 
     await screen.findByText('CPU Usage')
 
-    const thresholdInput = screen.getAllByRole('spinbutton')[0]
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0])
+
+    const thresholdInput = await screen.findByLabelText(/Threshold/)
 
     fireEvent.change(thresholdInput, {
       target: { value: '75' },
     })
 
-    fireEvent.blur(thresholdInput)
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
 
     await waitFor(() => {
       expect(updateAlertRule).toHaveBeenCalledWith(1, {
+        metric_name: 'cpu_usage',
+        operator: '>',
         threshold: 75,
+        duration: 1,
         is_active: true,
+        host_id: null,
       })
     })
   })
 
-  it('does not call the API for a non-numeric threshold', async () => {
+  it('does not call the API for an invalid threshold', async () => {
     renderPage()
 
     await screen.findByText('CPU Usage')
 
-    const thresholdInput = screen.getAllByRole('spinbutton')[0]
+    fireEvent.click(screen.getAllByRole('button', { name: 'Edit' })[0])
+
+    const thresholdInput = await screen.findByLabelText(/Threshold/)
 
     fireEvent.change(thresholdInput, {
       target: { value: '' },
     })
 
-    fireEvent.blur(thresholdInput)
+    fireEvent.click(screen.getByRole('button', { name: 'Save Changes' }))
+
+    expect(await screen.findByText('Enter a valid threshold.'))
+      .toBeInTheDocument()
 
     expect(updateAlertRule).not.toHaveBeenCalled()
   })
+  it('creates a rule through the page and displays it', async () => {
+    createAlertRule.mockResolvedValue({
+      id: 5,
+      metric_name: 'network_out',
+      operator: '>',
+      threshold: 80,
+      duration: 1,
+      severity: 'info',
+      is_active: true,
+      host_id: null,
+    })
 
+    renderPage()
+
+    await screen.findByText('CPU Usage')
+
+    fireEvent.click(screen.getByRole('button', { name: '+ Create Rule' }))
+
+    fireEvent.change(screen.getByLabelText('Metric'), {
+      target: { value: 'network_out' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create Rule' }))
+
+    await waitFor(() => {
+      expect(createAlertRule).toHaveBeenCalledWith({
+        metric_name: 'network_out',
+        operator: '>',
+        threshold: 80,
+        duration: 1,
+        is_active: true,
+        host_id: null,
+      })
+    })
+
+    expect(await screen.findByText('Outgoing Network')).toBeInTheDocument()
+    expect(screen.queryByText('Create Alert Rule')).not.toBeInTheDocument()
+  })
+
+  it('deletes a rule after confirmation', async () => {
+    deleteAlertRule.mockResolvedValue({
+      message: 'Alert rule deleted',
+      id: 1,
+    })
+
+    const { container } = renderPage()
+
+    await screen.findByText('CPU Usage')
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[0])
+
+    expect(screen.getByText(/Delete this alert rule/)).toBeInTheDocument()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm Delete' }))
+
+    await waitFor(() => {
+      expect(deleteAlertRule).toHaveBeenCalledWith(1)
+    })
+
+    await waitFor(() => {
+      expect(getRuleNames(container)).not.toContain('CPU Usage')
+    })
+  })
   it('keeps the page usable when a rule update fails', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
 

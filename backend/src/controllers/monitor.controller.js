@@ -987,15 +987,6 @@ const selectedRangeCoverageResult = await db.query(
                     SELECT interval_seconds * 3
                     FROM monitor_bounds
                 )
-            )
-            AND NOT EXISTS (
-                SELECT 1
-                FROM monitor_results prior
-                WHERE prior.monitor_id = $1
-                  AND prior.checked_at < (
-                      SELECT window_start FROM monitor_bounds
-                  )
-                  AND prior.in_maintenance = FALSE
             ),
             TRUE
         ) AS has_initial_gap

@@ -4,16 +4,21 @@ const si = require('systeminformation');
 const axios = require('axios');
 const { randomUUID } = require('crypto');
 const path = require('path');
+const os = require('os');
 const { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { createFileStore } = require('./metric-queue-store');
 const { toRateKBps } = require('./metric-rates');
+const { getMemoryUsagePercent } = require('./metric-memory');
 const { pickSystemDisk, pickNetworkStats } = require('./metric-selection');
+const { buildSystemCustomMetrics } = require('./custom-metrics');
+const { getMetricsEndpoint } = require('./metric-endpoint');
 const { createProcessReporter } = require('./process-snapshot');
 const { version: AGENT_VERSION } = require('./package.json');
 
 const METADATA_INTERVAL_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 10000;
 const INGEST_PATH = '/api/agent/metrics';
+const CUSTOM_METRICS_PATH = '/api/agent/custom-metrics';
 const DEFAULT_QUEUE_MAX_SIZE = 100;
 const DEFAULT_PROCESS_INTERVAL_MS = 30000;
 const NETWORK_WARMUP_MS = 1000;
@@ -77,6 +82,11 @@ function loadConfig() {
         process.exit(1);
     }
 
+    const customMetricsEnabled = (process.env.CUSTOM_METRICS_ENABLED || 'false').trim().toLowerCase() === 'true';
+    const customMetricsUrl = metricsUrl
+        ? metricsUrl.replace(/\/api\/agent\/metrics$/, CUSTOM_METRICS_PATH)
+        : null;
+
     const interval = Number(process.env.INTERVAL_MS);
     const queueMaxSize = Number.parseInt(process.env.QUEUE_MAX_SIZE, 10);
 
@@ -99,6 +109,8 @@ function loadConfig() {
 
     return {
         metricsUrl,
+        customMetricsUrl,
+        customMetricsEnabled,
         processesUrl: metricsUrl ? metricsUrl.replace(/\/metrics$/, '/processes') : null,
         processIntervalMs,
         apiKey,
@@ -133,8 +145,10 @@ const metricQueue = new MetricDeliveryQueue({
         let response;
 
         try {
+            const endpoint = getMetricsEndpoint(payload, config);
+
             response = await axios.post(
-                config.metricsUrl,
+                endpoint,
                 payload,
                 {
                     headers: {
@@ -256,9 +270,7 @@ async function collectAndSend() {
 
         const cpu_usage = Number(cpuLoad.currentLoad.toFixed(2));
 
-        const memory_usage = Number(
-            ((mem.used / mem.total) * 100).toFixed(2)
-        );
+        const memory_usage = getMemoryUsagePercent(mem);
 
         const systemDisk = pickSystemDisk(disks);
         const network = pickNetworkStats(networkStats, preferredIface);
@@ -293,7 +305,35 @@ async function collectAndSend() {
             }
         }
 
+        // Always enqueue the original five fixed metrics first.
         metricQueue.enqueue(payload);
+
+        // Custom dimensions use a separate endpoint and payload.
+        // Their failure must never interrupt fixed-metric collection.
+        if (config.customMetricsEnabled) {
+            try {
+                const customMetrics = buildSystemCustomMetrics({
+                    disks,
+                    networkStats,
+                    loadAverage: process.platform === 'win32'
+                        ? null
+                        : os.loadavg()
+                });
+
+                if (customMetrics.length > 0) {
+                    metricQueue.enqueue({
+                        sample_id: payload.sample_id,
+                        collected_at: collectedAt,
+                        metrics: customMetrics
+                    });
+                }
+            } catch (customMetricsError) {
+                console.warn(
+                    `[${new Date().toISOString()}] Custom metric collection failed:`,
+                    customMetricsError.message
+                );
+            }
+        }
 
     } catch (err) {
         console.error(
@@ -411,3 +451,5 @@ process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 
 start();
+
+
