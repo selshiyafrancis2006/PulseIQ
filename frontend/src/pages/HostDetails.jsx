@@ -461,7 +461,7 @@ export default function HostDetails() {
       </div>
 
       {/* HOST METRICS */}
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         {BUILT_IN_METRICS.map((metric) => (
           <KpiCard
             key={metric.name}
@@ -491,6 +491,18 @@ export default function HostDetails() {
       <MetricsChart
         metrics={metrics}
         selectedMetrics={['disk_usage']}
+        timeRange={timeRange}
+      />
+
+      <MetricsChart
+        metrics={metrics}
+        selectedMetrics={['load_avg']}
+        timeRange={timeRange}
+      />
+
+      <MetricsChart
+        metrics={metrics}
+        selectedMetrics={['swap_usage']}
         timeRange={timeRange}
       />
     </div>

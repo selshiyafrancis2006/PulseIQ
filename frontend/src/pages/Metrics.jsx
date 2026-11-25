@@ -13,6 +13,7 @@ import { formatMetricColumnHeader } from '../utils/metricFormatting'
 import { METRICS } from '../config/metricNames'
 import { mergeLiveMetricSample } from '../utils/metricLiveUpdates'
 import useHosts from '../hooks/useHosts'
+import useChartEvents from '../hooks/useChartEvents'
 import HostSelector from '../components/shared/hostSelector'
 import HostComparisonSelector from '../components/metrics/HostComparisonSelector'
 
@@ -68,6 +69,8 @@ export default function Metrics() {
     : []
 
   const hostIdsKey = queryHostIds.map(String).join(',')
+  const { alerts: chartAlerts, anomalies: chartAnomalies } =
+    useChartEvents(selectedHostId)
 
   const [metricsResult, setMetricsResult] = useState({ hostId: null, hostIdsKey: null, range: null, step: null, aggregation: null, data: [] })
   const [errorResult, setErrorResult] = useState({ hostId: null, hostIdsKey: null, range: null, step: null, aggregation: null, message: null })
@@ -618,6 +621,8 @@ export default function Metrics() {
             primaryHostId={selectedHostId}
             hosts={hosts}
             comparisonHostIds={queryHostIds.slice(1)}
+            alerts={chartAlerts}
+            anomalies={chartAnomalies}
           />
 
           <MetricsTable

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -10,6 +10,7 @@ import {
   Filler
 } from 'chart.js'
 import { apiFetch } from '../../utils/apiFetch'
+import { METRICS } from '../../config/metricNames'
 import { API_BASE_URL } from '../../config/api'
 import { buildMetricChartPoints } from '../../utils/metricChartData'
 
@@ -21,14 +22,6 @@ ChartJS.register(
   Tooltip,
   Filler
 )
-
-const metricLabels = {
-  cpu_usage: 'CPU Usage',
-  memory_usage: 'Memory Usage',
-  disk_usage: 'Disk Usage',
-  network_in: 'Network In',
-  network_out: 'Network Out'
-}
 
 export default function MetricChartWidget({ hostId, metric, hostName, timeRange }) {
 
@@ -64,7 +57,7 @@ export default function MetricChartWidget({ hostId, metric, hostName, timeRange 
 
   }, [hostId, metric, timeRange])
 
-  const color = '#10b981' // emerald - one consistent color across every widget, matches app theme
+  const color = METRICS[metric]?.color || '#10b981'
 
   const chartPoints = buildMetricChartPoints(metrics, timeRange)
 
@@ -106,7 +99,7 @@ export default function MetricChartWidget({ hostId, metric, hostName, timeRange 
     <div className="h-full flex flex-col p-3">
       <div className="flex items-center gap-2 mb-2">
         <p className="text-sm text-white truncate">
-          {metricLabels[metric] || metric} - {hostName}
+          {METRICS[metric]?.name || metric} - {hostName}
         </p>
         {!loading && metrics.length > 0 && (
           <span className="relative flex h-2 w-2 shrink-0" title="Live">

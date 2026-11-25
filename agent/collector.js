@@ -5,7 +5,7 @@ const axios = require('axios');
 const { randomUUID } = require('crypto');
 const path = require('path');
 const os = require('os');
-const { MetricDeliveryQueue } = require('./metric-delivery-queue');
+onst { MetricDeliveryQueue } = require('./metric-delivery-queue');
 const { createFileStore } = require('./metric-queue-store');
 const { toRateKBps } = require('./metric-rates');
 const { getMemoryUsagePercent } = require('./metric-memory');
@@ -272,6 +272,7 @@ async function collectAndSend() {
 
         const memory_usage = getMemoryUsagePercent(mem);
 
+
         const systemDisk = pickSystemDisk(disks);
         const network = pickNetworkStats(networkStats, preferredIface);
 
@@ -284,6 +285,16 @@ async function collectAndSend() {
         const network_in = network ? toRateKBps(network.rx_sec) : 0;
         const network_out = network ? toRateKBps(network.tx_sec) : 0;
 
+        // os.loadavg() is always zeros on Windows, so the load average is
+        // left out there instead of reporting a misleading 0.
+        const load_avg = process.platform === 'win32'
+            ? undefined
+            : Number(os.loadavg()[0].toFixed(2));
+
+        const swap_usage = mem.swaptotal > 0
+            ? Number(Math.min(100, (mem.swapused / mem.swaptotal) * 100).toFixed(2))
+            : 0;
+
         const payload = {
             sample_id: randomUUID(),
             collected_at: collectedAt,
@@ -291,7 +302,9 @@ async function collectAndSend() {
             memory_usage,
             disk_usage,
             network_in,
-            network_out
+            network_out,
+            load_avg,
+            swap_usage
         };
 
         const metadataDue =

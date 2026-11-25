@@ -1,4 +1,4 @@
-﻿import { METRICS, METRIC_NAMES } from '../config/metricNames'
+﻿import { METRICS, LIVE_METRIC_KEYS } from '../config/metricNames'
 
 const STEP_MS = {
   '1m': 60 * 1000,
@@ -6,7 +6,7 @@ const STEP_MS = {
   '15m': 15 * 60 * 1000
 }
 
-const METRIC_FIELDS = METRIC_NAMES
+const METRIC_FIELDS = LIVE_METRIC_KEYS
 
 const DATE_BIN_ORIGIN = Date.UTC(2000, 0, 1)
 
@@ -35,12 +35,18 @@ export const mergeLiveMetricSample = (
     (typeof sample.host_id !== 'number' && typeof sample.host_id !== 'string') ||
     String(sample.host_id).trim() === '' ||
     !Number.isFinite(Number(sample.host_id)) ||
-    !METRIC_FIELDS.every(field =>
-      typeof sample[field] === 'number' &&
-      Number.isFinite(sample[field]) &&
-      sample[field] >= 0 &&
-      (METRICS[field].maxValue == null || sample[field] <= METRICS[field].maxValue)
-    )
+    !METRIC_FIELDS.every(field => {
+      const value = sample[field]
+
+      if (value == null && METRICS[field].required === false) {
+        return true
+      }
+
+      return typeof value === 'number' &&
+        Number.isFinite(value) &&
+        value >= 0 &&
+        (METRICS[field].maxValue == null || value <= METRICS[field].maxValue)
+    })
   ) {
     return rows
   }
@@ -64,7 +70,18 @@ export const mergeLiveMetricSample = (
         latest_sample_timestamp: new Date(sampleTimestamp).toISOString(),
         sample_count: 1,
         ...Object.fromEntries(
-          METRIC_FIELDS.map(field => [field, Number(sample[field])])
+          METRIC_FIELDS.map(field => [
+            field,
+            typeof sample[field] === 'number' ? sample[field] : null
+          ])
+        ),
+        ...Object.fromEntries(
+          METRIC_FIELDS
+            .filter(field => METRICS[field].required === false)
+            .map(field => [
+              `${field}_sample_count`,
+              typeof sample[field] === 'number' ? 1 : 0
+            ])
         )
       }
     ].sort((a, b) =>
@@ -85,10 +102,12 @@ export const mergeLiveMetricSample = (
     !Number.isInteger(sampleCount) ||
     sampleCount < 1 ||
     sampleTimestamp <= latestTimestamp ||
-    !METRIC_FIELDS.every(field =>
-      typeof bucket[field] === 'number' &&
-      Number.isFinite(bucket[field])
-    )
+    !METRIC_FIELDS
+      .filter(field => METRICS[field].required !== false)
+      .every(field =>
+        typeof bucket[field] === 'number' &&
+        Number.isFinite(bucket[field])
+      )
   ) {
     return rows
   }
@@ -100,21 +119,41 @@ export const mergeLiveMetricSample = (
   }
 
   for (const field of METRIC_FIELDS) {
-    const currentValue = Number(bucket[field])
-    const incomingValue = Number(sample[field])
+    const incomingValue = sample[field]
 
-    if (!Number.isFinite(currentValue)) continue
+    if (typeof incomingValue !== 'number' || !Number.isFinite(incomingValue)) {
+      continue
+    }
+
+    const currentValue = bucket[field]
+    const isOptional = METRICS[field].required === false
+    const metricCount = isOptional
+      ? Number.isInteger(bucket[`${field}_sample_count`])
+        ? bucket[`${field}_sample_count`]
+        : (typeof currentValue === 'number' ? sampleCount : 0)
+      : sampleCount
+
+    if (typeof currentValue !== 'number' || !Number.isFinite(currentValue)) {
+      updatedBucket[field] = incomingValue
+      if (isOptional) updatedBucket[`${field}_sample_count`] = 1
+      continue
+    }
 
     if (aggregation === 'avg') {
       updatedBucket[field] = (
-        currentValue * sampleCount + incomingValue
-      ) / (sampleCount + 1)
+        currentValue * metricCount + incomingValue
+      ) / (metricCount + 1)
     } else if (aggregation === 'min') {
       updatedBucket[field] = Math.min(currentValue, incomingValue)
     } else {
       updatedBucket[field] = Math.max(currentValue, incomingValue)
     }
+
+    if (isOptional) {
+      updatedBucket[`${field}_sample_count`] = metricCount + 1
+    }
   }
 
   return rows.map(row => row === bucket ? updatedBucket : row)
 }
+

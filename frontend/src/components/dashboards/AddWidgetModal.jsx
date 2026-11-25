@@ -1,11 +1,9 @@
-import { useEffect, useState } from 'react'
+﻿import { useEffect, useState } from 'react'
 import { apiFetch } from '../../utils/apiFetch'
 import { API_BASE_URL } from '../../config/api'
-import { METRIC_NAMES, METRICS } from '../../config/metricNames'
+import { DASHBOARD_METRIC_OPTIONS } from '../../config/metricNames'
 
-const metricOptions = METRIC_NAMES
-  .filter((name) => METRICS[name].capabilities.dashboardWidgets)
-  .map((name) => ({ label: METRICS[name].name, value: name }))
+const metricOptions = DASHBOARD_METRIC_OPTIONS
 
 export default function AddWidgetModal({ hosts, onClose, onAdd }) {
 
@@ -46,7 +44,7 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
       onAdd({
         type: 'metric_chart',
         config: { host_id: Number(hostId), metric },
-        title: `${metricLabel} · ${selectedHost?.name || 'Host'}`
+        title: `${metricLabel} Â· ${selectedHost?.name || 'Host'}`
       })
     } else if (widgetType === 'monitor_status') {
       if (!monitorId) return
@@ -68,7 +66,7 @@ export default function AddWidgetModal({ hosts, onClose, onAdd }) {
       onAdd({
         type: 'apm_summary',
         config: { host_id: Number(hostId) },
-        title: `APM · ${selectedHost?.name || 'Host'}`
+        title: `APM Â· ${selectedHost?.name || 'Host'}`
       })
     }
   }

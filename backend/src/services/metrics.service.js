@@ -22,7 +22,7 @@ const LONG_RANGES = {
     '90d': { ms: 90 * 24 * 60 * 60 * 1000, step: '1h' }
 };
 
-const { METRIC_NAMES: LONG_RANGE_METRICS } = require('../config/metricRegistry');
+const { METRIC_NAMES: LONG_RANGE_METRICS } = require('../config/metrics');
 
 const isSupportedRange = (range) => {
     return (

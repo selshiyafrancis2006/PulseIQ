@@ -8,6 +8,10 @@ vi.mock('../utils/apiFetch', () => ({
   apiFetch: vi.fn(),
 }));
 
+vi.mock('../hooks/useChartEvents', () => ({
+  default: () => ({ alerts: [], anomalies: [] }),
+}))
+
 vi.mock('../hooks/useHosts', () => ({
   default: vi.fn(),
 }));

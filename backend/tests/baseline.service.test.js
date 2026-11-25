@@ -8,8 +8,12 @@ const createClient = (candidateRows = [], cooldownRows = []) => {
     const query = jest.fn()
         .mockResolvedValueOnce({ rows: candidateRows })
         .mockImplementation(async (sql) => {
+            if (sql.includes('INSERT INTO anomalies')) {
+                return { rows: [], rowCount: 1 };
+            }
+
             if (sql.includes('FROM anomalies')) {
-                return { rows: cooldownRows };
+                return { rows: cooldownRows, rowCount: 0 };
             }
 
             return { rows: [], rowCount: 1 };

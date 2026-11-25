@@ -1,12 +1,9 @@
 const pool = require('../config/db');
+const { PERCENT_METRICS } = require('../config/metrics');
 const { notifyMetricChanges } = require('./metricAlertNotification.service');
 
 function getAlertSeverity(metricName, value) {
-    const percentageMetrics = new Set([
-        'cpu_usage',
-        'memory_usage',
-        'disk_usage'
-    ]);
+    const percentageMetrics = new Set(PERCENT_METRICS);
 
     if (percentageMetrics.has(metricName) && value >= 90) {
         return 'Critical';

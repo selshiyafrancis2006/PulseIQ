@@ -163,6 +163,42 @@ test("returns 404 and changes nothing for another user's rule", async () => {
     expect(cpuRule(await getRules(owner)).threshold).toBe(rule.threshold);
 });
 
+test('a load_avg rule accepts thresholds above 100', async () => {
+    const user = await createUser();
+    const owner = await pool.query('SELECT id FROM users WHERE email = $1', [user.email]);
+
+    const inserted = await pool.query(
+        `INSERT INTO alert_rules
+            (metric_name, operator, threshold, duration, is_active, user_id)
+         VALUES ('load_avg', '>', 5, 1, true, $1)
+         RETURNING id`,
+        [owner.rows[0].id]
+    );
+
+    const response = await putRule(user, inserted.rows[0].id, { threshold: 125.5 });
+
+    expect(response.status).toBe(200);
+    expect(response.body.threshold).toBe(125.5);
+});
+
+test('a swap_usage rule rejects thresholds above 100', async () => {
+    const user = await createUser();
+    const owner = await pool.query('SELECT id FROM users WHERE email = $1', [user.email]);
+
+    const inserted = await pool.query(
+        `INSERT INTO alert_rules
+            (metric_name, operator, threshold, duration, is_active, user_id)
+         VALUES ('swap_usage', '>', 50, 1, true, $1)
+         RETURNING id`,
+        [owner.rows[0].id]
+    );
+
+    const response = await putRule(user, inserted.rows[0].id, { threshold: 100.1 });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toMatch(/Percentage metric thresholds/);
+});
+
 test('a network rule accepts thresholds above 100', async () => {
     const user = await createUser();
     const owner = await pool.query('SELECT id FROM users WHERE email = $1', [user.email]);

@@ -91,3 +91,45 @@ describe('MetricChartWidget chart data', () => {
     expect(chartData.datasets[0].data).toEqual([10, 20, null, 40, 50])
   })
 })
+// Built-in metrics added through the shared metric registry.
+describe('MetricChartWidget shared metric registry', () => {
+  test.each([
+    ['load_avg', 'Load Average (1m)'],
+    ['swap_usage', 'Swap Usage']
+  ])('renders %s using its shared label and metric values', async (metric, label) => {
+    const now = Date.now()
+    const collectedAt = (secondsAgo) =>
+      new Date(now - secondsAgo * 1000).toISOString()
+
+    apiFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => [
+        { timestamp: new Date(now).toISOString(), collected_at: collectedAt(40), [metric]: 10 },
+        { timestamp: new Date(now).toISOString(), collected_at: collectedAt(35), [metric]: 20 },
+        { timestamp: new Date(now).toISOString(), collected_at: collectedAt(25), [metric]: 40 },
+        { timestamp: new Date(now).toISOString(), collected_at: collectedAt(20), [metric]: 50 }
+      ]
+    })
+
+    render(
+      <MetricChartWidget
+        hostId={1}
+        metric={metric}
+        hostName="test-host"
+        timeRange="1m"
+      />
+    )
+
+    await waitFor(() => {
+      expect(screen.getByText(`${label} - test-host`)).toBeInTheDocument()
+      expect(screen.getByTestId('line-chart')).toBeInTheDocument()
+    })
+
+    const chartData = JSON.parse(
+      screen.getByTestId('line-chart').getAttribute('data-chart')
+    )
+
+    expect(chartData.datasets[0].data).toEqual([10, 20, null, 40, 50])
+  })
+})

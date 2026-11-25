@@ -1,4 +1,4 @@
-﻿const {
+const {
     app,
     pool,
     request,
@@ -10,7 +10,8 @@
 const metricsQueryService = require('../src/services/metricsQuery.service');
 const {
     RAW_RETENTION_DAYS,
-    ROLLUP_5M_RETENTION_DAYS
+    ROLLUP_5M_RETENTION_DAYS,
+    ROLLUP_1H_RETENTION_DAYS
 } = require('../src/services/metricRollup.service');
 
 let userA;
@@ -1256,7 +1257,7 @@ describe('GET /api/metrics/custom - access and validation', () => {
     test('rejects a query outside custom metric retention', async () => {
         const to = new Date(Date.now() - 1000);
         const from = new Date(
-            to.getTime() - (RAW_RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000
+            to.getTime() - (ROLLUP_1H_RETENTION_DAYS + 1) * 24 * 60 * 60 * 1000
         );
 
         const res = await request(app)

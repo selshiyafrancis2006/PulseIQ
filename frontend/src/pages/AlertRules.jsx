@@ -26,7 +26,7 @@ export default function AlertRules() {
   const [editingRuleId, setEditingRuleId] = useState(null);
   const [pageError, setPageError] = useState("");
 
-  const { hosts, loading: hostsLoading, error: hostsError } = useHosts();
+  const { hosts, error: hostsError } = useHosts();
 
   useEffect(() => {
     fetchRules();

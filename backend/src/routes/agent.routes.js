@@ -1,10 +1,11 @@
-﻿const express = require('express');
+const express = require('express');
 const { randomUUID } = require('crypto');
 const {
     BUILT_IN_METRICS,
     METRIC_NAMES,
     isPercentageMetric
 } = require('../config/metricRegistry');
+const { OPTIONAL_METRICS } = require('../config/metrics');
 const router = express.Router();
 const pool = require('../config/db');
 const authenticateAgent = require('../middleware/agentAuth.middleware');
@@ -240,7 +241,20 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
             METRIC_NAMES.map(name => [name, req.body[name]])
         );
 
+        // Optional metrics are accepted only when supplied by the agent.
+        for (const key of OPTIONAL_METRICS) {
+            const value = req.body[key];
+
+            if (value !== undefined && value !== null) {
+                metricValues[key] = value;
+            }
+        }
+
         for (const [key, value] of Object.entries(metricValues)) {
+            if (OPTIONAL_METRICS.includes(key) && (value === undefined || value === null)) {
+                continue;
+            }
+
             if (
                 typeof value !== 'number' ||
                 !Number.isFinite(value) ||
@@ -336,9 +350,11 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
                     network_out,
                     host_id,
                     sample_id,
-                    collected_at
+                    collected_at,
+                    load_avg,
+                    swap_usage
                 )
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                 ON CONFLICT (host_id, sample_id) DO NOTHING
                 RETURNING *`,
                 [
@@ -349,7 +365,9 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
                     network_out,
                     req.agentHost.id,
                     effectiveSampleId,
-                    effectiveCollectedAt
+                    effectiveCollectedAt,
+                    metricValues.load_avg ?? null,
+                    metricValues.swap_usage ?? null
                 ]
             );
 
@@ -374,12 +392,17 @@ router.post('/metrics', authenticateAgent, async (req, res) => {
                 return res.status(200).json(savedMetric);
             }
 
-            const observations = BUILT_IN_METRICS.map(({ name, unit }) => ({
-                metric_name: name,
-                value: metricValues[name],
-                unit,
-                tags: {}
-            }));
+            const observations = BUILT_IN_METRICS
+                .filter(({ name }) =>
+                    metricValues[name] !== undefined &&
+                    metricValues[name] !== null
+                )
+                .map(({ name, unit }) => ({
+                    metric_name: name,
+                    value: metricValues[name],
+                    unit,
+                    tags: {}
+                }));
 
             await client.query(
                 `INSERT INTO metric_observations (

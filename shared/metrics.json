@@ -1,6 +1,7 @@
 {
   "cpu_usage": {
     "name": "CPU Usage",
+    "required": true,
     "notificationLabel": "CPU usage",
     "description": "Triggers when CPU usage exceeds the configured threshold.",
     "unit": "%",
@@ -22,6 +23,7 @@
   },
   "memory_usage": {
     "name": "Memory Usage",
+    "required": true,
     "notificationLabel": "Memory usage",
     "description": "Triggers when memory usage exceeds the configured threshold.",
     "unit": "%",
@@ -43,6 +45,7 @@
   },
   "disk_usage": {
     "name": "Disk Usage",
+    "required": true,
     "notificationLabel": "Disk usage",
     "description": "Triggers when disk usage exceeds the configured threshold.",
     "unit": "%",
@@ -64,6 +67,7 @@
   },
   "network_in": {
     "name": "Incoming Network",
+    "required": true,
     "notificationLabel": "Incoming network",
     "description": "Triggers when incoming network traffic exceeds the configured threshold.",
     "unit": "KB/s",
@@ -82,6 +86,7 @@
   },
   "network_out": {
     "name": "Outgoing Network",
+    "required": true,
     "notificationLabel": "Outgoing network",
     "description": "Triggers when outgoing network traffic exceeds the configured threshold.",
     "unit": "KB/s",
@@ -89,6 +94,47 @@
     "minValue": 0,
     "maxValue": null,
     "color": "#fb7185",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  },
+  "load_avg": {
+    "name": "Load Average (1m)",
+    "required": false,
+    "notificationLabel": "Load average",
+    "description": "Triggers when system load average exceeds the configured threshold.",
+    "unit": "",
+    "thresholds": null,
+    "minValue": 0,
+    "maxValue": null,
+    "color": "#c084fc",
+    "capabilities": {
+      "agentIngestion": true,
+      "query": true,
+      "liveUpdates": true,
+      "baseline": true,
+      "alertRules": true,
+      "dashboardWidgets": true
+    }
+  },
+  "swap_usage": {
+    "name": "Swap Usage",
+    "required": false,
+    "notificationLabel": "Swap usage",
+    "description": "Triggers when swap usage exceeds the configured threshold.",
+    "unit": "%",
+    "thresholds": {
+      "warning": 75,
+      "critical": 90
+    },
+    "minValue": 0,
+    "maxValue": 100,
+    "color": "#f97316",
     "capabilities": {
       "agentIngestion": true,
       "query": true,

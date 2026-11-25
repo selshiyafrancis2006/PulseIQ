@@ -1,9 +1,16 @@
 const pool = require('../config/db');
-const { METRIC_NAMES } = require('../config/metricRegistry');
+const { METRIC_NAMES } = require('../config/metrics');
 
 
 
 const MIN_SAMPLE_COUNT = 12;
+
+// After an anomaly is recorded for a host and metric, further anomalies for
+// the same pair are ignored for this many minutes, so one long spike does not
+// create a new row on every sample. 0 turns the cooldown off.
+const parsedCooldown = Number.parseInt(process.env.ANOMALY_COOLDOWN_MINUTES, 10);
+const ANOMALY_COOLDOWN_MINUTES =
+    Number.isInteger(parsedCooldown) && parsedCooldown >= 0 ? parsedCooldown : 15;
 
 const recomputeBaselines = async () => {
 
@@ -111,7 +118,7 @@ const detectHourlyAnomalies = async (client) => {
                 `SELECT 1
                  FROM anomalies
                  WHERE host_id = $1
-                   AND metric_name = $2
+                   AND metric_name = $2::VARCHAR(50)
                    AND bucket_start > $3::timestamptz - INTERVAL '6 hours'
                    AND bucket_start < $3::timestamptz
                  LIMIT 1`,
@@ -124,7 +131,14 @@ const detectHourlyAnomalies = async (client) => {
                 const anomalyInsertResult = await client.query(
                     `INSERT INTO anomalies
                         (host_id, metric_name, value, baseline_mean, baseline_stddev, deviation_score, bucket_start, timestamp)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $7)
+                     SELECT $1, $2::VARCHAR(50), $3, $4, $5, $6, $7, $7
+                     WHERE $8::int = 0 OR NOT EXISTS (
+                         SELECT 1
+                         FROM anomalies
+                         WHERE host_id = $1
+                           AND metric_name = $2::VARCHAR(50)
+                           AND timestamp > NOW() - ($8::int * INTERVAL '1 minute')
+                     )
                      ON CONFLICT (host_id, metric_name, bucket_start)
                          WHERE bucket_start IS NOT NULL
                      DO NOTHING`,
@@ -135,7 +149,8 @@ const detectHourlyAnomalies = async (client) => {
                         mean,
                         stddev,
                         zScore,
-                        candidate.bucket_start
+                        candidate.bucket_start,
+                        ANOMALY_COOLDOWN_MINUTES
                     ]
                 );
                 if (anomalyInsertResult.rowCount > 0) {

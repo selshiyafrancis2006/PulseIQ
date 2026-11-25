@@ -103,7 +103,7 @@ describe('HostDetails page', () => {
     expect(screen.getByText('region:ap-south')).toBeInTheDocument();
 
     expect(apiFetch).toHaveBeenCalledTimes(3);
-    expect(screen.getAllByTestId('metrics-chart')).toHaveLength(3);
+    expect(screen.getAllByTestId('metrics-chart')).toHaveLength(5);
   });
 
   test('shows offline state and last-known metrics for an offline host', async () => {
@@ -118,7 +118,7 @@ describe('HostDetails page', () => {
     renderPage();
 
     expect(await screen.findByText('Offline')).toBeInTheDocument();
-    expect(screen.getAllByText('Last known')).toHaveLength(5);
+    expect(screen.getAllByText('Last known')).toHaveLength(7);
     expect(screen.getByText('Uptime').parentElement).toHaveTextContent('Offline');
     expect(screen.queryByText('Waiting for first heartbeat')).not.toBeInTheDocument();
   });
@@ -225,8 +225,8 @@ describe('HostDetails page', () => {
       );
     });
 
-    expect(screen.getAllByTestId('metrics-chart')).toHaveLength(3);
-    expect(screen.getAllByText(/:6h$/)).toHaveLength(3);
+    expect(screen.getAllByTestId('metrics-chart')).toHaveLength(5);
+    expect(screen.getAllByText(/:6h$/)).toHaveLength(5);
   });
 
   test('loads older alerts and removes duplicate alert IDs', async () => {

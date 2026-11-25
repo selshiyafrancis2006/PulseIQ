@@ -1,4 +1,4 @@
-﻿import { Line } from 'react-chartjs-2'
+import { Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -14,6 +14,8 @@ import {
   buildHostMetricChartPoints
 } from '../../utils/metricChartData'
 import { formatMetricValue } from '../../utils/metricFormatting'
+import { METRICS, getMetricAxisId } from '../../config/metricNames'
+import { buildEventDatasets } from '../../utils/chartEvents'
 
 ChartJS.register(
   CategoryScale,
@@ -25,14 +27,12 @@ ChartJS.register(
   Legend
 )
 
-const metricColors = {
-  cpu_usage: '#10b981',
-  memory_usage: '#38bdf8',
-  disk_usage: '#f59e0b',
-  network_in: '#a78bfa',
-  network_out: '#fb7185'
-}
-
+const metricColors = Object.fromEntries(
+  Object.entries(METRICS).map(([name, definition]) => [
+    name,
+    definition.color || '#10b981'
+  ])
+)
 // Window and label for every range the UI offers
 const RANGES = {
   '1m': { minutes: 1, label: '1 minute' },
@@ -60,7 +60,9 @@ export default function MetricsChart({
   timeRange,
   primaryHostId = null,
   hosts = [],
-  comparisonHostIds = []
+  comparisonHostIds = [],
+  alerts = [],
+  anomalies = []
 }) {
 
   if (!metrics.length) return null
@@ -166,7 +168,7 @@ export default function MetricsChart({
               label: `${host.name} \u00b7 ${name}`,
               metricKey: metric,
               hostId,
-              yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
+              yAxisID: getMetricAxisId(metric),
               data: hostSeries.points.map(point =>
                 point.metric ? toNumber(point.metric[metric]) : null
               ),
@@ -195,7 +197,7 @@ export default function MetricsChart({
           return {
             label: showBand ? `${name} (AVG)` : name,
             metricKey: metric,
-            yAxisID: metric.startsWith('network_') ? 'yNetwork' : 'y',
+            yAxisID: getMetricAxisId(metric),
             data: chartPoints.map(point =>
               point.metric ? toNumber(point.metric[metric]) : null
             ),
@@ -217,7 +219,7 @@ export default function MetricsChart({
           singleHostDatasets.push({
             label: 'Max',
             metricKey: bandMetric,
-            yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
+            yAxisID: getMetricAxisId(bandMetric),
             data: chartPoints.map(point =>
               point.metric ? toNumber(point.metric[`${bandMetric}_max`]) : null
             ),
@@ -235,7 +237,7 @@ export default function MetricsChart({
           singleHostDatasets.push({
             label: 'Min',
             metricKey: bandMetric,
-            yAxisID: bandMetric.startsWith('network_') ? 'yNetwork' : 'y',
+            yAxisID: getMetricAxisId(bandMetric),
             data: chartPoints.map(point =>
               point.metric ? toNumber(point.metric[`${bandMetric}_min`]) : null
             ),
@@ -250,6 +252,19 @@ export default function MetricsChart({
             order: 1
           })
         }
+
+        // Alert and anomaly markers (single-host charts only)
+        singleHostDatasets.push(
+          ...buildEventDatasets({
+            alerts,
+            anomalies,
+            selectedMetrics,
+            points: chartPoints,
+            readValue: (point, metric) =>
+              point.metric ? toNumber(point.metric[metric]) : null,
+            getAxisId: getMetricAxisId
+          })
+        )
 
         return singleHostDatasets
       })()
@@ -315,6 +330,12 @@ export default function MetricsChart({
       tooltip: {
         callbacks: {
           label: (context) => {
+            const eventLines = context.dataset.eventDetails?.[context.dataIndex]
+
+            if (eventLines) {
+              return eventLines
+            }
+
             const metricKey = context.dataset.metricKey
             const value = metricKey
               ? formatMetricValue(metricKey, context.parsed.y)
@@ -343,6 +364,8 @@ export default function MetricsChart({
 
       y: {
 
+        display: selectedMetrics.some(metric => getMetricAxisId(metric) === 'y'),
+
         beginAtZero: true,
 
         grid: {
@@ -356,9 +379,23 @@ export default function MetricsChart({
 
       },
 
+      yOther: {
+        position: 'right',
+        offset: true,
+        display: selectedMetrics.some(metric => getMetricAxisId(metric) === 'yOther'),
+        beginAtZero: true,
+        grid: {
+          drawOnChartArea: false
+        },
+        ticks: {
+          color: '#777',
+          callback: (value) => formatMetricValue('load_avg', value),
+        }
+      },
+
       yNetwork: {
         position: 'right',
-        display: selectedMetrics.some(metric => metric.startsWith('network_')),
+        display: selectedMetrics.some(metric => getMetricAxisId(metric) === 'yNetwork'),
         beginAtZero: true,
         grid: {
           drawOnChartArea: false
@@ -408,6 +445,9 @@ export default function MetricsChart({
   )
 
 }
+
+
+
 
 
 

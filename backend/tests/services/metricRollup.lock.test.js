@@ -203,9 +203,10 @@ describe('rollup backfill range validation', () => {
 
         await rollup5Minute(pool, { from, to });
 
-        expect(pool.query).toHaveBeenCalledTimes(1);
-        expect(pool.query.mock.calls[0][1]).toEqual(
-            expect.arrayContaining([from, to])
-        );
+        expect(pool.query).toHaveBeenCalledTimes(2);
+
+        for (const [, params] of pool.query.mock.calls) {
+            expect(params).toEqual([from, to]);
+        }
     });
 });

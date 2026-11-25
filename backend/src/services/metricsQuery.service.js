@@ -27,7 +27,7 @@ const QUERY_STEP_MS = {
     '1d': DAY_MS
 };
 
-const { METRIC_NAMES: METRICS } = require('../config/metricRegistry');
+const { METRIC_NAMES: METRICS } = require('../config/metrics');
 
 const isStepCompatible = (step, source) => {
     return (

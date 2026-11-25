@@ -1,8 +1,6 @@
-import { METRIC_NAMES, METRICS } from '../../config/metricNames'
+﻿import { METRIC_OPTIONS } from '../../config/metricNames'
 
-const metricOptions = METRIC_NAMES
-  .filter((name) => METRICS[name].capabilities.query)
-  .map((name) => ({ label: METRICS[name].name, value: name }))
+const metricOptions = METRIC_OPTIONS
 
 export default function MetricSelector({
   selectedMetrics,
@@ -205,6 +203,7 @@ export default function MetricSelector({
   )
 
 }
+
 
 
 

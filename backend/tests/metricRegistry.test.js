@@ -8,9 +8,10 @@ const {
 const { buildHostMetricEvent } = require('../src/services/hostMetricEvents');
 
 describe('metric registry', () => {
-    test('lists the five built-in metrics in a stable order', () => {
+    test('lists all seven built-in metrics in a stable order', () => {
         expect(METRIC_NAMES).toEqual([
-            'cpu_usage', 'memory_usage', 'disk_usage', 'network_in', 'network_out'
+            'cpu_usage', 'memory_usage', 'disk_usage', 'network_in', 'network_out',
+            'load_avg', 'swap_usage'
         ]);
     });
 

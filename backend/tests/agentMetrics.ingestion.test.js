@@ -1,4 +1,4 @@
-﻿const {
+const {
     app,
     pool,
     request,
@@ -99,6 +99,70 @@ describe('POST /api/agent/metrics - storing', () => {
         expect(await countMetrics(otherHostId)).toBe(0);
     });
 
+    test('stores optional load_avg and swap_usage metrics', async () => {
+        const res = await send({
+            ...validMetrics,
+            load_avg: 2.75,
+            swap_usage: 35.5
+        });
+
+        expect(res.status).toBe(201);
+        expect(res.body).toEqual(expect.objectContaining({
+            load_avg: 2.75,
+            swap_usage: 35.5
+        }));
+
+        const stored = await pool.query(
+            'SELECT load_avg, swap_usage FROM metrics WHERE host_id = $1',
+            [hostId]
+        );
+
+        expect(stored.rows[0]).toEqual({
+            load_avg: 2.75,
+            swap_usage: 35.5
+        });
+
+        const observations = await pool.query(
+            `SELECT metric_name, value, unit
+             FROM metric_observations
+             WHERE host_id = $1
+               AND metric_name IN ('load_avg', 'swap_usage')
+             ORDER BY metric_name`,
+            [hostId]
+        );
+
+        expect(observations.rows).toEqual([
+            { metric_name: 'load_avg', value: 2.75, unit: '' },
+            { metric_name: 'swap_usage', value: 35.5, unit: '%' }
+        ]);
+    });
+
+    test('accepts missing optional metrics and stores NULL without observations', async () => {
+        const res = await send(validMetrics);
+
+        expect(res.status).toBe(201);
+
+        const stored = await pool.query(
+            'SELECT load_avg, swap_usage FROM metrics WHERE host_id = $1',
+            [hostId]
+        );
+
+        expect(stored.rows[0]).toEqual({
+            load_avg: null,
+            swap_usage: null
+        });
+
+        const observations = await pool.query(
+            `SELECT metric_name
+             FROM metric_observations
+             WHERE host_id = $1
+               AND metric_name IN ('load_avg', 'swap_usage')`,
+            [hostId]
+        );
+
+        expect(observations.rows).toHaveLength(0);
+    });
+
     test('ignores a host_id sent in the body and uses the key owner instead', async () => {
         const res = await send({ ...validMetrics, host_id: otherHostId });
 
@@ -175,6 +239,12 @@ describe('POST /api/agent/metrics - storing', () => {
         expect(high.status).toBe(201);
     });
 
+    test('load_avg above 100 is valid (it is not a percentage)', async () => {
+        const res = await send({ ...validMetrics, load_avg: 125.5 });
+
+        expect(res.status).toBe(201);
+    });
+
     test('network rates above 100 are valid (they are not percentages)', async () => {
         const res = await send({ ...validMetrics, network_in: 5_000_000, network_out: 250_000 });
 
@@ -192,7 +262,10 @@ describe('POST /api/agent/metrics - validation', () => {
         ['string network_out', { network_out: '900' }, 'network_out'],
         ['null disk_usage', { disk_usage: null }, 'disk_usage'],
         ['NaN-like cpu_usage', { cpu_usage: 'NaN' }, 'cpu_usage'],
-        ['boolean memory_usage', { memory_usage: true }, 'memory_usage']
+        ['boolean memory_usage', { memory_usage: true }, 'memory_usage'],
+        ['negative load_avg', { load_avg: -1 }, 'load_avg'],
+        ['swap_usage above 100', { swap_usage: 100.1 }, 'swap_usage'],
+        ['negative swap_usage', { swap_usage: -1 }, 'swap_usage']
     ])('rejects %s and stores nothing', async (_label, override, field) => {
         const res = await send({ ...validMetrics, ...override });
 
