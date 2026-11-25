@@ -1,13 +1,14 @@
-﻿const metricsService = require('../services/metrics.service');
+const metricsService = require('../services/metrics.service');
 
 const customMetricsQueryService =
     require('../services/customMetricsQuery.service');
 
-const { RAW_RETENTION_DAYS } =
+const { ROLLUP_1H_RETENTION_DAYS } =
     require('../services/metricRollup.service');
 
+const MAX_QUERY_WINDOW_DAYS = ROLLUP_1H_RETENTION_DAYS;
 const MAX_QUERY_WINDOW_MS =
-    RAW_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    MAX_QUERY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
 function parseHostId(value) {
     if (
@@ -113,7 +114,7 @@ const getCustomMetricsQuery = async (req, res) => {
 
         if (from.getTime() < oldestAvailableTimestamp) {
             return res.status(400).json({
-                error: `The from timestamp exceeds the ${RAW_RETENTION_DAYS}-day custom metrics retention limit`
+                error: `The from timestamp exceeds the ${MAX_QUERY_WINDOW_DAYS}-day custom metrics retention limit`
             });
         }
 
@@ -122,7 +123,7 @@ const getCustomMetricsQuery = async (req, res) => {
             MAX_QUERY_WINDOW_MS
         ) {
             return res.status(400).json({
-                error: `The maximum custom metrics query window is ${RAW_RETENTION_DAYS} days`
+                error: `The maximum custom metrics query window is ${MAX_QUERY_WINDOW_DAYS} days`
             });
         }
 

@@ -1,4 +1,4 @@
-﻿jest.mock('../src/config/db', () => ({
+jest.mock('../src/config/db', () => ({
     query: jest.fn()
 }));
 
@@ -43,7 +43,7 @@ describe('customMetricsQuery.service', () => {
         expect(sql).toContain('FROM custom_metrics');
         expect(sql).toContain('LIMIT $6');
         expect(sql).not.toContain('disk_usage_percent');
-        expect(sql).not.toContain('5 minutes');
+        expect(sql).toContain("INTERVAL '5 minutes'");
         expect(sql).not.toContain('2026-11-22T10:00:00.000Z');
     });
 
@@ -112,6 +112,62 @@ describe('customMetricsQuery.service', () => {
         expect(result).toEqual(rows);
     });
 
+    test('queries raw, five-minute and hourly historical sources', async () => {
+        pool.query.mockResolvedValue({ rows: [] });
+
+        await fetchCustomMetricQuery({
+            ...validQuery,
+            from: new Date(Date.now() - 2 * 60 * 60 * 1000),
+            to: new Date()
+        });
+
+        const [sql] = pool.query.mock.calls[0];
+
+        expect(sql).toContain('FROM custom_metrics');
+        expect(sql).toContain('FROM metric_rollups_5m_generic');
+        expect(sql).toContain('FROM metric_rollups_1h_generic');
+        expect(sql).toContain('UNION ALL');
+        expect(sql).toContain('GROUP BY timestamp, unit, tags');
+        expect(sql).toContain('sample_count');
+    });
+
+    test('rejects one-minute resolution when the range is older than 3 days', async () => {
+        await expect(
+            fetchCustomMetricQuery({
+                ...validQuery,
+                from: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+                step: '1m'
+            })
+        ).rejects.toThrow('minimum resolution of 5 minutes');
+
+        expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    test('rejects sub-hour resolution when the range is older than 8 days', async () => {
+        await expect(
+            fetchCustomMetricQuery({
+                ...validQuery,
+                from: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000),
+                step: '15m'
+            })
+        ).rejects.toThrow('minimum resolution of 1 hour');
+
+        expect(pool.query).not.toHaveBeenCalled();
+    });
+
+    test('allows five-minute resolution for a 4-day-old range', async () => {
+        pool.query.mockResolvedValue({ rows: [] });
+
+        await expect(
+            fetchCustomMetricQuery({
+                ...validQuery,
+                from: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+                step: '5m'
+            })
+        ).resolves.toEqual([]);
+
+        expect(pool.query).toHaveBeenCalledTimes(1);
+    });
     describe('fetchCustomMetricNames', () => {
         test('queries metric names and units for the requested host', async () => {
             const rows = [{
@@ -148,5 +204,7 @@ describe('customMetricsQuery.service', () => {
         );
     });
 });
+
+
 
 

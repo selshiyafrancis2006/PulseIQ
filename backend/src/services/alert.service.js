@@ -1,51 +1,40 @@
-﻿
 const pool = require('../config/db');
-const { isPercentageMetric } = require('../config/metricRegistry');
-const { notifyUser } = require('./notification.service');
-const {
-    HOST_METRIC_ALERT,
-    HOST_METRIC_RECOVERED,
-    buildHostMetricEvent
-} = require('./hostMetricEvents');
+const { notifyMetricChanges } = require('./metricAlertNotification.service');
 
 function getAlertSeverity(metricName, value) {
+    const percentageMetrics = new Set([
+        'cpu_usage',
+        'memory_usage',
+        'disk_usage'
+    ]);
 
-    if (isPercentageMetric(metricName) && value >= 90) {
+    if (percentageMetrics.has(metricName) && value >= 90) {
         return 'Critical';
     }
 
     return 'Warning';
 }
 
-// Sends the notifications collected during an evaluation. This runs after the
-// database transaction is committed and its connection released, so a slow or
-// broken channel can never hold locks or lose an alert. notifyUser never
-// throws, but one failure must not stop the remaining messages either.
-async function sendPendingNotifications(pending) {
-    for (const { userId, event } of pending) {
-        try {
-            await notifyUser(userId, event);
-        } catch (err) {
-            console.error('Host metric notification failed:', err);
-        }
-    }
-}
 
 async function evaluateAlerts(metric) {
     let client;
-    const pendingNotifications = [];
+    let committed = false;
+
+    // Alerts that opened or recovered during this sample. They are sent after
+    // the transaction ends, so a slow channel never holds the database lock.
+    const changes = [];
 
     try {
         client = await pool.connect();
         await client.query('BEGIN');
 
         const rulesResult = await client.query(`
-            SELECT ar.*, h.user_id AS host_user_id, h.name AS host_name
+            SELECT ar.*
             FROM alert_rules ar
             JOIN hosts h ON h.user_id = ar.user_id
             WHERE h.id = $1
               AND ar.is_active = true
-              AND (ar.host_id IS NULL OR ar.host_id = h.id)
+              AND (ar.host_id IS NULL OR ar.host_id = $1)
             ORDER BY ar.id
             FOR UPDATE OF ar
         `, [metric.host_id]);
@@ -96,7 +85,6 @@ async function evaluateAlerts(metric) {
             `, [metric.host_id, rule.id]);
 
             const state = lockedState.rows[0];
-            const host = { id: metric.host_id, name: rule.host_name };
 
             if (conditionMet) {
                 if (state.is_breaching) {
@@ -134,15 +122,15 @@ async function evaluateAlerts(metric) {
                         WHERE host_id = $1 AND rule_id = $2
                     `, [metric.host_id, rule.id]);
 
-                    pendingNotifications.push({
-                        userId: rule.host_user_id,
-                        event: buildHostMetricEvent({
-                            type: HOST_METRIC_ALERT,
-                            host,
-                            rule,
-                            value,
-                            severity
-                        })
+                    changes.push({
+                        kind: 'triggered',
+                        userId: rule.user_id,
+                        hostId: metric.host_id,
+                        metricName: rule.metric_name,
+                        value: Number(value),
+                        threshold: rule.threshold,
+                        operator: rule.operator,
+                        severity
                     });
 
                     console.log(
@@ -157,6 +145,20 @@ async function evaluateAlerts(metric) {
                     `, [metric.host_id, rule.id, count]);
                 }
             } else {
+                // The rule was breaching and is now back to normal.
+                if (state.is_breaching) {
+                    changes.push({
+                        kind: 'recovered',
+                        userId: rule.user_id,
+                        hostId: metric.host_id,
+                        metricName: rule.metric_name,
+                        value: Number(value),
+                        threshold: rule.threshold,
+                        operator: rule.operator,
+                        severity: null
+                    });
+                }
+
                 await client.query(`
                     UPDATE alert_rule_states
                     SET consecutive_breaches = 0,
@@ -164,28 +166,11 @@ async function evaluateAlerts(metric) {
                         updated_at = NOW()
                     WHERE host_id = $1 AND rule_id = $2
                 `, [metric.host_id, rule.id]);
-
-                // Only announce a recovery for a breach that was announced.
-                if (state.is_breaching) {
-                    pendingNotifications.push({
-                        userId: rule.host_user_id,
-                        event: buildHostMetricEvent({
-                            type: HOST_METRIC_RECOVERED,
-                            host,
-                            rule,
-                            value
-                        })
-                    });
-                }
             }
         }
 
         await client.query('COMMIT');
-
-        client.release();
-        client = null;
-
-        await sendPendingNotifications(pendingNotifications);
+        committed = true;
 
     } catch (err) {
         if (client) {
@@ -200,6 +185,22 @@ async function evaluateAlerts(metric) {
     } finally {
         if (client) {
             client.release();
+        }
+    }
+
+    // Keep production metric ingestion non-blocking. In tests, await delivery
+    // so the database pool cannot close while notification queries are active.
+    if (committed && changes.length > 0) {
+        const notificationTask = notifyMetricChanges(changes);
+
+        if (process.env.NODE_ENV === 'test') {
+            await notificationTask.catch((err) => {
+                console.error('Metric alert notification failed:', err.message);
+            });
+        } else {
+            notificationTask.catch((err) => {
+                console.error('Metric alert notification failed:', err.message);
+            });
         }
     }
 }
@@ -256,28 +257,38 @@ async function fetchRules(userId) {
 }
 
 async function createRule(userId, rule) {
-    const result = await pool.query(
-        `INSERT INTO alert_rules (
-            metric_name, operator, threshold, duration,
-            is_active, user_id, host_id
-         )
-         SELECT $1, $2, $3, $4, $5, $6, $7
-         WHERE $7::integer IS NULL
-            OR EXISTS (
-                SELECT 1 FROM hosts
-                WHERE id = $7 AND user_id = $6
-            )
-         RETURNING *`,
-        [
-            rule.metric_name,
-            rule.operator,
-            rule.threshold,
-            rule.duration,
-            rule.is_active,
-            userId,
-            rule.host_id
-        ]
-    );
+    if (rule.host_id !== null) {
+        const hostResult = await pool.query(
+            `SELECT id FROM hosts WHERE id = $1 AND user_id = $2`,
+            [rule.host_id, userId]
+        );
+
+        if (hostResult.rows.length === 0) {
+            return null;
+        }
+    }
+
+    const result = await pool.query(`
+        INSERT INTO alert_rules (
+            user_id,
+            host_id,
+            metric_name,
+            operator,
+            threshold,
+            duration,
+            is_active
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING *
+    `, [
+        userId,
+        rule.host_id,
+        rule.metric_name,
+        rule.operator,
+        rule.threshold,
+        rule.duration,
+        rule.is_active
+    ]);
 
     return result.rows[0] || null;
 }
@@ -292,12 +303,26 @@ async function updateRule(id, userId, updates) {
         'host_id'
     ];
 
-    const fields = allowedFields.filter(field =>
-        Object.prototype.hasOwnProperty.call(updates, field)
+    const fields = allowedFields.filter(
+        field => Object.prototype.hasOwnProperty.call(updates, field)
     );
 
     if (fields.length === 0) {
         return null;
+    }
+
+    if (
+        Object.prototype.hasOwnProperty.call(updates, 'host_id') &&
+        updates.host_id !== null
+    ) {
+        const hostResult = await pool.query(
+            `SELECT id FROM hosts WHERE id = $1 AND user_id = $2`,
+            [updates.host_id, userId]
+        );
+
+        if (hostResult.rows.length === 0) {
+            return null;
+        }
     }
 
     const values = fields.map(field => updates[field]);
@@ -307,44 +332,23 @@ async function updateRule(id, userId, updates) {
 
     values.push(id, userId);
 
-    let ownershipCondition = '';
-
-    if (Object.prototype.hasOwnProperty.call(updates, 'host_id')) {
-        values.push(updates.host_id);
-        const hostParam = `$${values.length}`;
-        const userParam = `$${fields.length + 2}`;
-
-        ownershipCondition = `
-            AND (
-                ${hostParam}::integer IS NULL
-                OR EXISTS (
-                    SELECT 1 FROM hosts
-                    WHERE id = ${hostParam} AND user_id = ${userParam}
-                )
-            )
-        `;
-    }
-
-    const result = await pool.query(
-        `UPDATE alert_rules
-         SET ${assignments.join(', ')}
-         WHERE id = $${fields.length + 1}
-           AND user_id = $${fields.length + 2}
-           ${ownershipCondition}
-         RETURNING *`,
-        values
-    );
+    const result = await pool.query(`
+        UPDATE alert_rules
+        SET ${assignments.join(', ')}
+        WHERE id = $${values.length - 1}
+          AND user_id = $${values.length}
+        RETURNING *
+    `, values);
 
     return result.rows[0] || null;
 }
 
 async function deleteRule(id, userId) {
-    const result = await pool.query(
-        `DELETE FROM alert_rules
-         WHERE id = $1 AND user_id = $2
-         RETURNING id`,
-        [id, userId]
-    );
+    const result = await pool.query(`
+        DELETE FROM alert_rules
+        WHERE id = $1 AND user_id = $2
+        RETURNING id
+    `, [id, userId]);
 
     return result.rows[0] || null;
 }

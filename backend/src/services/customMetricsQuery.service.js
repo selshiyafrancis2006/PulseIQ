@@ -1,4 +1,4 @@
-﻿const pool = require('../config/db');
+const pool = require('../config/db');
 
 const MAX_CUSTOM_QUERY_ROWS = 10000;
 
@@ -17,6 +17,39 @@ const AGGREGATIONS = {
     max: 'MAX(value)'
 };
 
+const ROLLUP_AGGREGATIONS = {
+    avg: 'SUM(value_avg * sample_count) / NULLIF(SUM(sample_count), 0)',
+    min: 'MIN(value_min)',
+    max: 'MAX(value_max)'
+};
+
+function validateHistoricalResolution(from, step) {
+    const fromTime = new Date(from).getTime();
+
+    if (!Number.isFinite(fromTime)) {
+        throw new TypeError('Invalid custom metric query date range');
+    }
+
+    const age = Date.now() - fromTime;
+    const threeDays = 3 * 24 * 60 * 60 * 1000;
+    const eightDays = 8 * 24 * 60 * 60 * 1000;
+
+    if (age > threeDays && step === '1m') {
+        throw new TypeError(
+            'Historical custom metrics have a minimum resolution of 5 minutes'
+        );
+    }
+
+    if (
+        age > eightDays &&
+        ['1m', '5m', '15m'].includes(step)
+    ) {
+        throw new TypeError(
+            'Custom metrics older than 8 days have a minimum resolution of 1 hour'
+        );
+    }
+}
+
 async function fetchCustomMetricQuery({
     hostId,
     metricName,
@@ -28,8 +61,14 @@ async function fetchCustomMetricQuery({
 }) {
     const interval = QUERY_STEPS[step];
     const aggregateExpression = AGGREGATIONS[aggregation];
+    const rollupExpression = ROLLUP_AGGREGATIONS[aggregation];
+    const combinedExpression = aggregation === 'avg'
+        ? 'SUM(value * sample_count) / NULLIF(SUM(sample_count), 0)'
+        : aggregation === 'min'
+            ? 'MIN(value)'
+            : 'MAX(value)';
 
-    if (!interval || !aggregateExpression) {
+    if (!interval || !aggregateExpression || !rollupExpression) {
         throw new TypeError('Invalid custom metric query configuration');
     }
 
@@ -45,24 +84,104 @@ async function fetchCustomMetricQuery({
         throw new TypeError('Invalid custom metric query parameters');
     }
 
+    validateHistoricalResolution(from, step);
+
     const result = await pool.query(
         `
+        WITH raw_data AS (
+            SELECT
+                date_bin(
+                    $1::interval,
+                    collected_at,
+                    TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                ) AS timestamp,
+                unit,
+                tags,
+                ${aggregateExpression} AS value,
+                COUNT(*)::INTEGER AS sample_count,
+                MAX(collected_at) AS latest_sample_timestamp
+            FROM custom_metrics
+            WHERE host_id = $2
+              AND metric_name = $3
+              AND collected_at >= GREATEST(
+                    $4::timestamptz,
+                    date_bin(
+                        INTERVAL '5 minutes',
+                        NOW() - INTERVAL '3 days',
+                        TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                    ) + INTERVAL '5 minutes'
+              )
+              AND collected_at < LEAST($5::timestamptz, NOW())
+            GROUP BY timestamp, unit, tags
+        ),
+        five_minute_data AS (
+            SELECT
+                date_bin(
+                    $1::interval,
+                    bucket_start,
+                    TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                ) AS timestamp,
+                unit,
+                tags,
+                ${rollupExpression} AS value,
+                SUM(sample_count)::INTEGER AS sample_count,
+                MAX(bucket_start + INTERVAL '5 minutes')
+                    AS latest_sample_timestamp
+            FROM metric_rollups_5m_generic
+            WHERE host_id = $2
+              AND metric_name = $3
+              AND bucket_start >= GREATEST(
+                    $4::timestamptz,
+                    date_trunc('hour', NOW() - INTERVAL '8 days')
+              )
+              AND bucket_start < LEAST(
+                    $5::timestamptz,
+                    date_bin(
+                        INTERVAL '5 minutes',
+                        NOW() - INTERVAL '3 days',
+                        TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                    ) + INTERVAL '5 minutes'
+              )
+            GROUP BY timestamp, unit, tags
+        ),
+        hourly_data AS (
+            SELECT
+                date_bin(
+                    $1::interval,
+                    bucket_start,
+                    TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                ) AS timestamp,
+                unit,
+                tags,
+                ${rollupExpression} AS value,
+                SUM(sample_count)::INTEGER AS sample_count,
+                MAX(bucket_start + INTERVAL '1 hour')
+                    AS latest_sample_timestamp
+            FROM metric_rollups_1h_generic
+            WHERE host_id = $2
+              AND metric_name = $3
+              AND bucket_start >= $4::timestamptz
+              AND bucket_start < LEAST(
+                    $5::timestamptz,
+                    date_trunc('hour', NOW() - INTERVAL '8 days')
+              )
+            GROUP BY timestamp, unit, tags
+        ),
+        combined AS (
+            SELECT * FROM raw_data
+            UNION ALL
+            SELECT * FROM five_minute_data
+            UNION ALL
+            SELECT * FROM hourly_data
+        )
         SELECT
-            date_bin(
-                $1::interval,
-                collected_at,
-                TIMESTAMPTZ '1970-01-01 00:00:00+00'
-            ) AS timestamp,
+            timestamp,
             unit,
             tags,
-            ${aggregateExpression} AS value,
-            COUNT(*)::INTEGER AS sample_count,
-            MAX(collected_at) AS latest_sample_timestamp
-        FROM custom_metrics
-        WHERE host_id = $2
-          AND metric_name = $3
-          AND collected_at >= $4
-          AND collected_at < $5
+            ${combinedExpression} AS value,
+            SUM(sample_count)::INTEGER AS sample_count,
+            MAX(latest_sample_timestamp) AS latest_sample_timestamp
+        FROM combined
         GROUP BY timestamp, unit, tags
         ORDER BY timestamp ASC, tags ASC
         LIMIT $6
@@ -80,7 +199,6 @@ async function fetchCustomMetricQuery({
     return result.rows;
 }
 
-
 async function fetchCustomMetricNames(hostId) {
     if (!Number.isSafeInteger(hostId) || hostId < 1) {
         throw new TypeError('Invalid custom metric host ID');
@@ -88,13 +206,62 @@ async function fetchCustomMetricNames(hostId) {
 
     const result = await pool.query(
         `
+        WITH metric_sources AS (
+            SELECT
+                metric_name,
+                unit,
+                MAX(collected_at) AS latest_sample_timestamp,
+                COUNT(*)::BIGINT AS sample_count
+            FROM custom_metrics
+            WHERE host_id = $1
+              AND collected_at >= date_bin(
+                    INTERVAL '5 minutes',
+                    NOW() - INTERVAL '3 days',
+                    TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                  ) + INTERVAL '5 minutes'
+            GROUP BY metric_name, unit
+
+            UNION ALL
+
+            SELECT
+                metric_name,
+                unit,
+                MAX(bucket_start + INTERVAL '5 minutes'),
+                SUM(sample_count)::BIGINT
+            FROM metric_rollups_5m_generic
+            WHERE host_id = $1
+              AND bucket_start >= date_trunc(
+                    'hour',
+                    NOW() - INTERVAL '8 days'
+                  )
+              AND bucket_start < date_bin(
+                    INTERVAL '5 minutes',
+                    NOW() - INTERVAL '3 days',
+                    TIMESTAMPTZ '1970-01-01 00:00:00+00'
+                  ) + INTERVAL '5 minutes'
+            GROUP BY metric_name, unit
+
+            UNION ALL
+
+            SELECT
+                metric_name,
+                unit,
+                MAX(bucket_start + INTERVAL '1 hour'),
+                SUM(sample_count)::BIGINT
+            FROM metric_rollups_1h_generic
+            WHERE host_id = $1
+              AND bucket_start < date_trunc(
+                    'hour',
+                    NOW() - INTERVAL '8 days'
+                  )
+            GROUP BY metric_name, unit
+        )
         SELECT
             metric_name,
             unit,
-            MAX(collected_at) AS latest_sample_timestamp,
-            COUNT(*)::INTEGER AS sample_count
-        FROM custom_metrics
-        WHERE host_id = $1
+            MAX(latest_sample_timestamp) AS latest_sample_timestamp,
+            SUM(sample_count)::INTEGER AS sample_count
+        FROM metric_sources
         GROUP BY metric_name, unit
         ORDER BY metric_name ASC, unit ASC
         LIMIT 500
@@ -104,6 +271,7 @@ async function fetchCustomMetricNames(hostId) {
 
     return result.rows;
 }
+
 module.exports = {
     MAX_CUSTOM_QUERY_ROWS,
     QUERY_STEPS,

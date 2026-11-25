@@ -1,4 +1,4 @@
-﻿const {
+const {
     fetchAlerts,
     fetchRules,
     createRule,

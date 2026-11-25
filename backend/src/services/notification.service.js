@@ -80,6 +80,17 @@ function buildSlackPayload(event) {
         case 'CERTIFICATE_EXPIRED':
             lines.push(`:red_circle: *${name}* SSL certificate has EXPIRED`);
             break;
+        case 'METRIC_ALERT':
+            lines.push(
+                `${event.severity === 'Critical' ? ':red_circle:' : ':warning:'} *${escapeSlack(event.host?.name)}* ${escapeSlack(event.metricLabel)} alert (${escapeSlack(event.severity)})`
+            );
+            if (event.message) lines.push(escapeSlack(event.message));
+            break;
+        case 'METRIC_RECOVERED':
+            lines.push(`:large_green_circle: *${escapeSlack(event.host?.name)}* ${escapeSlack(event.metricLabel)} recovered`);
+            if (event.message) lines.push(escapeSlack(event.message));
+            break;
+        
         case "SYSTEM_ROLLUP_STALE":
             lines.push(`:warning: *PulseIQ ${escapeSlack(event.jobName)} rollup is STALE*`);
             if (event.message) lines.push(escapeSlack(event.message));
@@ -185,6 +196,19 @@ function buildWebhookPayload(event) {
         payload.stale_after_seconds = event.staleAfterSeconds ?? null;
     }
 
+    if (event.type === 'METRIC_ALERT' || event.type === 'METRIC_RECOVERED') {
+        payload.host = event.host ?? null;
+        payload.metric = {
+            name: event.metricName ?? null,
+            value: event.value ?? null,
+            threshold: event.threshold ?? null,
+            operator: event.operator ?? null,
+            severity: event.severity ?? null,
+            unit: event.unit ?? null
+        };
+    }
+
+    
     return payload;
 }
 
@@ -232,6 +256,13 @@ function buildEmailMessage(event) {
         case 'CERTIFICATE_EXPIRED':
             subject = `${subjectPrefix} SSL certificate expired: ${monitorName}`;
             break;
+        case 'METRIC_ALERT':
+            subject = `${subjectPrefix} ${event.severity || 'Alert'}: ${event.metricLabel} on ${event.host?.name}`;
+            break;
+        case 'METRIC_RECOVERED':
+            subject = `${subjectPrefix} Recovered: ${event.metricLabel} on ${event.host?.name}`;
+            break;
+        
         case 'SYSTEM_ROLLUP_STALE':
             subject = `${subjectPrefix} Rollup stale: ${event.jobName || "unknown"}`;
             break;
@@ -251,7 +282,21 @@ function buildEmailMessage(event) {
         ''
     ];
 
-    if (isSystemRollupEvent) {
+    const isMetricEvent =
+        event.type === 'METRIC_ALERT' ||
+        event.type === 'METRIC_RECOVERED';
+
+    if (isMetricEvent) {
+        lines.push(`Host: ${event.host?.name ?? 'Unknown'}`);
+        lines.push(`Metric: ${event.metricLabel ?? event.metricName}`);
+        if (event.valueText) lines.push(`Value: ${event.valueText}`);
+        if (event.type === 'METRIC_ALERT' && event.thresholdText) {
+            lines.push(`Rule: ${event.operator} ${event.thresholdText}`);
+        }
+        if (event.type === 'METRIC_ALERT' && event.severity) {
+            lines.push(`Severity: ${event.severity}`);
+        }
+    } else if (isSystemRollupEvent) {
         lines.push(`Rollup job: ${event.jobName || 'Unknown'}`);
         if (event.lastSuccessAt) {
             lines.push(`Last successful run: ${event.lastSuccessAt}`);
