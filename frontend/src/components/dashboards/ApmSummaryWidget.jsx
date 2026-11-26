@@ -14,19 +14,21 @@ export default function ApmSummaryWidget({ hostId }) {
     const fetchSummary = async () => {
       try {
         const res = await apiFetch(
-          `${API_BASE_URL}/api/apm/traces/summary?host_id=${hostId}`
+          `${API_BASE_URL}/api/apm/traces/overview?host_id=${hostId}`
         )
+
+        if (!res.ok) {
+          throw new Error(`APM overview request failed: ${res.status}`)
+        }
+
         const data = await res.json()
 
-        const totalRequests = data.reduce((sum, r) => sum + Number(r.request_count), 0)
-        const totalErrors = data.reduce((sum, r) => sum + Number(r.error_count), 0)
-        const weightedDuration = data.reduce(
-          (sum, r) => sum + Number(r.avg_duration_ms) * Number(r.request_count),
-          0
-        )
-        const avgDuration = totalRequests > 0 ? weightedDuration / totalRequests : 0
-
-        setSummary({ totalRequests, totalErrors, avgDuration })
+        setSummary({
+          totalRequests: Number(data.request_count),
+          p95: data.p95_duration_ms === null ? null : Number(data.p95_duration_ms),
+          errorRate: data.error_rate === null ? null : Number(data.error_rate),
+          totalErrors: Number(data.error_count)
+        })
       } catch (err) {
         console.error('Widget failed to fetch APM summary:', err)
       } finally {
@@ -65,16 +67,16 @@ export default function ApmSummaryWidget({ hostId }) {
 
       <div>
         <p className="text-2xl font-bold text-emerald-400">
-          {summary.avgDuration.toFixed(0)}ms
+          {summary.p95 === null ? 'â€”' : `${summary.p95.toFixed(0)}ms`}
         </p>
-        <p className="text-xs text-gray-500 mt-1">Avg Time</p>
+        <p className="text-xs text-gray-500 mt-1">p95</p>
       </div>
 
       <div>
         <p className={`text-2xl font-bold ${summary.totalErrors > 0 ? 'text-red-400' : 'text-white'}`}>
-          {summary.totalErrors}
+          {summary.errorRate === null ? 'â€”' : `${summary.errorRate.toFixed(1)}%`}
         </p>
-        <p className="text-xs text-gray-500 mt-1">Errors</p>
+        <p className="text-xs text-gray-500 mt-1">Error rate</p>
       </div>
 
     </div>
