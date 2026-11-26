@@ -37,7 +37,7 @@ export default function AlertCard({ alert, onAcknowledge, isAcknowledging = fals
           <h3 className="font-semibold text-lg">
             {isHostOffline
               ? "HOST OFFLINE"
-              : alert.metric_name?.replace("_", " ").toUpperCase()}
+              : alert.metric_name?.replace(/_/g, " ").toUpperCase()}
           </h3>
         </div>
 

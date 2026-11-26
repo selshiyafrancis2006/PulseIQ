@@ -1,47 +1,84 @@
-import { useEffect, useState } from 'react'
+﻿import usePolledResource from '../../hooks/usePolledResource'
 import { apiFetch } from '../../utils/apiFetch'
 import { API_BASE_URL } from '../../config/api'
 
-export default function ApmSummaryWidget({ hostId }) {
+const POLL_INTERVAL_MS = 15000
 
-  const [summary, setSummary] = useState(null)
-  const [loading, setLoading] = useState(true)
+const RANGE_LABELS = {
+  '15m': 'Last 15 minutes',
+  '1h': 'Last hour',
+  '6h': 'Last 6 hours',
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days'
+}
 
-  useEffect(() => {
+function summarize(routes) {
+  const totalRequests = routes.reduce((sum, route) => sum + Number(route.request_count || 0), 0)
+  const totalErrors = routes.reduce((sum, route) => sum + Number(route.error_count || 0), 0)
+  const weightedDuration = routes.reduce(
+    (sum, route) => sum + Number(route.avg_duration_ms || 0) * Number(route.request_count || 0),
+    0
+  )
 
-    if (!hostId) return
+  return {
+    totalRequests,
+    totalErrors,
+    avgDuration: totalRequests > 0 ? weightedDuration / totalRequests : 0
+  }
+}
 
-    const fetchSummary = async () => {
-      try {
-        const res = await apiFetch(
-          `${API_BASE_URL}/api/apm/traces/overview?host_id=${hostId}`
-        )
+async function fetchSummary(hostId, range, signal) {
+  const params = new URLSearchParams({
+    host_id: String(hostId),
+    range
+  })
 
-        if (!res.ok) {
-          throw new Error(`APM overview request failed: ${res.status}`)
-        }
+  const response = await apiFetch(
+    `${API_BASE_URL}/api/apm/traces/summary?${params}`,
+    { signal }
+  )
 
-        const data = await res.json()
+  if (!response.ok) {
+    let message = `Request failed (${response.status})`
 
-        setSummary({
-          totalRequests: Number(data.request_count),
-          p95: data.p95_duration_ms === null ? null : Number(data.p95_duration_ms),
-          errorRate: data.error_rate === null ? null : Number(data.error_rate),
-          totalErrors: Number(data.error_count)
-        })
-      } catch (err) {
-        console.error('Widget failed to fetch APM summary:', err)
-      } finally {
-        setLoading(false)
-      }
+    try {
+      const body = await response.json()
+      if (body?.error) message = body.error
+    } catch {
+      // Keep the status-based message.
     }
 
-    fetchSummary()
+    throw new Error(message)
+  }
 
-    const interval = setInterval(fetchSummary, 15000)
-    return () => clearInterval(interval)
+  const routes = await response.json()
 
-  }, [hostId])
+  if (!Array.isArray(routes)) {
+    throw new Error('Unexpected response from APM summary endpoint')
+  }
+
+  return summarize(routes)
+}
+
+export default function ApmSummaryWidget({ hostId, timeRange = '1h' }) {
+  const range = RANGE_LABELS[timeRange] ? timeRange : '1h'
+
+  const { data: summary, loading, error } = usePolledResource(
+    (signal) => fetchSummary(hostId, range, signal),
+    {
+      key: `${hostId}:${range}`,
+      enabled: Boolean(hostId),
+      intervalMs: POLL_INTERVAL_MS
+    }
+  )
+
+  if (!hostId) {
+    return (
+      <div className="h-full flex items-center justify-center text-xs text-gray-600">
+        No host selected
+      </div>
+    )
+  }
 
   if (loading) {
     return (
@@ -54,31 +91,40 @@ export default function ApmSummaryWidget({ hostId }) {
   }
 
   if (!summary) {
-    return <div className="h-full flex items-center justify-center text-xs text-gray-600">No data yet</div>
+    return (
+      <div className="h-full flex items-center justify-center p-4 text-center text-xs text-red-400">
+        {error ? `Couldn't load APM data: ${error}` : 'No data yet'}
+      </div>
+    )
   }
 
   return (
-    <div className="h-full flex items-center justify-around p-4 text-center">
+    <div className="h-full flex flex-col justify-center p-4">
+      <div className="flex items-center justify-around text-center">
+        <div>
+          <p className="text-2xl font-bold text-white">{summary.totalRequests}</p>
+          <p className="text-xs text-gray-500 mt-1">Requests</p>
+        </div>
 
-      <div>
-        <p className="text-2xl font-bold text-white">{summary.totalRequests}</p>
-        <p className="text-xs text-gray-500 mt-1">Requests</p>
+        <div>
+          <p className="text-2xl font-bold text-emerald-400">
+            {summary.avgDuration.toFixed(0)}ms
+          </p>
+          <p className="text-xs text-gray-500 mt-1">Avg Time</p>
+        </div>
+
+        <div>
+          <p className={`text-2xl font-bold ${summary.totalErrors > 0 ? 'text-red-400' : 'text-white'}`}>
+            {summary.totalErrors}
+          </p>
+          <p className="text-xs text-gray-500 mt-1">Errors</p>
+        </div>
       </div>
 
-      <div>
-        <p className="text-2xl font-bold text-emerald-400">
-          {summary.p95 === null ? 'â€”' : `${summary.p95.toFixed(0)}ms`}
-        </p>
-        <p className="text-xs text-gray-500 mt-1">p95</p>
-      </div>
-
-      <div>
-        <p className={`text-2xl font-bold ${summary.totalErrors > 0 ? 'text-red-400' : 'text-white'}`}>
-          {summary.errorRate === null ? 'â€”' : `${summary.errorRate.toFixed(1)}%`}
-        </p>
-        <p className="text-xs text-gray-500 mt-1">Error rate</p>
-      </div>
-
+      <p className="mt-3 text-center text-[10px] text-gray-600">
+        {RANGE_LABELS[range]}
+        {error && <span className="text-yellow-500"> · update failed, showing last data</span>}
+      </p>
     </div>
   )
 }

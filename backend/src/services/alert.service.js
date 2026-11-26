@@ -9,11 +9,20 @@ function getAlertSeverity(metricName, value) {
         return 'Critical';
     }
 
+    // APM: a quarter of requests failing, or p95 latency of 5s or more.
+    if (metricName === 'apm_error_rate' && value >= 25) {
+        return 'Critical';
+    }
+
+    if (metricName === 'apm_p95_ms' && value >= 5000) {
+        return 'Critical';
+    }
+
     return 'Warning';
 }
 
 
-async function evaluateAlerts(metric) {
+async function evaluateAlerts(metric, { recoveryOnly = false } = {}) {
     let client;
     let committed = false;
 
@@ -84,6 +93,9 @@ async function evaluateAlerts(metric) {
             const state = lockedState.rows[0];
 
             if (conditionMet) {
+                if (recoveryOnly) {
+                    continue;
+                }
                 if (state.is_breaching) {
                     continue;
                 }
@@ -351,6 +363,7 @@ async function deleteRule(id, userId) {
 }
 
 module.exports = {
+    getAlertSeverity,
     evaluateAlerts,
     fetchAlerts,
     acknowledgeAlert,

@@ -381,7 +381,7 @@ export default function DashboardBuilder() {
                 ) : widget.type === 'log_count' ? (
                   <LogCountWidget severity={widget.config.severity} timeRange={timeRange} />
                 ) : widget.type === 'apm_summary' ? (
-                  <ApmSummaryWidget hostId={widget.config.host_id} />
+                  <ApmSummaryWidget hostId={widget.config.host_id} timeRange={timeRange} />
                 ) : (
                   <div className="flex items-center justify-center h-full text-gray-600 text-sm">
                     Unknown widget type

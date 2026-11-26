@@ -11,7 +11,11 @@ const JWT_SECRET = require('../config/jwt');
 const DEFAULT_ALERT_RULES = [
     { metric_name: 'cpu_usage', operator: '>', threshold: 80, duration: 3 },
     { metric_name: 'memory_usage', operator: '>', threshold: 85, duration: 3 },
-    { metric_name: 'disk_usage', operator: '>', threshold: 90, duration: 1 }
+    { metric_name: 'disk_usage', operator: '>', threshold: 90, duration: 1 },
+    // APM rules are evaluated once a minute by jobs/apm.job.js, so duration 3
+    // means 3 consecutive minutes over the threshold.
+    { metric_name: 'apm_p95_ms', operator: '>', threshold: 1000, duration: 3 },
+    { metric_name: 'apm_error_rate', operator: '>', threshold: 5, duration: 3 }
 ];
 
 const register = async (email, password) => {

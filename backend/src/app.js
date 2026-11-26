@@ -152,6 +152,9 @@ if (process.env.NODE_ENV !== 'test') {
 
             await import('./jobs/baseline.job.js');
             console.log('Baseline job registered');
+
+            await import('./jobs/apm.job.js');
+            console.log('APM alert job registered');
         } catch (err) {
             console.error('Failed to register background jobs:', err);
         }

@@ -144,4 +144,48 @@
       "dashboardWidgets": true
     }
   }
-}
+,
+  "apm_p95_ms": {
+    "name": "APM P95 Latency",
+    "required": false,
+    "notificationLabel": "APM P95 latency",
+    "description": "Triggers when the 95th percentile request duration exceeds the configured threshold.",
+    "unit": "ms",
+    "thresholds": {
+      "warning": 1000,
+      "critical": 5000
+    },
+    "minValue": 0,
+    "maxValue": null,
+    "color": "#f59e0b",
+    "capabilities": {
+      "agentIngestion": false,
+      "query": false,
+      "liveUpdates": false,
+      "baseline": false,
+      "alertRules": true,
+      "dashboardWidgets": false
+    }
+  },
+  "apm_error_rate": {
+    "name": "APM Error Rate",
+    "required": false,
+    "notificationLabel": "APM error rate",
+    "description": "Triggers when the percentage of failed APM requests exceeds the configured threshold.",
+    "unit": "%",
+    "thresholds": {
+      "warning": 5,
+      "critical": 25
+    },
+    "minValue": 0,
+    "maxValue": 100,
+    "color": "#ef4444",
+    "capabilities": {
+      "agentIngestion": false,
+      "query": false,
+      "liveUpdates": false,
+      "baseline": false,
+      "alertRules": true,
+      "dashboardWidgets": false
+    }
+  }}
