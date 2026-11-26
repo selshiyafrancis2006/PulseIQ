@@ -300,6 +300,42 @@ describe('GET /api/apm/traces (filters, sort, pagination)', () => {
     const list = (query, token) =>
         get('/traces', { host_id: hostId, ...query }, token);
 
+    test('shows an agent-ingested trace through the APM read API', async () => {
+        const registration = await request(app)
+            .post('/api/hosts/register')
+            .set(authHeader(owner.token))
+            .send({ name: `apm-roundtrip-${Date.now()}` });
+
+        expect(registration.status).toBe(201);
+
+        const ingestion = await request(app)
+            .post('/api/agent/traces')
+            .set('x-api-key', registration.body.api_key)
+            .send({
+                method: 'get',
+                route: '/api/roundtrip',
+                status_code: 503,
+                duration_ms: 120
+            });
+
+        expect(ingestion.status).toBe(201);
+
+        const response = await get('/traces', {
+            host_id: registration.body.id
+        });
+
+        expect(response.status).toBe(200);
+        expect(response.body.items).toEqual(
+            expect.arrayContaining([
+                expect.objectContaining({
+                    method: 'GET',
+                    route: '/api/roundtrip',
+                    status_code: 503,
+                    duration_ms: 120
+                })
+            ])
+        );
+    });
     test('returns a pagination envelope, newest first by default', async () => {
         await seedMix();
 

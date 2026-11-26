@@ -9,6 +9,7 @@ const TABS = [
   { id: 'linux', label: 'Linux / macOS' },
   { id: 'windows', label: 'Windows (cmd)' },
   { id: 'docker', label: 'Docker' },
+  { id: 'apm', label: 'APM (Express)' },
 ]
 
 function buildCommands(apiKey) {
@@ -36,6 +37,18 @@ function buildCommands(apiKey) {
       'cd PulseIQ/agent',
       'docker build -t pulseiq-agent .',
       `docker run -d --name pulseiq-agent --restart unless-stopped -e BACKEND_URL=${url} -e API_KEY=${apiKey} pulseiq-agent`,
+    ].join('\n'),
+
+    apm: [
+      '// 1. Copy agent/apm-middleware.js from the PulseIQ repo into your app,',
+      '//    then run: npm install axios',
+      '// 2. Register it before your routes:',
+      "const pulseiqApm = require('./apm-middleware')",
+      '',
+      'app.use(pulseiqApm({',
+      `  backendUrl: '${url}',`,
+      `  apiKey: '${apiKey}',`,
+      '}))',
     ].join('\n'),
   }
 }
@@ -101,11 +114,21 @@ export default function InstallInstructions({ apiKey }) {
         <li>
           {tab === 'docker'
             ? 'Requires Docker and git on the machine you want to monitor.'
-            : 'Requires Node.js 18+ and git on the machine you want to monitor.'}
+            : tab === 'apm'
+              ? 'For a Node.js 18+ Express app. This is separate from the agent and can run without it.'
+              : 'Requires Node.js 18+ and git on the machine you want to monitor.'}
         </li>
         <li>
-          The host shows as Online as soon as the first metrics arrive.
+          {tab === 'apm'
+            ? 'Requests show up on the APM page within a few seconds of the first request.'
+            : 'The host shows as Online as soon as the first metrics arrive.'}
         </li>
+        {tab === 'apm' && (
+          <li>
+            In production, set PULSEIQ_BACKEND_URL and PULSEIQ_API_KEY and call
+            pulseiqApm() with no options, so the key is not committed to code.
+          </li>
+        )}
         {pointsAtLocalhost && (
           <li>
             This URL points at localhost, so it only works on the machine
