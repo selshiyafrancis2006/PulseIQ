@@ -536,6 +536,9 @@ CREATE TABLE IF NOT EXISTS traces (
 CREATE INDEX IF NOT EXISTS idx_traces_host_timestamp
   ON traces (host_id, timestamp DESC);
 
+ALTER TABLE traces
+  ADD COLUMN IF NOT EXISTS service VARCHAR(100);
+
 CREATE TABLE IF NOT EXISTS metric_baselines (
   id SERIAL PRIMARY KEY,
   host_id INTEGER REFERENCES hosts(id) ON DELETE CASCADE,

@@ -551,7 +551,7 @@ router.post('/traces', authenticateAgent, async (req, res) => {
             return res.status(400).json({ error: 'Invalid trace payload' });
         }
 
-        const { method, route, status_code, duration_ms } = body;
+        const { method, route, status_code, duration_ms, service } = body;
 
         if (
             typeof method !== 'string' ||
@@ -591,17 +591,24 @@ router.post('/traces', authenticateAgent, async (req, res) => {
             return res.status(400).json({ error: 'Invalid duration_ms' });
         }
 
+        const serviceProblem = validateService(service);
+
+        if (serviceProblem) {
+            return res.status(400).json({ error: serviceProblem });
+        }
+
         const result = await pool.query(
             `INSERT INTO traces
-                (host_id, method, route, status_code, duration_ms)
-             VALUES ($1, $2, $3, $4, $5)
+                (host_id, method, route, status_code, duration_ms, service)
+             VALUES ($1, $2, $3, $4, $5, $6)
              RETURNING *`,
             [
                 req.agentHost.id,
                 method.trim().toUpperCase(),
                 route.trim(),
                 status_code ?? null,
-                duration_ms ?? null
+                duration_ms ?? null,
+                normalizeService(service)
             ]
         );
 
@@ -610,6 +617,197 @@ router.post('/traces', authenticateAgent, async (req, res) => {
         console.error('Agent trace ingestion error:', err);
         return res.status(500).json({
             error: 'Failed to save trace'
+        });
+    }
+});
+
+// ---- APM batch ingestion -------------------------------------------------
+const MAX_TRACE_BATCH_SIZE = 500;
+const TRACE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const TRACE_MAX_FUTURE_MS = 60 * 1000;
+
+function validateService(service) {
+    if (service === undefined || service === null) {
+        return null;
+    }
+
+    if (
+        typeof service !== 'string' ||
+        service.trim().length > 100 ||
+        /[\x00-\x1F\x7F]/.test(service)
+    ) {
+        return 'Invalid service';
+    }
+
+    return null;
+}
+
+// Optional field: an empty or missing service is stored as NULL.
+function normalizeService(service) {
+    return typeof service === 'string' && service.trim()
+        ? service.trim()
+        : null;
+}
+
+function validateTraceInput(trace) {
+    if (!trace || typeof trace !== 'object' || Array.isArray(trace)) {
+        return 'Invalid trace payload';
+    }
+
+    const { method, route, status_code, duration_ms, timestamp, service } = trace;
+
+    if (
+        typeof method !== 'string' ||
+        !method.trim() ||
+        method.trim().length > 10 ||
+        /[\x00-\x1F\x7F]/.test(method)
+    ) {
+        return 'Invalid method';
+    }
+
+    if (
+        typeof route !== 'string' ||
+        !route.trim() ||
+        route.trim().length > 255 ||
+        /[\x00-\x1F\x7F]/.test(route)
+    ) {
+        return 'Invalid route';
+    }
+
+    if (
+        status_code !== undefined &&
+        status_code !== null &&
+        (!Number.isInteger(status_code) ||
+            status_code < 100 ||
+            status_code > 599)
+    ) {
+        return 'Invalid status_code';
+    }
+
+    if (
+        duration_ms !== undefined &&
+        duration_ms !== null &&
+        (!Number.isInteger(duration_ms) ||
+            duration_ms < 0 ||
+            duration_ms > 2147483647)
+    ) {
+        return 'Invalid duration_ms';
+    }
+
+    if (
+        timestamp !== undefined &&
+        timestamp !== null &&
+        (typeof timestamp !== 'string' || Number.isNaN(Date.parse(timestamp)))
+    ) {
+        return 'Invalid timestamp';
+    }
+
+    return validateService(service);
+}
+
+// Batched traces are buffered by the client before sending, so they may carry
+// the moment the request actually finished. Out-of-window values (stale or
+// future clocks) fall back to server time instead of being trusted.
+function resolveTraceTimestamp(timestamp, now = Date.now()) {
+    if (typeof timestamp !== 'string') {
+        return new Date(now).toISOString();
+    }
+
+    const parsed = Date.parse(timestamp);
+
+    if (
+        Number.isNaN(parsed) ||
+        parsed < now - TRACE_MAX_AGE_MS ||
+        parsed > now + TRACE_MAX_FUTURE_MS
+    ) {
+        return new Date(now).toISOString();
+    }
+
+    return new Date(parsed).toISOString();
+}
+
+router.post('/traces/batch', authenticateAgent, async (req, res) => {
+    try {
+        const body = req.body;
+
+        if (
+            !body ||
+            typeof body !== 'object' ||
+            Array.isArray(body) ||
+            !Array.isArray(body.traces)
+        ) {
+            return res.status(400).json({ error: 'traces must be an array' });
+        }
+
+        const { traces } = body;
+
+        if (traces.length === 0) {
+            return res.status(400).json({ error: 'traces must not be empty' });
+        }
+
+        if (traces.length > MAX_TRACE_BATCH_SIZE) {
+            return res.status(400).json({
+                error: `A batch can contain at most ${MAX_TRACE_BATCH_SIZE} traces`
+            });
+        }
+
+        // Validate everything first so a bad batch stores nothing.
+        for (let i = 0; i < traces.length; i += 1) {
+            const problem = validateTraceInput(traces[i]);
+
+            if (problem) {
+                return res.status(400).json({ error: problem, index: i });
+            }
+        }
+
+        const now = Date.now();
+        const methods = [];
+        const routes = [];
+        const statusCodes = [];
+        const durations = [];
+        const timestamps = [];
+        const services = [];
+
+        for (const trace of traces) {
+            methods.push(trace.method.trim().toUpperCase());
+            routes.push(trace.route.trim());
+            statusCodes.push(trace.status_code ?? null);
+            durations.push(trace.duration_ms ?? null);
+            timestamps.push(resolveTraceTimestamp(trace.timestamp, now));
+            services.push(normalizeService(trace.service));
+        }
+
+        await pool.query(
+            `INSERT INTO traces
+                (host_id, method, route, status_code, duration_ms, timestamp, service)
+             SELECT $1::int, t.method, t.route, t.status_code, t.duration_ms, t.ts, t.service
+             FROM unnest(
+                $2::varchar[],
+                $3::varchar[],
+                $4::int[],
+                $5::int[],
+                $6::timestamptz[],
+                $7::varchar[]
+             ) AS t(method, route, status_code, duration_ms, ts, service)`,
+            [
+                req.agentHost.id,
+                methods,
+                routes,
+                statusCodes,
+                durations,
+                timestamps,
+                services
+            ]
+        );
+
+        return res.status(201).json({
+            host_id: req.agentHost.id,
+            accepted: traces.length
+        });
+    } catch (err) {
+        console.error('Agent trace batch ingestion error:', err);
+        return res.status(500).json({
+            error: 'Failed to save traces'
         });
     }
 });
