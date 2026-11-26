@@ -57,3 +57,9 @@ export const formatBucketLabel = (timestamp, rangeValue) => {
 // null (not 0 or NaN) for a missing value, so a chart shows a gap
 export const toChartNumber = (value) =>
   isMissing(value) ? null : Number(value)
+
+export const statusColor = (status) => {
+  if (status >= 500) return 'text-red-400'
+  if (status >= 400) return 'text-yellow-400'
+  return 'text-emerald-400'
+}

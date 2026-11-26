@@ -282,3 +282,222 @@ describe('GET /api/apm/traces/timeseries', () => {
         expect(foreign.status).toBe(404);
     });
 });
+
+describe('GET /api/apm/traces (filters, sort, pagination)', () => {
+    // Fixed mix: 2 slow successes, 1 fast success, 2 failures, 1 client error
+    const seedMix = () =>
+        pool.query(
+            `INSERT INTO traces (host_id, method, route, status_code, duration_ms, timestamp)
+             VALUES ($1, 'GET',  '/orders', 200, 900, NOW() - INTERVAL '1 minute'),
+                    ($1, 'GET',  '/orders', 200, 700, NOW() - INTERVAL '2 minutes'),
+                    ($1, 'GET',  '/orders', 200,  20, NOW() - INTERVAL '3 minutes'),
+                    ($1, 'POST', '/orders', 500, 300, NOW() - INTERVAL '4 minutes'),
+                    ($1, 'GET',  '/users',  503, 100, NOW() - INTERVAL '5 minutes'),
+                    ($1, 'GET',  '/users',  404,  10, NOW() - INTERVAL '6 minutes')`,
+            [hostId]
+        );
+
+    const list = (query, token) =>
+        get('/traces', { host_id: hostId, ...query }, token);
+
+    test('returns a pagination envelope, newest first by default', async () => {
+        await seedMix();
+
+        const res = await list({});
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({ page: 1, page_size: 25, total: 6, total_pages: 1 });
+        expect(res.body.items.map((t) => t.duration_ms)).toEqual([900, 700, 20, 300, 100, 10]);
+    });
+
+    test('sort=duration lists the slowest requests first', async () => {
+        await seedMix();
+
+        const res = await list({ sort: 'duration' });
+
+        expect(res.body.items.map((t) => t.duration_ms)).toEqual([900, 700, 300, 100, 20, 10]);
+
+        const asc = await list({ sort: 'duration', order: 'asc' });
+        expect(asc.body.items.map((t) => t.duration_ms)).toEqual([10, 20, 100, 300, 700, 900]);
+    });
+
+    test('status filters pick out failing requests', async () => {
+        await seedMix();
+
+        const codes = async (status) =>
+            (await list({ status, sort: 'status', order: 'asc' })).body.items.map((t) => t.status_code);
+
+        expect(await codes('5xx')).toEqual([500, 503]);
+        expect(await codes('4xx')).toEqual([404]);
+        expect(await codes('2xx')).toEqual([200, 200, 200]);
+        expect(await codes('error')).toEqual([404, 500, 503]);
+    });
+
+    test('filters by method, exact route and minimum duration', async () => {
+        await seedMix();
+
+        const durations = async (query) =>
+            (await list({ sort: 'duration', ...query })).body.items.map((t) => t.duration_ms);
+
+        expect(await durations({ method: 'post' })).toEqual([300]);
+        expect(await durations({ route: '/users' })).toEqual([100, 10]);
+        expect(await durations({ min_duration_ms: '300' })).toEqual([900, 700, 300]);
+        expect(await durations({ route: '/orders', method: 'GET', min_duration_ms: '500' }))
+            .toEqual([900, 700]);
+    });
+
+    test('a route filter is an exact match, not a pattern', async () => {
+        await seedMix();
+
+        const res = await list({ route: '/ord%' });
+
+        expect(res.body.total).toBe(0);
+    });
+
+    test('paginates and reports totals', async () => {
+        await seedMix();
+
+        const first = await list({ page_size: '4' });
+        expect(first.body).toMatchObject({ page: 1, page_size: 4, total: 6, total_pages: 2 });
+        expect(first.body.items).toHaveLength(4);
+
+        const second = await list({ page_size: '4', page: '2' });
+        expect(second.body.items).toHaveLength(2);
+
+        const ids = [...first.body.items, ...second.body.items].map((t) => t.id);
+        expect(new Set(ids).size).toBe(6);
+
+        const beyond = await list({ page_size: '4', page: '3' });
+        expect(beyond.status).toBe(200);
+        expect(beyond.body.items).toEqual([]);
+        expect(beyond.body.total).toBe(6);
+    });
+
+    test('requests with no duration sort last whichever way you sort', async () => {
+        await seedMix();
+        await seedTrace('/aborted', null, null, '30 seconds');
+
+        const desc = await list({ sort: 'duration' });
+        const asc = await list({ sort: 'duration', order: 'asc' });
+
+        expect(desc.body.items[desc.body.items.length - 1].duration_ms).toBeNull();
+        expect(asc.body.items[asc.body.items.length - 1].duration_ms).toBeNull();
+    });
+
+    test('applies the time range', async () => {
+        await seedTrace('/recent', 200, 5, '10 minutes');
+        await seedTrace('/old', 200, 5, '3 hours');
+
+        expect((await list({})).body.total).toBe(1);
+        expect((await list({ range: '6h' })).body.total).toBe(2);
+    });
+
+    test.each([
+        [{ sort: 'route' }],
+        [{ order: 'sideways' }],
+        [{ status: '6xx' }],
+        [{ status: '5xx,4xx' }],
+        [{ method: 'GET;DROP' }],
+        [{ min_duration_ms: '-1' }],
+        [{ min_duration_ms: '1.5' }],
+        [{ min_duration_ms: 'abc' }],
+        [{ page: '0' }],
+        [{ page: '1.5' }],
+        [{ page: '99999' }],
+        [{ page_size: '0' }],
+        [{ page_size: '101' }],
+        [{ range: '30d' }]
+    ])('rejects invalid query %j', async (query) => {
+        const res = await list(query);
+
+        expect(res.status).toBe(400);
+        expect(typeof res.body.error).toBe('string');
+    });
+
+    test('rejects a repeated query key instead of crashing', async () => {
+        const res = await request(app)
+            .get(`/api/apm/traces?host_id=${hostId}&method=GET&method=POST`)
+            .set(authHeader(owner.token));
+
+        expect(res.status).toBe(400);
+    });
+
+    test('sort and order values are never interpolated from the request', async () => {
+        await seedMix();
+
+        const res = await list({ sort: 'duration_ms; DROP TABLE traces' });
+
+        expect(res.status).toBe(400);
+        expect((await pool.query('SELECT COUNT(*) FROM traces')).rows[0].count).toBe('6');
+    });
+
+    test('hides another user\'s host', async () => {
+        await seedMix();
+
+        expect((await list({}, stranger.token)).status).toBe(404);
+        expect((await get('/traces', {})).status).toBe(400);
+    });
+});
+
+describe('GET /api/apm/routes/detail', () => {
+    const detail = (query, token) =>
+        get('/routes/detail', { host_id: hostId, ...query }, token);
+
+    test('returns stats, a status breakdown and a series for one route', async () => {
+        await seedOrders();
+        await seedTrace('/other', 500, 999, '2 minutes');
+        await seedTrace('/orders', 200, 10, '3 hours'); // outside 1h
+
+        const res = await detail({ method: 'GET', route: '/orders' });
+
+        expect(res.status).toBe(200);
+        expect(res.body).toMatchObject({
+            range: '1h',
+            bucket_seconds: 60,
+            method: 'GET',
+            route: '/orders',
+            request_count: 101,
+            p50_duration_ms: 50,
+            p95_duration_ms: 95,
+            p99_duration_ms: 99,
+            error_count: 4,
+            client_error_count: 6,
+            error_rate: 3.96
+        });
+
+        expect(res.body.status_codes).toEqual([
+            { status_code: 200, request_count: 91 },
+            { status_code: 404, request_count: 6 },
+            { status_code: 500, request_count: 4 }
+        ]);
+
+        // the series only holds this route's traffic
+        const total = res.body.points.reduce((sum, p) => sum + p.request_count, 0);
+        expect(total).toBe(101);
+    });
+
+    test('does not mix methods that share a route', async () => {
+        await seedTrace('/orders', 200, 10, '1 minute');
+        await seedTrace('/orders', 500, 20, '1 minute');
+
+        const get_ = await detail({ method: 'GET', route: '/orders' });
+        const post = await detail({ method: 'POST', route: '/orders' });
+
+        expect(get_.body.request_count).toBe(2);
+        expect(post.body.request_count).toBe(0);
+        expect(post.body.p95_duration_ms).toBeNull();
+        expect(post.body.status_codes).toEqual([]);
+    });
+
+    test('requires method and route, and validates the range', async () => {
+        expect((await detail({ route: '/orders' })).status).toBe(400);
+        expect((await detail({ method: 'GET' })).status).toBe(400);
+        expect((await detail({ method: 'GET', route: '/orders', range: 'nope' })).status).toBe(400);
+    });
+
+    test('hides another user\'s host', async () => {
+        const res = await detail({ method: 'GET', route: '/orders' }, stranger.token);
+
+        expect(res.status).toBe(404);
+    });
+});

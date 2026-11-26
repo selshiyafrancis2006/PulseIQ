@@ -43,18 +43,37 @@ const respond = ({ summary, overview, points } = {}) => (url) => {
     '/apm/traces/summary': summary ?? [{ method: 'GET', route: '/orders', ...stats() }],
     '/apm/traces/overview': overview ?? { range: '1h', ...stats(), throughput_rpm: 1.7 },
     '/apm/traces/timeseries': { range: '1h', bucket_seconds: 60, points: points ?? series },
-    '/apm/traces': [
-      { id: 1, method: 'GET', route: '/orders', status_code: 200, duration_ms: 12, timestamp: new Date().toISOString() }
-    ]
+    '/apm/traces': {
+      items: [
+        { id: 1, method: 'GET', route: '/orders', status_code: 200, duration_ms: 12, timestamp: new Date().toISOString() }
+      ],
+      page: 1,
+      page_size: 25,
+      total: 1,
+      total_pages: 1
+    },
+    '/apm/routes/detail': {
+      range: '1h',
+      bucket_seconds: 60,
+      method: 'GET',
+      route: '/orders',
+      ...stats(),
+      throughput_rpm: 1.7,
+      status_codes: [
+        { status_code: 200, request_count: 91 },
+        { status_code: 500, request_count: 4 }
+      ],
+      points: series
+    }
   }[url]
 
   return Promise.resolve({ data: body })
 }
 
-// "/orders" is in both the Routes and the Recent Requests table; the Routes
-// table comes first.
+// In the Routes table a route is a button; in the requests table it is plain
+// text, so the button is unambiguous.
 const findRoutesRow = async (route = '/orders') =>
-  (await screen.findAllByText(route, { selector: 'td' }))[0].closest('tr')
+  (await screen.findByRole('button', { name: route })).closest('tr')
 
 const callsTo = (url) => api.get.mock.calls.filter(([called]) => called === url)
 
@@ -157,14 +176,14 @@ describe('Apm page', () => {
     // switch away while the 1h summary is still in flight
     fireEvent.click(screen.getByRole('button', { name: '6h' }))
 
-    await screen.findByText('/six-hour-route', { selector: 'td' })
+    await screen.findByRole('button', { name: '/six-hour-route' })
 
     releaseSlow({ data: [{ method: 'GET', route: '/one-hour-route', ...stats() }] })
 
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(screen.queryByText('/one-hour-route')).not.toBeInTheDocument()
-    expect(screen.getByText('/six-hour-route', { selector: 'td' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '/one-hour-route' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '/six-hour-route' })).toBeInTheDocument()
   })
 
   test('shows an empty state naming the range when there is no traffic', async () => {
@@ -178,6 +197,61 @@ describe('Apm page', () => {
 
     expect(await screen.findByText(/No requests recorded for this host in the last hour/)).toBeInTheDocument()
     expect(screen.queryByTestId('line-chart')).not.toBeInTheDocument()
+  })
+
+  test('opens a route drill-down and returns to the route list', async () => {
+    api.get.mockImplementation(respond())
+
+    render(<Apm />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '/orders' }))
+
+    // drill-down heading, status breakdown and a way back
+    expect(await screen.findByRole('button', { name: 'â† All routes' })).toBeInTheDocument()
+    expect(await screen.findByText('Status codes')).toBeInTheDocument()
+    expect(screen.getByText('91')).toBeInTheDocument()
+
+    expect(callsTo('/apm/routes/detail')[0][1].params).toEqual({
+      host_id: 1,
+      method: 'GET',
+      route: '/orders',
+      range: '1h'
+    })
+
+    // its request list is pinned to this route
+    await waitFor(() =>
+      expect(
+        callsTo('/apm/traces').some(([, config]) =>
+          config.params.method === 'GET' && config.params.route === '/orders'
+        )
+      ).toBe(true)
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'â† All routes' }))
+
+    expect(await screen.findByRole('button', { name: '/orders' })).toBeInTheDocument()
+    expect(screen.queryByText('Status codes')).not.toBeInTheDocument()
+  })
+
+  test('closes the drill-down when the host changes', async () => {
+    api.get.mockImplementation(respond())
+
+    const { rerender } = render(<Apm />)
+
+    fireEvent.click(await screen.findByRole('button', { name: '/orders' }))
+    await screen.findByRole('button', { name: 'â† All routes' })
+
+    useHosts.mockReturnValue({
+      hosts: [{ id: 1, name: 'web-1' }, { id: 2, name: 'web-2' }],
+      selectedHostId: 2,
+      setSelectedHostId: vi.fn()
+    })
+
+    rerender(<Apm />)
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'â† All routes' })).not.toBeInTheDocument()
+    )
   })
 
   test('shows an error message when the first load fails', async () => {

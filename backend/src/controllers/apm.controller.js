@@ -1,5 +1,6 @@
 const apmService = require('../services/apm.service');
 const { resolveApmRange, APM_RANGES } = require('../utils/apmRange');
+const { parseTraceQuery } = require('../utils/apmTraceQuery');
 
 // Shared request checks. Returns { hostId, range } or null once it has
 // already sent the error response.
@@ -35,20 +36,86 @@ const parseRequest = async (req, res, { needsRange }) => {
     return { hostId, range };
 };
 
+// host_id check and ownership, then the validated trace query.
 const getTraces = async (req, res) => {
     try {
 
-        const parsed = await parseRequest(req, res, { needsRange: false });
-        if (!parsed) return;
+        const hostId = req.query.host_id;
 
-        const traces = await apmService.fetchTraces(parsed.hostId);
+        if (!hostId) {
+            return res.status(400).json({ error: 'host_id is required' });
+        }
 
-        res.json(traces);
+        const parsed = parseTraceQuery(req.query);
+
+        if (parsed.error) {
+            return res.status(400).json({ error: parsed.error });
+        }
+
+        const owns = await apmService.verifyHostOwnership(hostId, req.user.id);
+
+        if (!owns) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        const { range, ...filters } = parsed.value;
+
+        const result = await apmService.fetchTraces(hostId, {
+            ...filters,
+            rangeSeconds: range.seconds
+        });
+
+        res.json(result);
 
     } catch (err) {
         console.error(err);
         res.status(500).json({
             error: 'Failed to fetch traces'
+        });
+    }
+};
+
+const getRouteDetail = async (req, res) => {
+    try {
+
+        const hostId = req.query.host_id;
+
+        if (!hostId) {
+            return res.status(400).json({ error: 'host_id is required' });
+        }
+
+        const parsed = parseTraceQuery(req.query, { requireRoute: true });
+
+        if (parsed.error) {
+            return res.status(400).json({ error: parsed.error });
+        }
+
+        const owns = await apmService.verifyHostOwnership(hostId, req.user.id);
+
+        if (!owns) {
+            return res.status(404).json({ error: 'Host not found' });
+        }
+
+        const { range, method, route } = parsed.value;
+
+        const detail = await apmService.fetchRouteDetail(
+            hostId,
+            method,
+            route,
+            range.seconds,
+            range.bucketSeconds
+        );
+
+        res.json({
+            range: range.key,
+            bucket_seconds: range.bucketSeconds,
+            ...detail
+        });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({
+            error: 'Failed to fetch route detail'
         });
     }
 };
@@ -125,5 +192,6 @@ module.exports = {
     getTraces,
     getRouteSummary,
     getOverview,
-    getTimeSeries
+    getTimeSeries,
+    getRouteDetail
 };
