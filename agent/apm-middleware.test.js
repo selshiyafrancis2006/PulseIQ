@@ -348,7 +348,7 @@ test('collapses every unmatched request into one "<unmatched>" route', async () 
     );
 
     assert.equal(traces.length, urls.length);
-    assert.deepEqual([...new Set(traces.map((t) => t.route))], ['<unmatched>']);
+    assert.deepEqual([...new Set(traces.map((t) => t.route))], ['UNMATCHED']);
 
     // The raw URL (and any token in its query string) is never reported.
     assert.equal(JSON.stringify(traces).includes('secret'), false);
@@ -361,7 +361,7 @@ test('reports "<unmatched>" when the route pattern is a regex or an array', asyn
         { req: makeReq({ route: { path: ['/a', '/b'] } }) }
     ]);
 
-    assert.deepEqual(traces.map((t) => t.route), ['<unmatched>', '<unmatched>']);
+    assert.deepEqual(traces.map((t) => t.route), ['UNMATCHED', 'UNMATCHED']);
 });
 
 test('strips control characters from routes and caps them at 255 characters', async () => {

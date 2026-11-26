@@ -622,7 +622,7 @@ router.post('/traces', authenticateAgent, async (req, res) => {
 });
 
 // ---- APM batch ingestion -------------------------------------------------
-const MAX_TRACE_BATCH_SIZE = 500;
+const MAX_TRACE_BATCH_SIZE = 100;
 const TRACE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const TRACE_MAX_FUTURE_MS = 60 * 1000;
 
@@ -730,12 +730,7 @@ router.post('/traces/batch', authenticateAgent, async (req, res) => {
     try {
         const body = req.body;
 
-        if (
-            !body ||
-            typeof body !== 'object' ||
-            Array.isArray(body) ||
-            !Array.isArray(body.traces)
-        ) {
+        if (!body || typeof body !== 'object' || Array.isArray(body) || !Array.isArray(body.traces)) {
             return res.status(400).json({ error: 'traces must be an array' });
         }
 
@@ -751,64 +746,70 @@ router.post('/traces/batch', authenticateAgent, async (req, res) => {
             });
         }
 
-        // Validate everything first so a bad batch stores nothing.
+        const acceptedTraces = [];
+        const errors = [];
+
         for (let i = 0; i < traces.length; i += 1) {
             const problem = validateTraceInput(traces[i]);
 
             if (problem) {
-                return res.status(400).json({ error: problem, index: i });
+                errors.push({ index: i, error: problem });
+            } else {
+                acceptedTraces.push(traces[i]);
             }
         }
 
-        const now = Date.now();
-        const methods = [];
-        const routes = [];
-        const statusCodes = [];
-        const durations = [];
-        const timestamps = [];
-        const services = [];
+        if (acceptedTraces.length > 0) {
+            const now = Date.now();
+            const methods = [];
+            const routes = [];
+            const statusCodes = [];
+            const durations = [];
+            const timestamps = [];
+            const services = [];
 
-        for (const trace of traces) {
-            methods.push(trace.method.trim().toUpperCase());
-            routes.push(trace.route.trim());
-            statusCodes.push(trace.status_code ?? null);
-            durations.push(trace.duration_ms ?? null);
-            timestamps.push(resolveTraceTimestamp(trace.timestamp, now));
-            services.push(normalizeService(trace.service));
+            for (const trace of acceptedTraces) {
+                methods.push(trace.method.trim().toUpperCase());
+                routes.push(trace.route.trim());
+                statusCodes.push(trace.status_code ?? null);
+                durations.push(trace.duration_ms ?? null);
+                timestamps.push(resolveTraceTimestamp(trace.timestamp, now));
+                services.push(normalizeService(trace.service));
+            }
+
+            await pool.query(
+                `INSERT INTO traces
+                    (host_id, method, route, status_code, duration_ms, timestamp, service)
+                 SELECT $1::int, t.method, t.route, t.status_code, t.duration_ms, t.ts, t.service
+                 FROM unnest(
+                    $2::varchar[],
+                    $3::varchar[],
+                    $4::int[],
+                    $5::int[],
+                    $6::timestamptz[],
+                    $7::varchar[]
+                 ) AS t(method, route, status_code, duration_ms, ts, service)`,
+                [
+                    req.agentHost.id,
+                    methods,
+                    routes,
+                    statusCodes,
+                    durations,
+                    timestamps,
+                    services
+                ]
+            );
         }
-
-        await pool.query(
-            `INSERT INTO traces
-                (host_id, method, route, status_code, duration_ms, timestamp, service)
-             SELECT $1::int, t.method, t.route, t.status_code, t.duration_ms, t.ts, t.service
-             FROM unnest(
-                $2::varchar[],
-                $3::varchar[],
-                $4::int[],
-                $5::int[],
-                $6::timestamptz[],
-                $7::varchar[]
-             ) AS t(method, route, status_code, duration_ms, ts, service)`,
-            [
-                req.agentHost.id,
-                methods,
-                routes,
-                statusCodes,
-                durations,
-                timestamps,
-                services
-            ]
-        );
 
         return res.status(201).json({
             host_id: req.agentHost.id,
-            accepted: traces.length
+            accepted: acceptedTraces.length,
+            rejected: errors.length,
+            errors
         });
     } catch (err) {
         console.error('Agent trace batch ingestion error:', err);
-        return res.status(500).json({
-            error: 'Failed to save traces'
-        });
+        return res.status(500).json({ error: 'Failed to save traces' });
     }
 });
 

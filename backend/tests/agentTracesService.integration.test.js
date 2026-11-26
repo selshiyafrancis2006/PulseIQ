@@ -141,7 +141,7 @@ test.each([
     ['an object', { name: 'x' }],
     ['a name over 100 characters', 'x'.repeat(101)],
     ['a name with control characters', 'bad\u0007name']
-])('batch ingestion rejects %s as service and stores nothing', async (_description, service) => {
+])('batch ingestion rejects only an invalid service: %s', async (_description, service) => {
     const before = await countTraces();
 
     const response = await request(app)
@@ -154,10 +154,14 @@ test.each([
             ]
         });
 
-    expect(response.status).toBe(400);
-    expect(response.body.error).toBe('Invalid service');
-    expect(response.body.index).toBe(1);
-    expect(await countTraces()).toBe(before);
+    expect(response.status).toBe(201);
+    expect(response.body.accepted).toBe(1);
+    expect(response.body.rejected).toBe(1);
+    expect(response.body.errors).toEqual([
+        { index: 1, error: 'Invalid service' }
+    ]);
+    expect(await countTraces()).toBe(before + 1);
+    expect(await serviceOf('/svc/good')).toBe('ok');
 });
 
 test.each([

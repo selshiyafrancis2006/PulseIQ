@@ -141,12 +141,32 @@ test('batch ingestion replaces a stale or future timestamp with server time', as
     }
 });
 
+test('accepts exactly 100 traces in one batch', async () => {
+    const before = await countTraces();
+    const traces = Array.from({ length: 100 }, (_, index) => ({
+        method: 'GET',
+        route: `/api/batch-limit/${index}`,
+        status_code: 200,
+        duration_ms: 1
+    }));
+
+    const response = await request(app)
+        .post('/api/agent/traces/batch')
+        .set('x-api-key', apiKey)
+        .send({ traces });
+
+    expect(response.status).toBe(201);
+    expect(response.body.accepted).toBe(100);
+    expect(response.body.rejected).toBe(0);
+    expect(response.body.errors).toEqual([]);
+    expect(await countTraces()).toBe(before + 100);
+});
 test.each([
     ['a missing traces field', {}],
     ['a non-array traces field', { traces: 'nope' }],
     ['an empty batch', { traces: [] }],
     ['a batch over the size limit', {
-        traces: Array.from({ length: 501 }, () => ({ method: 'GET', route: '/x' }))
+        traces: Array.from({ length: 101 }, () => ({ method: 'GET', route: '/x' }))
     }]
 ])('batch ingestion rejects %s', async (_description, payload) => {
     const before = await countTraces();
@@ -167,7 +187,7 @@ test.each([
     ['a negative duration', { method: 'GET', route: '/x', duration_ms: -1 }],
     ['an unparseable timestamp', { method: 'GET', route: '/x', timestamp: 'yesterday-ish' }],
     ['a non-object entry', 'not-an-object']
-])('batch ingestion rejects the whole batch for %s and stores nothing', async (_description, bad) => {
+])('batch ingestion rejects only the invalid entry: %s', async (_description, bad) => {
     const before = await countTraces();
 
     const response = await request(app)
@@ -180,7 +200,11 @@ test.each([
             ]
         });
 
-    expect(response.status).toBe(400);
-    expect(response.body.index).toBe(1);
-    expect(await countTraces()).toBe(before);
+    expect(response.status).toBe(201);
+    expect(response.body.accepted).toBe(1);
+    expect(response.body.rejected).toBe(1);
+    expect(response.body.errors).toEqual([
+        { index: 1, error: expect.any(String) }
+    ]);
+    expect(await countTraces()).toBe(before + 1);
 });
